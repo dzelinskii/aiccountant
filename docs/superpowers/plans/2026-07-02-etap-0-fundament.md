@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Задеплоенный на VPS с TLS скелет moneyrain: FastAPI-бэкенд с health-эндпоинтом, React-фронт, docker-compose (Postgres, Redis, Caddy), зелёный CI и деплой по тегу.
+**Goal:** Задеплоенный на VPS с TLS скелет AIccountant: FastAPI-бэкенд с health-эндпоинтом, React-фронт, docker-compose (Postgres, Redis, Caddy), зелёный CI и деплой по тегу.
 
 **Architecture:** Монорепозиторий `backend/` (FastAPI, uv) + `frontend/` (Vite React TS, pnpm) + `infra/` (Caddy, compose). Caddy — единственная точка входа: раздаёт статику фронта и проксирует `/api/*` на бэкенд, TLS автоматический. CI на GitHub Actions, деплой — ssh + `docker compose up` по тегу `v*`.
 
@@ -52,12 +52,12 @@ dist/
 - [ ] **Step 2: Создать README-заготовку**
 
 ```markdown
-# moneyrain
+# AIccountant
 
-AI-бухгалтер для домохозяйства: чтение финансовых документов (выписки,
+AI-помощник по личным финансам: чтение финансовых документов (выписки,
 чеки, квитанции), сверка с транзакциями, аномалии, прогноз расходов.
 
-Дизайн и дорожная карта: [спека](docs/superpowers/specs/2026-07-02-moneyrain-design.md).
+Дизайн и дорожная карта: [спека](docs/superpowers/specs/2026-07-02-aiccountant-design.md).
 
 ## Структура
 
@@ -92,7 +92,7 @@ git commit -m "Этап 0: каркас репозитория"
 
 ```toml
 [project]
-name = "moneyrain-backend"
+name = "aiccountant-backend"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
@@ -213,7 +213,7 @@ from app.logging import configure_logging
 
 configure_logging()
 
-app = FastAPI(title="moneyrain")
+app = FastAPI(title="AIccountant")
 
 
 @app.get("/api/health")
@@ -300,7 +300,7 @@ import App from './App'
 
 test('показывает название и статус API', () => {
   render(<App />)
-  expect(screen.getByText('moneyrain')).toBeDefined()
+  expect(screen.getByText('AIccountant')).toBeDefined()
   expect(screen.getByText(/API/)).toBeDefined()
 })
 ```
@@ -308,7 +308,7 @@ test('показывает название и статус API', () => {
 - [ ] **Step 5: Убедиться, что тест падает**
 
 Run: `cd frontend && pnpm test`
-Expected: FAIL — в скаффолдном `App.tsx` нет текста `moneyrain`.
+Expected: FAIL — в скаффолдном `App.tsx` нет текста `AIccountant`.
 
 - [ ] **Step 6: Реализовать страницу статуса**
 
@@ -329,7 +329,7 @@ export default function App() {
 
   return (
     <main>
-      <h1>moneyrain</h1>
+      <h1>AIccountant</h1>
       <p>API: {status}</p>
     </main>
   )
@@ -424,13 +424,13 @@ services:
   postgres:
     image: postgres:16
     environment:
-      POSTGRES_USER: moneyrain
+      POSTGRES_USER: aiccountant
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
-      POSTGRES_DB: moneyrain
+      POSTGRES_DB: aiccountant
     volumes:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U moneyrain"]
+      test: ["CMD-SHELL", "pg_isready -U aiccountant"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -441,7 +441,7 @@ services:
   backend:
     build: ./backend
     environment:
-      DATABASE_URL: postgresql+asyncpg://moneyrain:${POSTGRES_PASSWORD}@postgres:5432/moneyrain
+      DATABASE_URL: postgresql+asyncpg://aiccountant:${POSTGRES_PASSWORD}@postgres:5432/aiccountant
       REDIS_URL: redis://redis:6379/0
     depends_on:
       - postgres
@@ -609,8 +609,8 @@ chown -R deploy:deploy /home/deploy/.ssh
 ```bash
 ssh deploy@<SERVER_IP>
 
-git clone <GITHUB_URL> ~/moneyrain
-cd ~/moneyrain
+git clone <GITHUB_URL> ~/aiccountant
+cd ~/aiccountant
 cp .env.example .env
 ```
 
@@ -640,7 +640,7 @@ Expected: страница «moneyrain, API: ok».
 На локальной машине:
 
 ```bash
-ssh-keygen -t ed25519 -f deploy_key -N "" -C "moneyrain-deploy"
+ssh-keygen -t ed25519 -f deploy_key -N "" -C "aiccountant-deploy"
 ssh deploy@<SERVER_IP> "cat >> ~/.ssh/authorized_keys" < deploy_key.pub
 ```
 
@@ -671,7 +671,7 @@ jobs:
           username: deploy
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           script: |
-            cd ~/moneyrain
+            cd ~/aiccountant
             git fetch --all --tags
             git checkout ${{ github.ref_name }}
             docker compose up -d --build
