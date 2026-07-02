@@ -626,7 +626,7 @@ Run (с локальной машины): `curl https://<DOMAIN>/api/health`
 Expected: `{"status":"ok"}`, сертификат валидный (без `-k`).
 
 Открыть `https://<DOMAIN>/` в браузере.
-Expected: страница «moneyrain, API: ok».
+Expected: страница «AIccountant, API: ok».
 
 ---
 
