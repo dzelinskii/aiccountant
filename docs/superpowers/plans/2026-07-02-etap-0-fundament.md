@@ -578,6 +578,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: frontend/package.json
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -598,7 +600,9 @@ jobs:
 
 Примечание: `pnpm/action-setup@v4` читает версию pnpm из поля `packageManager`
 в `frontend/package.json` — убедиться, что оно там есть (скаффолд Vite его
-добавляет; если нет — `cd frontend && corepack use pnpm@latest`).
+добавляет; если нет — `cd frontend && corepack use pnpm@latest`). Параметр
+`package_json_file` обязателен: `defaults.run.working-directory` действует
+только на run-шаги, uses-шаги ищут package.json в корне репозитория.
 
 - [ ] **Step 3: Запушить и проверить**
 
