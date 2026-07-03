@@ -1,3 +1,4 @@
+import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response
@@ -8,9 +9,9 @@ from app.core.db import get_db
 from app.core.redis import get_redis
 from app.core.settings import get_settings
 from app.identity import service, sessions
-from app.identity.deps import SESSION_COOKIE, get_current_user
+from app.identity.deps import SESSION_COOKIE, get_current_user, require_owner
 from app.identity.models import User
-from app.identity.schemas import LoginIn, MeOut, RegisterIn, UserOut, WorkspaceOut
+from app.identity.schemas import LoginIn, MemberIn, MeOut, RegisterIn, UserOut, WorkspaceOut
 
 router = APIRouter(prefix="/api")
 
@@ -83,3 +84,21 @@ async def me(
             for workspace, role in pairs
         ],
     )
+
+
+@router.post("/workspaces/{workspace_id}/members", status_code=201)
+async def add_member(
+    workspace_id: uuid.UUID,
+    payload: MemberIn,
+    _owner: Annotated[User, Depends(require_owner)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict[str, str]:
+    try:
+        membership = await service.invite_member(db, workspace_id, payload.email)
+    except LookupError:
+        raise HTTPException(
+            status_code=404, detail="Пользователь с таким email не найден"
+        ) from None
+    except service.AlreadyMemberError:
+        raise HTTPException(status_code=409, detail="Уже участник") from None
+    return {"user_id": str(membership.user_id), "role": membership.role}
