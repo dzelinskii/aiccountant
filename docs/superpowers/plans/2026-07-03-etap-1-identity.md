@@ -630,6 +630,7 @@ def verify_password(password_hash: str, password: str) -> bool:
 `backend/app/identity/sessions.py`:
 
 ```python
+import hashlib
 import secrets
 import uuid
 
@@ -640,24 +641,29 @@ from app.core.settings import get_settings
 _PREFIX = "session:"
 
 
+def _key(token: str) -> str:
+    # в Redis хранится sha256 токена: дамп или бэкап Redis не выдаёт живые токены
+    return _PREFIX + hashlib.sha256(token.encode()).hexdigest()
+
+
 def _ttl_seconds() -> int:
     return get_settings().session_ttl_days * 24 * 60 * 60
 
 
 async def create_session(redis: Redis, user_id: uuid.UUID) -> str:
     token = secrets.token_urlsafe(32)
-    await redis.set(_PREFIX + token, str(user_id), ex=_ttl_seconds())
+    await redis.set(_key(token), str(user_id), ex=_ttl_seconds())
     return token
 
 
 async def get_session_user_id(redis: Redis, token: str) -> uuid.UUID | None:
-    value = await redis.get(_PREFIX + token)
+    value = await redis.get(_key(token))
     # str(): redis-py типизирует get() как bytes | str даже при decode_responses=True
     return uuid.UUID(str(value)) if value else None
 
 
 async def delete_session(redis: Redis, token: str) -> None:
-    await redis.delete(_PREFIX + token)
+    await redis.delete(_key(token))
 ```
 
 - [ ] **Step 3: Явный scope event loop для async-фикстур**
@@ -853,9 +859,15 @@ async def register_user(db: AsyncSession, email: str, password: str) -> User:
     return user
 
 
+# verify выполняется и когда пользователь не найден — иначе разница во времени
+# ответа выдаёт существование email (user enumeration)
+_DUMMY_HASH = hash_password("dummy-password-for-timing")
+
+
 async def authenticate(db: AsyncSession, email: str, password: str) -> User | None:
     user = await db.scalar(select(User).where(User.email == email.lower()))
-    if user is None or not verify_password(user.password_hash, password):
+    password_hash = user.password_hash if user is not None else _DUMMY_HASH
+    if not verify_password(password_hash, password) or user is None:
         return None
     return user
 
