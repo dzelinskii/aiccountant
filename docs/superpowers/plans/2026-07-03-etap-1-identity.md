@@ -659,7 +659,17 @@ async def delete_session(redis: Redis, token: str) -> None:
     await redis.delete(_PREFIX + token)
 ```
 
-- [ ] **Step 3: Тесты зелёные, линт, коммит**
+- [ ] **Step 3: Явный scope event loop для async-фикстур**
+
+В `backend/pyproject.toml` в `[tool.pytest.ini_options]` добавить строку —
+фиксируем дефолт pytest-asyncio явно, чтобы смена дефолта в будущих версиях
+библиотеки не поменяла семантику фикстур молча:
+
+```toml
+asyncio_default_fixture_loop_scope = "function"
+```
+
+- [ ] **Step 4: Тесты зелёные, линт, коммит**
 
 Run: `uv run pytest tests/test_security.py tests/test_sessions.py -v && uv run ruff check . && uv run ruff format . && uv run mypy`
 Expected: 4 passed, чисто.
