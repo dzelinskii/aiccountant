@@ -1361,15 +1361,8 @@ async def health() -> dict[str, str]:
 Внести изменения (остальное не трогать):
 
 ```yaml
-  postgres:
-    # ... как было, добавить:
-    ports:
-      - "127.0.0.1:5432:5432"
-
   redis:
     image: redis:7
-    ports:
-      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -1389,9 +1382,11 @@ async def health() -> dict[str, str]:
         condition: service_healthy
 ```
 
-Порты postgres/redis привязаны к 127.0.0.1 — для дев-режима без Docker
-(`uv run uvicorn ... --reload` с локальной машины) и отладки; наружу
-не публикуются.
+Порты postgres/redis наружу НЕ публикуются: контейнеры общаются по внутренней
+сети compose (`backend → postgres:5432`), а публикация стандартных портов на
+хост конфликтует с другими локальными стендами и расширяет поверхность атаки.
+Дев-режим без Docker (uvicorn с хоста) при нужде включается отдельным
+`compose.override.yml` с `ports:` — в основной файл это не входит.
 
 - [ ] **Step 2: Обновить backend/Dockerfile**
 
