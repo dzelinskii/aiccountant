@@ -1380,7 +1380,25 @@ async def health() -> dict[str, str]:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/.venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+
+  caddy:
+    # ... как было, но depends_on заменить на форму с условием:
+    depends_on:
+      backend:
+        condition: service_healthy
 ```
+
+Backend получает свой healthcheck (проверка `/api/health` встроенным
+python — curl в slim-образе нет; `start_period` даёт время на миграции при
+старте), а caddy ждёт его готовности через `condition: service_healthy` —
+иначе при рестарте Caddy успевает проксировать на ещё не поднявшийся backend
+и отдаёт 502.
 
 Порты postgres/redis наружу НЕ публикуются: контейнеры общаются по внутренней
 сети compose (`backend → postgres:5432`), а публикация стандартных портов на
