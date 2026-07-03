@@ -899,7 +899,13 @@ async def invite_member(db: AsyncSession, workspace_id: uuid.UUID, email: str) -
         raise AlreadyMemberError
     membership = Membership(user_id=user.id, workspace_id=workspace_id, role="member")
     db.add(membership)
-    await db.commit()
+    # как в register_user: commit ловит гонку двух owner'ов, зовущих одного —
+    # составной PK memberships даёт IntegrityError
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise AlreadyMemberError from exc
     return membership
 ```
 
