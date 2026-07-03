@@ -119,6 +119,17 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'app.core'`.
 
 - [ ] **Step 3: Реализовать настройки и подключения**
 
+В `backend/pyproject.toml` секцию `[tool.mypy]` дополнить плагином — без него
+mypy не понимает служебные аргументы конструктора `BaseSettings`
+(`Settings(_env_file=None)` в тестах даёт `call-arg`):
+
+```toml
+[tool.mypy]
+strict = true
+packages = ["app", "tests"]
+plugins = ["pydantic.mypy"]
+```
+
 `backend/app/core/__init__.py` — пустой.
 
 `backend/app/core/settings.py`:
