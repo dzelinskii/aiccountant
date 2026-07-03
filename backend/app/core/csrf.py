@@ -15,12 +15,19 @@ class OriginCheckMiddleware(BaseHTTPMiddleware):
     Браузер не позволяет чужому сайту подделать заголовок Origin, поэтому
     сравнение netloc из Origin с Host отсекает cross-site запросы; запросы
     без Origin (curl, тесты, same-origin навигация) пропускаются.
+
+    Корректность опирается на то, что Caddy проксирует исходный Host клиента
+    (reverse_proxy без header_up Host его не переписывает). Регистр host
+    нормализуется: сравнение доменов не зависит от регистра.
     """
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         origin = request.headers.get("origin")
         if request.method in UNSAFE_METHODS and origin is not None:
-            host = request.headers.get("host", "")
-            if urlparse(origin).netloc != host and origin not in get_settings().allowed_origins:
+            host = request.headers.get("host", "").lower()
+            if (
+                urlparse(origin).netloc.lower() != host
+                and origin not in get_settings().allowed_origins
+            ):
                 return JSONResponse({"detail": "Запрос с чужого origin отклонён"}, status_code=403)
         return await call_next(request)
