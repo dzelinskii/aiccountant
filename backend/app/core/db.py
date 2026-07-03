@@ -19,7 +19,7 @@ class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 
-engine = create_async_engine(get_settings().database_url)
+engine = create_async_engine(get_settings().database_url, pool_pre_ping=True)
 session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
 
