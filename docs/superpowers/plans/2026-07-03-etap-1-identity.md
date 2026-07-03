@@ -652,7 +652,8 @@ async def create_session(redis: Redis, user_id: uuid.UUID) -> str:
 
 async def get_session_user_id(redis: Redis, token: str) -> uuid.UUID | None:
     value = await redis.get(_PREFIX + token)
-    return uuid.UUID(value) if value else None
+    # str(): redis-py типизирует get() как bytes | str даже при decode_responses=True
+    return uuid.UUID(str(value)) if value else None
 
 
 async def delete_session(redis: Redis, token: str) -> None:
