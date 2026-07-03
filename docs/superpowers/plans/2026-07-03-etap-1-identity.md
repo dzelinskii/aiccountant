@@ -526,6 +526,15 @@ async def client(db_session: AsyncSession, redis_client: Redis) -> AsyncIterator
     app.dependency_overrides.clear()
 ```
 
+В `backend/pyproject.toml` добавить точечный override — у подмодулей
+testcontainers нет `py.typed`, mypy strict падает с `import-untyped`:
+
+```toml
+[[tool.mypy.overrides]]
+module = ["testcontainers.postgres", "testcontainers.redis"]
+ignore_missing_imports = true
+```
+
 - [ ] **Step 3: Тест зелёный**
 
 Run: `uv run pytest tests/test_migrations.py -v`
