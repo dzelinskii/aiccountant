@@ -736,6 +736,20 @@ async def test_logout_kills_session(client: AsyncClient) -> None:
     logout = await client.post("/api/auth/logout")
     assert logout.status_code == 204
     assert (await client.get("/api/me")).status_code == 401
+
+
+async def test_email_case_insensitive(client: AsyncClient) -> None:
+    await client.post("/api/auth/register", json=REGISTER)
+    dup = await client.post(
+        "/api/auth/register", json={"email": "Alice@Example.com", "password": "password123"}
+    )
+    assert dup.status_code == 409
+
+    client.cookies.clear()
+    login = await client.post(
+        "/api/auth/login", json={"email": "ALICE@example.com", "password": "password123"}
+    )
+    assert login.status_code == 200
 ```
 
 Run: `uv run pytest tests/test_auth_api.py -v`
@@ -805,6 +819,8 @@ class AlreadyMemberError(Exception):
 
 
 async def register_user(db: AsyncSession, email: str, password: str) -> User:
+    # email нормализуется к нижнему регистру: Alice@x.com и alice@x.com — один адрес
+    email = email.lower()
     existing = await db.scalar(select(User).where(User.email == email))
     if existing is not None:
         raise EmailTakenError
@@ -818,7 +834,7 @@ async def register_user(db: AsyncSession, email: str, password: str) -> User:
 
 
 async def authenticate(db: AsyncSession, email: str, password: str) -> User | None:
-    user = await db.scalar(select(User).where(User.email == email))
+    user = await db.scalar(select(User).where(User.email == email.lower()))
     if user is None or not verify_password(user.password_hash, password):
         return None
     return user
@@ -836,7 +852,7 @@ async def list_workspaces(
 
 
 async def invite_member(db: AsyncSession, workspace_id: uuid.UUID, email: str) -> Membership:
-    user = await db.scalar(select(User).where(User.email == email))
+    user = await db.scalar(select(User).where(User.email == email.lower()))
     if user is None:
         raise LookupError(email)
     existing = await db.get(Membership, (user.id, workspace_id))
