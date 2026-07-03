@@ -828,6 +828,7 @@ class MemberIn(BaseModel):
 import uuid
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import hash_password, verify_password
@@ -855,7 +856,13 @@ async def register_user(db: AsyncSession, email: str, password: str) -> User:
     db.add_all([user, workspace])
     await db.flush()
     db.add(Membership(user_id=user.id, workspace_id=workspace.id, role="owner"))
-    await db.commit()
+    # проверка выше отсекает обычный дубль; commit ловит гонку двух
+    # параллельных регистраций — уникальный индекс на email даёт IntegrityError
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise EmailTakenError from exc
     return user
 
 
