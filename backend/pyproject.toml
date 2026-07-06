@@ -6,6 +6,13 @@ dependencies = [
     "fastapi",
     "uvicorn[standard]",
     "structlog",
+    "sqlalchemy[asyncio]>=2.0.51",
+    "asyncpg>=0.31.0",
+    "alembic>=1.18.5",
+    "pydantic-settings>=2.14.2",
+    "argon2-cffi>=25.1.0",
+    "redis>=8.0.1",
+    "email-validator>=2.3.0",
 ]
 
 [dependency-groups]
@@ -15,6 +22,7 @@ dev = [
     "httpx",
     "ruff",
     "mypy",
+    "testcontainers[postgres,redis]>=4.14.2",
 ]
 
 [tool.ruff]
@@ -27,7 +35,14 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 [tool.mypy]
 strict = true
 packages = ["app", "tests"]
+plugins = ["pydantic.mypy"]
+
+# testcontainers не поставляет типы для этих подмодулей (нет py.typed)
+[[tool.mypy.overrides]]
+module = ["testcontainers.postgres", "testcontainers.redis"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]

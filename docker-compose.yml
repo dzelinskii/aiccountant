@@ -15,15 +15,29 @@ services:
 
   redis:
     image: redis:7
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   backend:
     build: ./backend
     environment:
       DATABASE_URL: postgresql+asyncpg://aiccountant:${POSTGRES_PASSWORD}@postgres:5432/aiccountant
       REDIS_URL: redis://redis:6379/0
+      COOKIE_SECURE: "true"
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/.venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
 
   caddy:
     build:
@@ -37,7 +51,8 @@ services:
     volumes:
       - caddy_data:/data
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
 volumes:
   pg_data:
