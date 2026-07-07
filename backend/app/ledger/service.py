@@ -188,14 +188,24 @@ async def update_transaction(
         raise NotFoundError
     if transaction.transfer_group_id is not None:
         raise TransferEditError
-    if payload.category_id is not None:
-        category = await repository.get_category(db, workspace_id, payload.category_id)
-        if category is None:
-            raise NotFoundError
-        new_amount = payload.amount if payload.amount is not None else transaction.amount
-        if new_amount == 0 or (category.kind == "expense") != (new_amount < 0):
-            raise SignMismatchError
-        transaction.category_id = category.id
+
+    # инвариант «знак суммы соответствует kind категории» проверяем всегда по
+    # ИТОГОВой паре после правки, даже если меняется только сумма или только
+    # категория — иначе расход можно было бы сделать положительным
+    new_category_id = (
+        payload.category_id if payload.category_id is not None else transaction.category_id
+    )
+    # обычная операция (не перевод) всегда имеет категорию — страхуемся явно
+    if new_category_id is None:
+        raise NotFoundError
+    category = await repository.get_category(db, workspace_id, new_category_id)
+    if category is None:
+        raise NotFoundError
+    new_amount = payload.amount if payload.amount is not None else transaction.amount
+    if new_amount == 0 or (category.kind == "expense") != (new_amount < 0):
+        raise SignMismatchError
+
+    transaction.category_id = category.id
     if payload.amount is not None:
         transaction.amount = payload.amount
     if payload.occurred_at is not None:

@@ -154,6 +154,39 @@ async def test_patch_transfer_row_forbidden(client: AsyncClient) -> None:
     assert resp.status_code == 409
 
 
+async def test_patch_amount_keeps_sign_invariant(client: AsyncClient) -> None:
+    s = await _setup(client)
+    txn = (
+        await client.post(
+            "/api/transactions",
+            params={"workspace_id": s["ws"]},
+            json={
+                "account_id": s["acc1"],
+                "category_id": s["food"],
+                "amount": "-500.00",
+                "occurred_at": "2026-07-05",
+            },
+        )
+    ).json()
+
+    # правка суммы расхода в положительную нарушает знак vs kind → 422
+    bad = await client.patch(
+        f"/api/transactions/{txn['id']}",
+        params={"workspace_id": s["ws"]},
+        json={"amount": "500.00"},
+    )
+    assert bad.status_code == 422
+
+    # корректная правка суммы (остаётся отрицательной) → 200
+    ok = await client.patch(
+        f"/api/transactions/{txn['id']}",
+        params={"workspace_id": s["ws"]},
+        json={"amount": "-700.00"},
+    )
+    assert ok.status_code == 200
+    assert ok.json()["amount"] == "-700.0000"
+
+
 async def test_list_pagination_and_filter(client: AsyncClient) -> None:
     s = await _setup(client)
     for i in range(3):
