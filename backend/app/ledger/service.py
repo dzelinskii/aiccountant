@@ -70,6 +70,11 @@ async def list_categories(db: AsyncSession, workspace_id: uuid.UUID) -> list[Cat
 async def create_category(
     db: AsyncSession, workspace_id: uuid.UUID, payload: CategoryCreate
 ) -> Category:
+    # родитель обязан жить в том же workspace — иначе межворкспейсная ссылка
+    if payload.parent_id is not None:
+        parent = await repository.get_category(db, workspace_id, payload.parent_id)
+        if parent is None:
+            raise NotFoundError
     category = Category(
         workspace_id=workspace_id,
         name=payload.name,
@@ -90,6 +95,9 @@ async def update_category(
     if payload.name is not None:
         category.name = payload.name
     if payload.parent_id is not None:
+        parent = await repository.get_category(db, workspace_id, payload.parent_id)
+        if parent is None:
+            raise NotFoundError
         category.parent_id = payload.parent_id
     await db.commit()
     return category
@@ -263,9 +271,17 @@ async def list_transactions(
 async def build_dashboard(db: AsyncSession, workspace_id: uuid.UUID) -> DashboardOut:
     today = date.today()
     month_start = today.replace(day=1)
+    # начало следующего месяца — верхняя граница периода (полуинтервал)
+    next_month_start = (
+        month_start.replace(year=month_start.year + 1, month=1)
+        if month_start.month == 12
+        else month_start.replace(month=month_start.month + 1)
+    )
 
     accounts = await repository.list_accounts_with_balance(db, workspace_id)
-    expenses = await repository.month_expenses_by_category(db, workspace_id, month_start)
+    expenses = await repository.month_expenses_by_category(
+        db, workspace_id, month_start, next_month_start
+    )
     recent = await repository.recent_transactions(db, workspace_id)
 
     return DashboardOut(

@@ -44,3 +44,23 @@ async def test_rename_category(client: AsyncClient) -> None:
     )
     assert resp.status_code == 200
     assert resp.json()["name"] == "Разное"
+
+
+async def test_parent_from_foreign_workspace_rejected(client: AsyncClient) -> None:
+    # родитель из чужого workspace недопустим — иначе межворкспейсная ссылка
+    ws_a = await _register(client)
+    cats_a = (await client.get("/api/categories", params={"workspace_id": ws_a})).json()
+    foreign_parent = next(c for c in cats_a if c["name"] == "Еда")["id"]
+
+    client.cookies.clear()
+    await client.post(
+        "/api/auth/register", json={"email": "bob@example.com", "password": "password123"}
+    )
+    me = await client.get("/api/me")
+    ws_b = me.json()["workspaces"][0]["id"]
+    resp = await client.post(
+        "/api/categories",
+        params={"workspace_id": ws_b},
+        json={"name": "Кафе", "kind": "expense", "parent_id": foreign_parent},
+    )
+    assert resp.status_code == 404

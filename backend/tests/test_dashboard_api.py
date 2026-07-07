@@ -82,3 +82,26 @@ async def test_dashboard_excludes_transfers_from_expenses(client: AsyncClient) -
     )
     resp = await client.get("/api/dashboard", params={"workspace_id": s["ws"]})
     assert resp.json()["month_expenses"] == []
+
+
+async def test_dashboard_excludes_future_month_expenses(client: AsyncClient) -> None:
+    # расход, датированный следующим месяцем, не входит в расходы текущего месяца
+    s = await _setup(client)
+    today = date.today()
+    future = (
+        today.replace(year=today.year + 1, month=1, day=15)
+        if today.month == 12
+        else today.replace(month=today.month + 1, day=15)
+    )
+    await client.post(
+        "/api/transactions",
+        params={"workspace_id": s["ws"]},
+        json={
+            "account_id": s["acc"],
+            "category_id": s["food"],
+            "amount": "-999.00",
+            "occurred_at": future.isoformat(),
+        },
+    )
+    resp = await client.get("/api/dashboard", params={"workspace_id": s["ws"]})
+    assert resp.json()["month_expenses"] == []

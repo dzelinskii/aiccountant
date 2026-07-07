@@ -150,7 +150,7 @@ async def delete_transaction(db: AsyncSession, transaction: Transaction) -> None
 
 
 async def month_expenses_by_category(
-    db: AsyncSession, workspace_id: uuid.UUID, month_start: date
+    db: AsyncSession, workspace_id: uuid.UUID, month_start: date, next_month_start: date
 ) -> list[tuple[uuid.UUID, str, Decimal]]:
     total = func.sum(-Transaction.amount)
     rows = await db.execute(
@@ -161,6 +161,7 @@ async def month_expenses_by_category(
             Transaction.amount < 0,
             Transaction.transfer_group_id.is_(None),
             Transaction.occurred_at >= month_start,
+            Transaction.occurred_at < next_month_start,
         )
         .group_by(Category.id, Category.name)
         .order_by(total.desc())

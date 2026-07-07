@@ -94,7 +94,10 @@ async def create_category(
     _user: Annotated[User, Depends(require_workspace_member)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> CategoryOut:
-    category = await service.create_category(db, workspace_id, payload)
+    try:
+        category = await service.create_category(db, workspace_id, payload)
+    except service.NotFoundError:
+        raise HTTPException(status_code=404, detail="Родительская категория не найдена") from None
     return CategoryOut.model_validate(category, from_attributes=True)
 
 
