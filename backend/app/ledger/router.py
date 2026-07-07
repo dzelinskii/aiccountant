@@ -10,7 +10,14 @@ from app.identity.deps import require_workspace_member
 from app.identity.models import User
 from app.ledger import service
 from app.ledger.models import Account
-from app.ledger.schemas import AccountCreate, AccountOut, AccountUpdate
+from app.ledger.schemas import (
+    AccountCreate,
+    AccountOut,
+    AccountUpdate,
+    CategoryCreate,
+    CategoryOut,
+    CategoryUpdate,
+)
 
 router = APIRouter(prefix="/api")
 
@@ -61,3 +68,39 @@ async def update_account(
     except service.NotFoundError:
         raise HTTPException(status_code=404, detail="Счёт не найден") from None
     return _account_out(account, balance)
+
+
+@router.get("/categories")
+async def list_categories(
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> list[CategoryOut]:
+    cats = await service.list_categories(db, workspace_id)
+    return [CategoryOut.model_validate(c, from_attributes=True) for c in cats]
+
+
+@router.post("/categories", status_code=201)
+async def create_category(
+    payload: CategoryCreate,
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> CategoryOut:
+    category = await service.create_category(db, workspace_id, payload)
+    return CategoryOut.model_validate(category, from_attributes=True)
+
+
+@router.patch("/categories/{category_id}")
+async def update_category(
+    category_id: uuid.UUID,
+    payload: CategoryUpdate,
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> CategoryOut:
+    try:
+        category = await service.update_category(db, workspace_id, category_id, payload)
+    except service.NotFoundError:
+        raise HTTPException(status_code=404, detail="Категория не найдена") from None
+    return CategoryOut.model_validate(category, from_attributes=True)

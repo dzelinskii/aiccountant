@@ -16,6 +16,7 @@ def _money_str(value: Decimal) -> str:
 MoneyStr = Annotated[Decimal, PlainSerializer(_money_str, return_type=str)]
 
 ACCOUNT_TYPES = "^(card|cash|savings)$"
+CATEGORY_KINDS = "^(income|expense)$"
 
 
 class AccountCreate(BaseModel):
@@ -36,3 +37,21 @@ class AccountOut(BaseModel):
     currency: str
     is_archived: bool
     balance: MoneyStr
+
+
+class CategoryCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    kind: str = Field(pattern=CATEGORY_KINDS)
+    parent_id: uuid.UUID | None = None
+
+
+class CategoryUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    parent_id: uuid.UUID | None = None
+
+
+class CategoryOut(BaseModel):
+    id: uuid.UUID
+    parent_id: uuid.UUID | None
+    name: str
+    kind: str
