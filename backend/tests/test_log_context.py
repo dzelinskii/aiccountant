@@ -1,9 +1,7 @@
-import pytest
 import structlog
 from httpx import AsyncClient
 
 
-@pytest.mark.skip(reason="ждёт эндпоинт accounts (Задача 6)")
 async def test_workspace_id_bound_in_request_context(client: AsyncClient) -> None:
     await client.post(
         "/api/auth/register", json={"email": "ctx@example.com", "password": "password123"}
