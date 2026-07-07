@@ -1,4 +1,5 @@
 import uuid
+from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import func, select
@@ -83,3 +84,66 @@ def add_category(db: AsyncSession, category: Category) -> None:
 def seed_default_categories(db: AsyncSession, workspace_id: uuid.UUID) -> None:
     for name, kind in DEFAULT_CATEGORIES:
         db.add(Category(workspace_id=workspace_id, name=name, kind=kind))
+
+
+async def list_transactions(
+    db: AsyncSession,
+    workspace_id: uuid.UUID,
+    *,
+    account_id: uuid.UUID | None = None,
+    category_id: uuid.UUID | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[list[Transaction], int]:
+    conditions = [Transaction.workspace_id == workspace_id]
+    if account_id is not None:
+        conditions.append(Transaction.account_id == account_id)
+    if category_id is not None:
+        conditions.append(Transaction.category_id == category_id)
+    if date_from is not None:
+        conditions.append(Transaction.occurred_at >= date_from)
+    if date_to is not None:
+        conditions.append(Transaction.occurred_at <= date_to)
+
+    total = await db.scalar(select(func.count()).select_from(Transaction).where(*conditions))
+    rows = await db.execute(
+        select(Transaction)
+        .where(*conditions)
+        .order_by(Transaction.occurred_at.desc(), Transaction.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    return list(rows.scalars().all()), int(total or 0)
+
+
+async def get_transaction(
+    db: AsyncSession, workspace_id: uuid.UUID, transaction_id: uuid.UUID
+) -> Transaction | None:
+    result: Transaction | None = await db.scalar(
+        select(Transaction).where(
+            Transaction.id == transaction_id, Transaction.workspace_id == workspace_id
+        )
+    )
+    return result
+
+
+async def get_transfer_group(
+    db: AsyncSession, workspace_id: uuid.UUID, transfer_group_id: uuid.UUID
+) -> list[Transaction]:
+    rows = await db.execute(
+        select(Transaction).where(
+            Transaction.workspace_id == workspace_id,
+            Transaction.transfer_group_id == transfer_group_id,
+        )
+    )
+    return list(rows.scalars().all())
+
+
+def add_transaction(db: AsyncSession, transaction: Transaction) -> None:
+    db.add(transaction)
+
+
+async def delete_transaction(db: AsyncSession, transaction: Transaction) -> None:
+    await db.delete(transaction)

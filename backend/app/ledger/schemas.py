@@ -1,4 +1,5 @@
 import uuid
+from datetime import date
 from decimal import Decimal
 from typing import Annotated
 
@@ -55,3 +56,46 @@ class CategoryOut(BaseModel):
     parent_id: uuid.UUID | None
     name: str
     kind: str
+
+
+class TransactionCreate(BaseModel):
+    account_id: uuid.UUID
+    category_id: uuid.UUID
+    amount: Decimal
+    occurred_at: date
+    merchant: str | None = Field(default=None, max_length=300)
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class TransactionUpdate(BaseModel):
+    category_id: uuid.UUID | None = None
+    amount: Decimal | None = None
+    occurred_at: date | None = None
+    merchant: str | None = Field(default=None, max_length=300)
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class TransferCreate(BaseModel):
+    from_account_id: uuid.UUID
+    to_account_id: uuid.UUID
+    from_amount: Decimal = Field(gt=0)
+    to_amount: Decimal = Field(gt=0)
+    occurred_at: date
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class TransactionOut(BaseModel):
+    id: uuid.UUID
+    account_id: uuid.UUID
+    category_id: uuid.UUID | None
+    amount: MoneyStr
+    currency: str
+    occurred_at: date
+    merchant: str | None
+    note: str | None
+    transfer_group_id: uuid.UUID | None
+
+
+class TransactionList(BaseModel):
+    items: list[TransactionOut]
+    total: int
