@@ -23,6 +23,7 @@ dev = [
     "ruff",
     "mypy",
     "testcontainers[postgres,redis]>=4.14.2",
+    "import-linter",
 ]
 
 [tool.ruff]
@@ -46,3 +47,18 @@ ignore_missing_imports = true
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+
+[tool.importlinter]
+root_package = "app"
+
+[[tool.importlinter.contracts]]
+name = "ledger service/repository не зависят от identity"
+type = "forbidden"
+source_modules = ["app.ledger.service", "app.ledger.repository"]
+forbidden_modules = ["app.identity"]
+
+[[tool.importlinter.contracts]]
+name = "identity не зависит от ledger"
+type = "forbidden"
+source_modules = ["app.identity.service", "app.identity.models", "app.identity.deps"]
+forbidden_modules = ["app.ledger"]
