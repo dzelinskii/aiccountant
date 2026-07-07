@@ -11,6 +11,10 @@ from app.ledger.schemas import (
     AccountUpdate,
     CategoryCreate,
     CategoryUpdate,
+    DashboardAccount,
+    DashboardOut,
+    MonthExpense,
+    RecentTransaction,
     TransactionCreate,
     TransactionUpdate,
     TransferCreate,
@@ -253,4 +257,37 @@ async def list_transactions(
         date_to=date_to,
         limit=limit,
         offset=offset,
+    )
+
+
+async def build_dashboard(db: AsyncSession, workspace_id: uuid.UUID) -> DashboardOut:
+    today = date.today()
+    month_start = today.replace(day=1)
+
+    accounts = await repository.list_accounts_with_balance(db, workspace_id)
+    expenses = await repository.month_expenses_by_category(db, workspace_id, month_start)
+    recent = await repository.recent_transactions(db, workspace_id)
+
+    return DashboardOut(
+        accounts=[
+            DashboardAccount(id=a.id, name=a.name, currency=a.currency, balance=bal)
+            for a, bal in accounts
+        ],
+        month_expenses=[
+            MonthExpense(category_id=cid, category_name=name, total=total)
+            for cid, name, total in expenses
+        ],
+        recent=[
+            RecentTransaction(
+                id=t.id,
+                occurred_at=t.occurred_at,
+                amount=t.amount,
+                currency=t.currency,
+                account_name=acc_name,
+                category_name=cat_name,
+                merchant=t.merchant,
+                is_transfer=t.transfer_group_id is not None,
+            )
+            for t, acc_name, cat_name in recent
+        ],
     )

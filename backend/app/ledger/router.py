@@ -18,6 +18,7 @@ from app.ledger.schemas import (
     CategoryCreate,
     CategoryOut,
     CategoryUpdate,
+    DashboardOut,
     TransactionCreate,
     TransactionList,
     TransactionOut,
@@ -205,3 +206,12 @@ async def delete_transaction(
         await service.delete_transaction(db, workspace_id, transaction_id)
     except service.NotFoundError:
         raise HTTPException(status_code=404, detail="Операция не найдена") from None
+
+
+@router.get("/dashboard")
+async def dashboard(
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> DashboardOut:
+    return await service.build_dashboard(db, workspace_id)

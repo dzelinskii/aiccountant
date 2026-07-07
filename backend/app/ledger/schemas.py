@@ -99,3 +99,33 @@ class TransactionOut(BaseModel):
 class TransactionList(BaseModel):
     items: list[TransactionOut]
     total: int
+
+
+class DashboardAccount(BaseModel):
+    id: uuid.UUID
+    name: str
+    currency: str
+    balance: MoneyStr
+
+
+class MonthExpense(BaseModel):
+    category_id: uuid.UUID
+    category_name: str
+    total: MoneyStr
+
+
+class RecentTransaction(BaseModel):
+    id: uuid.UUID
+    occurred_at: date
+    amount: MoneyStr
+    currency: str
+    account_name: str
+    category_name: str | None
+    merchant: str | None
+    is_transfer: bool
+
+
+class DashboardOut(BaseModel):
+    accounts: list[DashboardAccount]
+    month_expenses: list[MonthExpense]
+    recent: list[RecentTransaction]

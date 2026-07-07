@@ -147,3 +147,36 @@ def add_transaction(db: AsyncSession, transaction: Transaction) -> None:
 
 async def delete_transaction(db: AsyncSession, transaction: Transaction) -> None:
     await db.delete(transaction)
+
+
+async def month_expenses_by_category(
+    db: AsyncSession, workspace_id: uuid.UUID, month_start: date
+) -> list[tuple[uuid.UUID, str, Decimal]]:
+    total = func.sum(-Transaction.amount)
+    rows = await db.execute(
+        select(Category.id, Category.name, total)
+        .join(Transaction, Transaction.category_id == Category.id)
+        .where(
+            Transaction.workspace_id == workspace_id,
+            Transaction.amount < 0,
+            Transaction.transfer_group_id.is_(None),
+            Transaction.occurred_at >= month_start,
+        )
+        .group_by(Category.id, Category.name)
+        .order_by(total.desc())
+    )
+    return [(cid, name, Decimal(t)) for cid, name, t in rows.all()]
+
+
+async def recent_transactions(
+    db: AsyncSession, workspace_id: uuid.UUID, limit: int = 10
+) -> list[tuple[Transaction, str, str | None]]:
+    rows = await db.execute(
+        select(Transaction, Account.name, Category.name)
+        .join(Account, Account.id == Transaction.account_id)
+        .outerjoin(Category, Category.id == Transaction.category_id)
+        .where(Transaction.workspace_id == workspace_id)
+        .order_by(Transaction.occurred_at.desc(), Transaction.id.desc())
+        .limit(limit)
+    )
+    return [(t, acc_name, cat_name) for t, acc_name, cat_name in rows.all()]
