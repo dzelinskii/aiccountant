@@ -38,3 +38,14 @@ async def require_owner(
     if membership is None or membership.role != "owner":
         raise HTTPException(status_code=403, detail="Требуется роль владельца")
     return user
+
+
+async def require_workspace_member(
+    workspace_id: uuid.UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> User:
+    membership = await db.get(Membership, (user.id, workspace_id))
+    if membership is None:
+        raise HTTPException(status_code=403, detail="Нет доступа к workspace")
+    return user
