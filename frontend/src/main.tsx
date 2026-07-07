@@ -5,8 +5,13 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { createBrowserRouter, RouterProvider } from 'react-router-dom'
 import { AuthGuard } from './AuthGuard'
+import { AppLayout } from './AppLayout'
+import { WorkspaceGate } from './WorkspaceGate'
 import './index.css'
-import { HomePage } from './pages/HomePage'
+import { DashboardPage } from './pages/DashboardPage'
+import { AccountsPage } from './pages/AccountsPage'
+import { CategoriesPage } from './pages/CategoriesPage'
+import { TransactionsPage } from './pages/TransactionsPage'
 import { LoginPage } from './pages/LoginPage'
 import { RegisterPage } from './pages/RegisterPage'
 
@@ -18,12 +23,22 @@ const router = createBrowserRouter([
   { path: '/login', element: <LoginPage /> },
   { path: '/register', element: <RegisterPage /> },
   {
-    path: '/',
     element: (
       <AuthGuard>
-        <HomePage />
+        <WorkspaceGate />
       </AuthGuard>
     ),
+    children: [
+      {
+        element: <AppLayout />,
+        children: [
+          { path: '/', element: <DashboardPage /> },
+          { path: '/accounts', element: <AccountsPage /> },
+          { path: '/categories', element: <CategoriesPage /> },
+          { path: '/transactions', element: <TransactionsPage /> },
+        ],
+      },
+    ],
   },
 ])
 
