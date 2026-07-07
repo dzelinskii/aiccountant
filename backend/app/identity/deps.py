@@ -1,6 +1,7 @@
 import uuid
 from typing import Annotated
 
+import structlog
 from fastapi import Cookie, Depends, HTTPException
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -48,4 +49,5 @@ async def require_workspace_member(
     membership = await db.get(Membership, (user.id, workspace_id))
     if membership is None:
         raise HTTPException(status_code=403, detail="Нет доступа к workspace")
+    structlog.contextvars.bind_contextvars(workspace_id=str(workspace_id), user_id=str(user.id))
     return user

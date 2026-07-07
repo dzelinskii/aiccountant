@@ -5,6 +5,7 @@ from fastapi import FastAPI
 
 from app.core.csrf import OriginCheckMiddleware
 from app.core.db import engine
+from app.core.log_context import LogContextMiddleware
 from app.core.redis import redis_client
 from app.identity.router import router as identity_router
 from app.logging import configure_logging
@@ -21,6 +22,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="AIccountant", lifespan=lifespan)
 app.add_middleware(OriginCheckMiddleware)
+app.add_middleware(LogContextMiddleware)
 app.include_router(identity_router)
 
 
