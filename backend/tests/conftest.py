@@ -10,7 +10,7 @@ from testcontainers.postgres import PostgresContainer
 from testcontainers.redis import RedisContainer
 
 from alembic import command
-from app.core.db import get_db
+from app.core.db import Base, get_db
 from app.core.redis import get_redis
 from app.main import app
 
@@ -38,7 +38,8 @@ async def db_session(database_url: str) -> AsyncIterator[AsyncSession]:
     async with factory() as session:
         yield session
     async with engine.begin() as conn:
-        await conn.execute(text("TRUNCATE memberships, workspaces, users CASCADE"))
+        tables = ", ".join(f'"{t.name}"' for t in reversed(Base.metadata.sorted_tables))
+        await conn.execute(text(f"TRUNCATE {tables} RESTART IDENTITY CASCADE"))
     await engine.dispose()
 
 
