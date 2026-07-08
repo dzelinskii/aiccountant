@@ -11,8 +11,9 @@ dependencies = [
     "alembic>=1.18.5",
     "pydantic-settings>=2.14.2",
     "argon2-cffi>=25.1.0",
-    "redis>=8.0.1",
+    "redis>=5.0.1,<6.5",
     "email-validator>=2.3.0",
+    "celery[redis]>=5.4",
 ]
 
 [dependency-groups]
@@ -22,7 +23,7 @@ dev = [
     "httpx",
     "ruff",
     "mypy",
-    "testcontainers[postgres,redis]>=4.14.2",
+    "testcontainers[postgres]>=4.14.2",
     "import-linter",
 ]
 
@@ -41,6 +42,10 @@ plugins = ["pydantic.mypy"]
 # testcontainers не поставляет типы для этих подмодулей (нет py.typed)
 [[tool.mypy.overrides]]
 module = ["testcontainers.postgres", "testcontainers.redis"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["celery", "celery.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
