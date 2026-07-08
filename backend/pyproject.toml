@@ -71,7 +71,7 @@ forbidden_modules = ["app.ledger"]
 [[tool.importlinter.contracts]]
 name = "recurring не лезет во внутренности identity и ledger"
 type = "forbidden"
-source_modules = ["app.recurring.service", "app.recurring.repository"]
+source_modules = ["app.recurring.service", "app.recurring.repository", "app.recurring.tasks"]
 forbidden_modules = ["app.identity", "app.ledger.repository", "app.ledger.models"]
 # recurring.service легально зовёт ledger.service, а тот сам импортирует
 # ledger.repository/ledger.models — это не обход барьера, поэтому транзитивную

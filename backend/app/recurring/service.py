@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ledger import service as ledger_service
 from app.recurring import repository
-from app.recurring.models import RecurringRule
+from app.recurring.models import RecurringOccurrence, RecurringRule
 from app.recurring.schedule import compute_initial_next_run, next_run_from
 from app.recurring.schemas import RuleCreate, RuleUpdate
 
@@ -122,3 +122,43 @@ async def delete_rule(db: AsyncSession, workspace_id: uuid.UUID, rule_id: uuid.U
         raise NotFoundError
     await repository.delete_rule(db, rule)
     await db.commit()
+
+
+async def process_due_rules(db: AsyncSession, today: date) -> int:
+    """Обработать все правила, у которых наступил слот. Одно срабатывание на
+    прогон; next_run_at перескакивает на ближайший будущий слот (без бэкфилла)."""
+    rules = await repository.due_rules(db, today)
+    processed = 0
+    for rule in rules:
+        due = rule.next_run_at
+        # продвигаем расписание в любом случае — чтобы не зациклиться на слоте
+        rule.next_run_at = next_run_from(
+            rule.period, rule.interval, rule.anchor_day, rule.start_date, after=today
+        )
+        # идемпотентность: слот уже материализован — второй раз не создаём
+        if await repository.occurrence_exists(db, rule.id, due):
+            continue
+        occurrence = RecurringOccurrence(
+            workspace_id=rule.workspace_id,
+            rule_id=rule.id,
+            due_date=due,
+            amount=rule.amount,
+            status="pending",
+        )
+        if rule.mode == "autopost":
+            transaction = await ledger_service.post_transaction(
+                db,
+                rule.workspace_id,
+                rule.created_by,
+                account_id=rule.account_id,
+                category_id=rule.category_id,
+                amount=rule.amount,
+                occurred_at=due,
+                source="recurring",
+            )
+            occurrence.status = "posted"
+            occurrence.transaction_id = transaction.id
+        repository.add_occurrence(db, occurrence)
+        processed += 1
+    await db.commit()  # правила и срабатывания — один commit
+    return processed
