@@ -9,6 +9,7 @@ const LINKS = [
   { to: '/accounts', label: 'Счета' },
   { to: '/categories', label: 'Категории' },
   { to: '/transactions', label: 'Операции' },
+  { to: '/recurring', label: 'Регулярные' },
 ]
 
 export function AppLayout() {
