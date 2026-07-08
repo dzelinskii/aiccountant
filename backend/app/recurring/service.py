@@ -162,3 +162,56 @@ async def process_due_rules(db: AsyncSession, today: date) -> int:
         processed += 1
     await db.commit()  # правила и срабатывания — один commit
     return processed
+
+
+async def list_occurrences(
+    db: AsyncSession, workspace_id: uuid.UUID, status: str
+) -> list[RecurringOccurrence]:
+    return await repository.list_occurrences(db, workspace_id, status)
+
+
+async def confirm_occurrence(
+    db: AsyncSession, workspace_id: uuid.UUID, occurrence_id: uuid.UUID, amount: Decimal | None
+) -> RecurringOccurrence:
+    occurrence = await repository.get_occurrence(db, workspace_id, occurrence_id)
+    if occurrence is None:
+        raise NotFoundError
+    if occurrence.status != "pending":
+        raise OccurrenceStateError
+    rule = await repository.get_rule(db, workspace_id, occurrence.rule_id)
+    if rule is None:
+        raise NotFoundError
+    post_amount = amount if amount is not None else occurrence.amount
+    try:
+        transaction = await ledger_service.post_transaction(
+            db,
+            workspace_id,
+            rule.created_by,
+            account_id=rule.account_id,
+            category_id=rule.category_id,
+            amount=post_amount,
+            occurred_at=occurrence.due_date,
+            source="recurring",
+        )
+    except ledger_service.NotFoundError:
+        raise NotFoundError from None
+    except ledger_service.SignMismatchError:
+        raise SignMismatchError from None
+    occurrence.status = "confirmed"
+    occurrence.transaction_id = transaction.id
+    occurrence.amount = post_amount
+    await db.commit()
+    return occurrence
+
+
+async def skip_occurrence(
+    db: AsyncSession, workspace_id: uuid.UUID, occurrence_id: uuid.UUID
+) -> RecurringOccurrence:
+    occurrence = await repository.get_occurrence(db, workspace_id, occurrence_id)
+    if occurrence is None:
+        raise NotFoundError
+    if occurrence.status != "pending":
+        raise OccurrenceStateError
+    occurrence.status = "skipped"
+    await db.commit()
+    return occurrence

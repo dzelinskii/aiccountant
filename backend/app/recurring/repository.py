@@ -61,3 +61,29 @@ async def occurrence_exists(db: AsyncSession, rule_id: uuid.UUID, due_date: date
 
 def add_occurrence(db: AsyncSession, occurrence: RecurringOccurrence) -> None:
     db.add(occurrence)
+
+
+async def list_occurrences(
+    db: AsyncSession, workspace_id: uuid.UUID, status: str
+) -> list[RecurringOccurrence]:
+    rows = await db.execute(
+        select(RecurringOccurrence)
+        .where(
+            RecurringOccurrence.workspace_id == workspace_id,
+            RecurringOccurrence.status == status,
+        )
+        .order_by(RecurringOccurrence.due_date)
+    )
+    return list(rows.scalars().all())
+
+
+async def get_occurrence(
+    db: AsyncSession, workspace_id: uuid.UUID, occurrence_id: uuid.UUID
+) -> RecurringOccurrence | None:
+    result: RecurringOccurrence | None = await db.scalar(
+        select(RecurringOccurrence).where(
+            RecurringOccurrence.id == occurrence_id,
+            RecurringOccurrence.workspace_id == workspace_id,
+        )
+    )
+    return result

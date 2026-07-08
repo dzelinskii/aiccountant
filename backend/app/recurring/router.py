@@ -8,7 +8,7 @@ from app.core.db import get_db
 from app.identity.deps import require_workspace_member
 from app.identity.models import User
 from app.recurring import service
-from app.recurring.schemas import RuleCreate, RuleOut, RuleUpdate
+from app.recurring.schemas import OccurrenceConfirm, OccurrenceOut, RuleCreate, RuleOut, RuleUpdate
 
 router = APIRouter(prefix="/api")
 
@@ -71,3 +71,49 @@ async def delete_rule(
         await service.delete_rule(db, workspace_id, rule_id)
     except service.NotFoundError:
         raise HTTPException(status_code=404, detail="Правило не найдено") from None
+
+
+@router.get("/recurring/occurrences")
+async def list_occurrences(
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    status: str = "pending",
+) -> list[OccurrenceOut]:
+    occ = await service.list_occurrences(db, workspace_id, status)
+    return [OccurrenceOut.model_validate(o, from_attributes=True) for o in occ]
+
+
+@router.post("/recurring/occurrences/{occurrence_id}/confirm", status_code=201)
+async def confirm_occurrence(
+    occurrence_id: uuid.UUID,
+    payload: OccurrenceConfirm,
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> OccurrenceOut:
+    try:
+        occ = await service.confirm_occurrence(db, workspace_id, occurrence_id, payload.amount)
+    except service.NotFoundError:
+        raise HTTPException(status_code=404, detail="Срабатывание не найдено") from None
+    except service.OccurrenceStateError:
+        raise HTTPException(status_code=409, detail="Срабатывание уже обработано") from None
+    except service.SignMismatchError:
+        raise HTTPException(status_code=422, detail=_SIGN_DETAIL) from None
+    return OccurrenceOut.model_validate(occ, from_attributes=True)
+
+
+@router.post("/recurring/occurrences/{occurrence_id}/skip")
+async def skip_occurrence(
+    occurrence_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> OccurrenceOut:
+    try:
+        occ = await service.skip_occurrence(db, workspace_id, occurrence_id)
+    except service.NotFoundError:
+        raise HTTPException(status_code=404, detail="Срабатывание не найдено") from None
+    except service.OccurrenceStateError:
+        raise HTTPException(status_code=409, detail="Срабатывание уже обработано") from None
+    return OccurrenceOut.model_validate(occ, from_attributes=True)
