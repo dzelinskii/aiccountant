@@ -10,6 +10,7 @@ from app.core.db import Base
 from app.core.settings import get_settings
 from app.identity import models  # noqa: F401  (регистрирует таблицы в metadata)
 from app.ledger import models as ledger_models  # noqa: F401  (регистрирует таблицы)
+from app.recurring import models as recurring_models  # noqa: F401  (регистрирует таблицы)
 
 config = context.config
 if config.config_file_name is not None:
