@@ -2,6 +2,7 @@ import uuid
 from datetime import date, timedelta
 from decimal import Decimal
 
+import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ledger import service as ledger_service
@@ -9,6 +10,8 @@ from app.recurring import repository
 from app.recurring.models import RecurringOccurrence, RecurringRule
 from app.recurring.schedule import compute_initial_next_run, next_run_from
 from app.recurring.schemas import RuleCreate, RuleUpdate
+
+logger = structlog.get_logger()
 
 
 class NotFoundError(Exception):
@@ -159,6 +162,14 @@ async def process_due_rules(db: AsyncSession, today: date) -> int:
             occurrence.status = "posted"
             occurrence.transaction_id = transaction.id
         repository.add_occurrence(db, occurrence)
+        # лог наблюдаемости: только идентификаторы и статус, без PII и сумм
+        logger.info(
+            "recurring_occurrence_processed",
+            workspace_id=str(rule.workspace_id),
+            rule_id=str(rule.id),
+            mode=rule.mode,
+            status=occurrence.status,
+        )
         processed += 1
     await db.commit()  # правила и срабатывания — один commit
     return processed
