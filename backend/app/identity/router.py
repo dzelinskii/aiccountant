@@ -12,6 +12,7 @@ from app.identity import service, sessions
 from app.identity.deps import SESSION_COOKIE, get_current_user, require_owner
 from app.identity.models import User
 from app.identity.schemas import LoginIn, MemberIn, MeOut, RegisterIn, UserOut, WorkspaceOut
+from app.ledger import service as ledger_service
 
 router = APIRouter(prefix="/api")
 
@@ -36,11 +37,12 @@ async def register(
     redis: Annotated[Redis, Depends(get_redis)],
 ) -> UserOut:
     try:
-        user = await service.register_user(db, payload.email, payload.password)
+        user, workspace = await service.register_user(db, payload.email, payload.password)
     except service.EmailTakenError:
         raise HTTPException(status_code=409, detail="Email уже зарегистрирован") from None
     token = await sessions.create_session(redis, user.id)
     _set_session_cookie(response, token)
+    await ledger_service.seed_categories(db, workspace.id)
     return UserOut(id=user.id, email=user.email)
 
 

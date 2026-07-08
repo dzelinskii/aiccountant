@@ -18,7 +18,7 @@ class AlreadyMemberError(Exception):
     pass
 
 
-async def register_user(db: AsyncSession, email: str, password: str) -> User:
+async def register_user(db: AsyncSession, email: str, password: str) -> tuple[User, Workspace]:
     # email нормализуется к нижнему регистру: Alice@x.com и alice@x.com — один адрес
     email = email.lower()
     existing = await db.scalar(select(User).where(User.email == email))
@@ -36,7 +36,7 @@ async def register_user(db: AsyncSession, email: str, password: str) -> User:
     except IntegrityError as exc:
         await db.rollback()
         raise EmailTakenError from exc
-    return user
+    return user, workspace
 
 
 # verify выполняется и когда пользователь не найден — иначе разница во времени
