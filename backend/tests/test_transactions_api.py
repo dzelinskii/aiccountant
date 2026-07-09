@@ -68,6 +68,39 @@ async def test_sign_must_match_kind(client: AsyncClient) -> None:
     assert resp.status_code == 422
 
 
+async def test_expense_without_category(client: AsyncClient) -> None:
+    s = await _setup(client)
+    resp = await client.post(
+        "/api/transactions",
+        params={"workspace_id": s["ws"]},
+        json={"account_id": s["acc1"], "amount": "-500.00", "occurred_at": "2026-07-05"},
+    )
+    assert resp.status_code == 201
+    assert resp.json()["category_id"] is None
+    assert resp.json()["amount"] == "-500.0000"
+
+
+async def test_income_without_category(client: AsyncClient) -> None:
+    s = await _setup(client)
+    resp = await client.post(
+        "/api/transactions",
+        params={"workspace_id": s["ws"]},
+        json={"account_id": s["acc1"], "amount": "700.00", "occurred_at": "2026-07-05"},
+    )
+    assert resp.status_code == 201
+    assert resp.json()["category_id"] is None
+
+
+async def test_zero_amount_still_rejected_without_category(client: AsyncClient) -> None:
+    s = await _setup(client)
+    resp = await client.post(
+        "/api/transactions",
+        params={"workspace_id": s["ws"]},
+        json={"account_id": s["acc1"], "amount": "0.00", "occurred_at": "2026-07-05"},
+    )
+    assert resp.status_code == 422
+
+
 async def test_transfer_atomic_pair(client: AsyncClient) -> None:
     s = await _setup(client)
     resp = await client.post(

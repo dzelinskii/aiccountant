@@ -120,20 +120,22 @@ async def validate_posting(
     workspace_id: uuid.UUID,
     *,
     account_id: uuid.UUID,
-    category_id: uuid.UUID,
+    category_id: uuid.UUID | None,
     amount: Decimal,
 ) -> Account:
-    """Проверить принадлежность счёта/категории к workspace и соответствие знака
-    kind категории. Возвращает счёт (для валюты). Общая для ручного ввода,
-    регулярки и валидации правила."""
+    """Проверить счёт (workspace) и, если категория задана, соответствие её kind
+    знаку суммы. Категория опциональна; знак ≠ 0 требуется всегда."""
     account = await repository.get_account(db, workspace_id, account_id)
     if account is None:
         raise NotFoundError
-    category = await repository.get_category(db, workspace_id, category_id)
-    if category is None:
-        raise NotFoundError
-    if amount == 0 or (category.kind == "expense") != (amount < 0):
+    if amount == 0:
         raise SignMismatchError
+    if category_id is not None:
+        category = await repository.get_category(db, workspace_id, category_id)
+        if category is None:
+            raise NotFoundError
+        if (category.kind == "expense") != (amount < 0):
+            raise SignMismatchError
     return account
 
 
@@ -143,7 +145,7 @@ async def post_transaction(
     user_id: uuid.UUID,
     *,
     account_id: uuid.UUID,
-    category_id: uuid.UUID,
+    category_id: uuid.UUID | None,
     amount: Decimal,
     occurred_at: date,
     source: str,
@@ -251,17 +253,17 @@ async def update_transaction(
     new_category_id = (
         payload.category_id if payload.category_id is not None else transaction.category_id
     )
-    # обычная операция (не перевод) всегда имеет категорию — страхуемся явно
-    if new_category_id is None:
-        raise NotFoundError
-    category = await repository.get_category(db, workspace_id, new_category_id)
-    if category is None:
-        raise NotFoundError
     new_amount = payload.amount if payload.amount is not None else transaction.amount
-    if new_amount == 0 or (category.kind == "expense") != (new_amount < 0):
+    if new_amount == 0:
         raise SignMismatchError
+    if new_category_id is not None:
+        category = await repository.get_category(db, workspace_id, new_category_id)
+        if category is None:
+            raise NotFoundError
+        if (category.kind == "expense") != (new_amount < 0):
+            raise SignMismatchError
 
-    transaction.category_id = category.id
+    transaction.category_id = new_category_id
     if payload.amount is not None:
         transaction.amount = payload.amount
     if payload.occurred_at is not None:
