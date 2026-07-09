@@ -15,6 +15,7 @@ dependencies = [
     "email-validator>=2.3.0",
     "celery[redis]>=5.4",
     "pypdf>=5.1",
+    "python-multipart>=0.0.9",
 ]
 
 [dependency-groups]
@@ -98,3 +99,19 @@ source_modules = [
     "app.ledger.service", "app.ledger.repository", "app.ledger.models",
 ]
 forbidden_modules = ["app.recurring"]
+
+[[tool.importlinter.contracts]]
+name = "imports не лезет во внутренности identity и ledger"
+type = "forbidden"
+source_modules = ["app.imports.service", "app.imports.repository", "app.imports.parser"]
+forbidden_modules = ["app.identity", "app.ledger.repository", "app.ledger.models"]
+ignore_imports = ["app.imports.service -> app.ledger.service"]
+
+[[tool.importlinter.contracts]]
+name = "identity и ledger не зависят от imports"
+type = "forbidden"
+source_modules = [
+    "app.identity.service", "app.identity.models", "app.identity.deps",
+    "app.ledger.service", "app.ledger.repository", "app.ledger.models",
+]
+forbidden_modules = ["app.imports"]
