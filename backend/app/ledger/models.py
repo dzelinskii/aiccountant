@@ -2,7 +2,7 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Date, DateTime, ForeignKey, Index, Numeric, String, func
+from sqlalchemy import Date, DateTime, ForeignKey, Index, Numeric, String, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -49,10 +49,21 @@ class Transaction(Base):
     source: Mapped[str] = mapped_column(String(20), default="manual")
     # общий id для двух строк перевода; null у обычных операций
     transfer_group_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    # дедуп импорта: хеш операции; мягкая ссылка на запись imports (без FK,
+    # чтобы ledger не зависел от модуля imports)
+    external_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    import_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
         Index("ix_transactions_workspace_occurred", "workspace_id", "occurred_at"),
         Index("ix_transactions_account_occurred", "account_id", "occurred_at"),
+        Index(
+            "uq_transactions_account_external",
+            "account_id",
+            "external_id",
+            unique=True,
+            postgresql_where=text("external_id IS NOT NULL"),
+        ),
     )

@@ -9,6 +9,7 @@ from alembic import context
 from app.core.db import Base
 from app.core.settings import get_settings
 from app.identity import models  # noqa: F401  (регистрирует таблицы в metadata)
+from app.imports import models as imports_models  # noqa: F401  (регистрирует таблицы)
 from app.ledger import models as ledger_models  # noqa: F401  (регистрирует таблицы)
 from app.recurring import models as recurring_models  # noqa: F401  (регистрирует таблицы)
 
