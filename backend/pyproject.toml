@@ -14,6 +14,8 @@ dependencies = [
     "redis>=5.0.1,<6.5",
     "email-validator>=2.3.0",
     "celery[redis]>=5.4",
+    "pypdf>=5.1",
+    "python-multipart>=0.0.9",
 ]
 
 [dependency-groups]
@@ -25,6 +27,7 @@ dev = [
     "mypy",
     "testcontainers[postgres]>=4.14.2",
     "import-linter",
+    "reportlab>=4.2",
 ]
 
 [tool.ruff]
@@ -46,6 +49,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["celery", "celery.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["pypdf", "pypdf.*", "reportlab", "reportlab.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
@@ -92,3 +99,19 @@ source_modules = [
     "app.ledger.service", "app.ledger.repository", "app.ledger.models",
 ]
 forbidden_modules = ["app.recurring"]
+
+[[tool.importlinter.contracts]]
+name = "imports не лезет во внутренности identity и ledger"
+type = "forbidden"
+source_modules = ["app.imports.service", "app.imports.repository", "app.imports.parser"]
+forbidden_modules = ["app.identity", "app.ledger.repository", "app.ledger.models"]
+ignore_imports = ["app.imports.service -> app.ledger.service"]
+
+[[tool.importlinter.contracts]]
+name = "identity и ledger не зависят от imports"
+type = "forbidden"
+source_modules = [
+    "app.identity.service", "app.identity.models", "app.identity.deps",
+    "app.ledger.service", "app.ledger.repository", "app.ledger.models",
+]
+forbidden_modules = ["app.imports"]

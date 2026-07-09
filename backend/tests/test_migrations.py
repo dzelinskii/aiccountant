@@ -45,3 +45,18 @@ async def test_recurring_category_is_nullable(database_url: str) -> None:
         )
         assert result.scalar() == "YES"
     await engine.dispose()
+
+
+async def test_migrations_create_imports_and_dedup(database_url: str) -> None:
+    engine = create_async_engine(database_url)
+    async with engine.connect() as conn:
+        assert (await conn.execute(text("SELECT to_regclass('imports')"))).scalar() == "imports"
+        cols = await conn.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'transactions' "
+                "AND column_name IN ('external_id', 'import_id')"
+            )
+        )
+        assert {r[0] for r in cols} == {"external_id", "import_id"}
+    await engine.dispose()

@@ -8,6 +8,7 @@ from app.core.db import engine
 from app.core.log_context import LogContextMiddleware
 from app.core.redis import redis_client
 from app.identity.router import router as identity_router
+from app.imports.router import router as imports_router
 from app.ledger.router import router as ledger_router
 from app.logging import configure_logging
 from app.recurring.router import router as recurring_router
@@ -28,6 +29,7 @@ app.add_middleware(LogContextMiddleware)
 app.include_router(identity_router)
 app.include_router(ledger_router)
 app.include_router(recurring_router)
+app.include_router(imports_router)
 
 
 @app.get("/api/health")

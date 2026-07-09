@@ -16,3 +16,7 @@ dist/
 # IDE
 .idea/
 .vscode/
+
+# Личные банковские выписки (PII) — не коммитить
+Справка_*.pdf
+*_movement_statement_private.pdf
