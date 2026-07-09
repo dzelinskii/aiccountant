@@ -73,7 +73,7 @@ export function TransactionsPage() {
 
   const accountName = (id: string) => accounts?.find((a) => a.id === id)?.name ?? '—'
   const categoryName = (id: string | null) =>
-    id ? (categories?.find((c) => c.id === id)?.name ?? '—') : null
+    id ? (categories?.find((c) => c.id === id)?.name ?? null) : null
   const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1
 
   return (
