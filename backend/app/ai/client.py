@@ -38,5 +38,7 @@ class OpenAICompatLLMClient:
 
 def build_llm_client() -> OpenAICompatLLMClient:
     settings = get_settings()
+    # пустой ключ допустим для локальных keyless-эндпоинтов (Ollama), поэтому не падаем
+    # здесь; если ключ реально нужен, ошибка авторизации всплывёт при первом вызове провайдера
     client = AsyncOpenAI(base_url=settings.llm_base_url, api_key=settings.llm_api_key or "unset")
     return OpenAICompatLLMClient(client, settings.llm_model_categorize)

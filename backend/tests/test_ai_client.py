@@ -1,6 +1,9 @@
 import json
 
-from app.ai.client import LLMClient, OpenAICompatLLMClient
+import pytest
+
+from app.ai.client import LLMClient, OpenAICompatLLMClient, build_llm_client
+from app.core.settings import get_settings
 
 
 class _FakeMessage:
@@ -58,3 +61,14 @@ async def test_complete_json_none_content_falls_back_to_empty_object() -> None:
     fake = _FakeOpenAI(None)  # type: ignore[arg-type]
     client = OpenAICompatLLMClient(fake, "test-model")  # type: ignore[arg-type]
     assert await client.complete_json(system="s", user="u") == "{}"
+
+
+def test_build_llm_client_uses_categorize_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    # фабрика читает настройки; сеть не трогается — конструктор AsyncOpenAI её не дёргает
+    monkeypatch.setenv("LLM_MODEL_CATEGORIZE", "custom-model")
+    get_settings.cache_clear()
+    try:
+        client = build_llm_client()
+        assert client._model == "custom-model"
+    finally:
+        get_settings.cache_clear()
