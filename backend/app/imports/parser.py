@@ -1,7 +1,10 @@
+import io
 import re
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
+
+from pypdf import PdfReader
 
 DATE_RE = re.compile(r"^\d{2}\.\d{2}\.\d{4}$")
 TIME_RE = re.compile(r"^\d{2}:\d{2}$")
@@ -30,6 +33,17 @@ class ParsedStatement:
     operations: list[ParsedOperation]
     total_income: Decimal | None
     total_expense: Decimal | None
+
+
+def extract_lines(pdf_bytes: bytes) -> list[str]:
+    """Тонкий слой: извлечь текст из PDF и разрезать на строки. Вся зависимость
+    от pypdf/формата PDF здесь; разбор — в parse_statement."""
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    lines: list[str] = []
+    for page in reader.pages:
+        text = page.extract_text() or ""
+        lines.extend(text.splitlines())
+    return lines
 
 
 def _money(raw: str) -> Decimal:

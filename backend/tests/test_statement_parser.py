@@ -3,7 +3,8 @@ from decimal import Decimal
 
 import pytest
 
-from app.imports.parser import StatementParseError, parse_statement
+from app.imports.parser import StatementParseError, extract_lines, parse_statement
+from tests.fixtures import make_simple_pdf
 
 # строки в формате реального извлечения pypdf из «Справки о движении средств»
 SAMPLE = [
@@ -66,3 +67,10 @@ def test_totals_control_sum() -> None:
 def test_empty_or_garbage_raises() -> None:
     with pytest.raises(StatementParseError):
         parse_statement(["мусор", "нет операций"])
+
+
+def test_extract_lines_reads_pdf_text() -> None:
+    pdf = make_simple_pdf(["03.07.2026", "12:37", "Cafe payment"])
+    lines = extract_lines(pdf)
+    assert "03.07.2026" in lines
+    assert "Cafe payment" in lines
