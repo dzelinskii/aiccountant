@@ -90,7 +90,7 @@ class TransactionOut(BaseModel):
 
     @field_serializer("category_confidence")
     def _serialize_confidence(self, value: Decimal | None) -> str | None:
-        return None if value is None else format(value, "f")
+        return None if value is None else format(value.quantize(Decimal("0.001")), "f")
 
 
 class TransactionList(BaseModel):
