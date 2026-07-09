@@ -30,6 +30,15 @@ SAMPLE = [
 ]
 FILES = {"file": ("statement.pdf", b"%PDF-dummy", "application/pdf")}
 
+# две идентичные операции одного дня (в выписке бывают реальные повторы —
+# банк не даёт id операции): не должны схлопнуться в одну
+DUP_SAMPLE = [
+    "29.06.2026", "11:30", "29.06.2026", "11:30",
+    "-29 600.00 ₽ -29 600.00 ₽ Внутренний перевод на договор 9358",
+    "29.06.2026", "11:30", "29.06.2026", "11:30",
+    "-29 600.00 ₽ -29 600.00 ₽ Внутренний перевод на договор 9358",
+]
+
 
 async def _setup(client: AsyncClient, creds: dict[str, str]) -> tuple[str, str]:
     await client.post("/api/auth/register", json=creds)
@@ -166,3 +175,41 @@ async def test_too_large_rejected(client: AsyncClient, monkeypatch: pytest.Monke
         files={"file": ("statement.pdf", b"%PDF-too-big", "application/pdf")},
     )
     assert resp.status_code == 413
+
+
+async def test_identical_operations_not_collapsed(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("app.imports.service.extract_lines", lambda b: DUP_SAMPLE)
+    ws, acc = await _setup(client, ALICE)
+
+    prev = (
+        await client.post(
+            "/api/imports",
+            params={"workspace_id": ws, "account_id": acc, "commit": "false"},
+            files=FILES,
+        )
+    ).json()
+    assert prev["new_count"] == 2  # обе одинаковые операции — новые, не схлопнуты
+
+    r1 = (
+        await client.post(
+            "/api/imports",
+            params={"workspace_id": ws, "account_id": acc, "commit": "true"},
+            files=FILES,
+        )
+    ).json()
+    assert r1["imported"] == 2
+
+    # повторный импорт того же файла идемпотентен
+    r2 = (
+        await client.post(
+            "/api/imports",
+            params={"workspace_id": ws, "account_id": acc, "commit": "true"},
+            files=FILES,
+        )
+    ).json()
+    assert r2["imported"] == 0
+    assert r2["duplicates"] == 2
+    txns = (await client.get("/api/transactions", params={"workspace_id": ws})).json()
+    assert txns["total"] == 2

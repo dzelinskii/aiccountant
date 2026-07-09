@@ -16,9 +16,21 @@ BANK_PROFILE = "tbank_statement"
 logger = structlog.get_logger()
 
 
-def _external_id(account_id: uuid.UUID, op: ParsedOperation) -> str:
-    raw = f"{account_id}|{op.occurred_at.isoformat()}|{op.amount}|{op.description}"
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+def _external_ids(account_id: uuid.UUID, operations: list[ParsedOperation]) -> list[str]:
+    # id операции в PDF нет, а одинаковые операции одного дня (одинаковые сумма и
+    # описание, порой совпадает и время до минуты) в выписке реально бывают —
+    # поэтому в ключ добавляем порядковый номер среди идентичных строк файла.
+    # Это сохраняет распознавание дублей при повторном импорте того же файла
+    # (порядок стабилен) и не теряет реальные одинаковые операции.
+    seen_count: dict[tuple[str, str, str], int] = {}
+    ids: list[str] = []
+    for op in operations:
+        base = (op.occurred_at.isoformat(), str(op.amount), op.description)
+        occurrence = seen_count.get(base, 0)
+        seen_count[base] = occurrence + 1
+        raw = f"{account_id}|{base[0]}|{base[1]}|{base[2]}|{occurrence}"
+        ids.append(hashlib.sha256(raw.encode("utf-8")).hexdigest())
+    return ids
 
 
 def _check_control_sum(statement: ParsedStatement) -> None:
@@ -41,7 +53,7 @@ async def preview(
     db: AsyncSession, workspace_id: uuid.UUID, account_id: uuid.UUID, pdf_bytes: bytes
 ) -> ImportPreviewOut:
     statement = _parse(pdf_bytes)
-    ext_ids = [_external_id(account_id, op) for op in statement.operations]
+    ext_ids = _external_ids(account_id, statement.operations)
     existing = await ledger_service.existing_external_ids(
         db, workspace_id, account_id, set(ext_ids)
     )
@@ -80,7 +92,7 @@ async def commit_import(
     pdf_bytes: bytes,
 ) -> ImportResultOut:
     statement = _parse(pdf_bytes)
-    ext_ids = [_external_id(account_id, op) for op in statement.operations]
+    ext_ids = _external_ids(account_id, statement.operations)
     existing = await ledger_service.existing_external_ids(
         db, workspace_id, account_id, set(ext_ids)
     )
