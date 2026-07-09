@@ -26,6 +26,9 @@ export interface Transaction {
   merchant: string | null
   note: string | null
   transfer_group_id: string | null
+  category_confirmed: boolean
+  suggested_category_id: string | null
+  category_confidence: string | null
 }
 
 export interface TransactionList {
@@ -95,3 +98,9 @@ export const deleteTransaction = (ws: string, id: string) =>
   api<void>(`/api/transactions/${id}?${q(ws)}`, { method: 'DELETE' })
 
 export const getDashboard = (ws: string) => api<Dashboard>(`/api/dashboard?${q(ws)}`)
+
+export const dismissSuggestion = (ws: string, id: string) =>
+  api<Transaction>(`/api/transactions/${id}/dismiss-suggestion?${q(ws)}`, { method: 'POST' })
+
+export const categorizeUncategorized = (ws: string) =>
+  api<{ status: string }>(`/api/transactions/categorize?${q(ws)}`, { method: 'POST' })
