@@ -115,35 +115,79 @@ class TransferEditError(Exception):
     """Строку перевода нельзя править — только удалить и создать заново."""
 
 
-async def create_transaction(
-    db: AsyncSession, workspace_id: uuid.UUID, user_id: uuid.UUID, payload: TransactionCreate
-) -> Transaction:
-    account = await repository.get_account(db, workspace_id, payload.account_id)
+async def validate_posting(
+    db: AsyncSession,
+    workspace_id: uuid.UUID,
+    *,
+    account_id: uuid.UUID,
+    category_id: uuid.UUID,
+    amount: Decimal,
+) -> Account:
+    """Проверить принадлежность счёта/категории к workspace и соответствие знака
+    kind категории. Возвращает счёт (для валюты). Общая для ручного ввода,
+    регулярки и валидации правила."""
+    account = await repository.get_account(db, workspace_id, account_id)
     if account is None:
         raise NotFoundError
-    category = await repository.get_category(db, workspace_id, payload.category_id)
+    category = await repository.get_category(db, workspace_id, category_id)
     if category is None:
         raise NotFoundError
-    if payload.amount == 0:
+    if amount == 0 or (category.kind == "expense") != (amount < 0):
         raise SignMismatchError
-    if category.kind == "expense" and payload.amount > 0:
-        raise SignMismatchError
-    if category.kind == "income" and payload.amount < 0:
-        raise SignMismatchError
+    return account
+
+
+async def post_transaction(
+    db: AsyncSession,
+    workspace_id: uuid.UUID,
+    user_id: uuid.UUID,
+    *,
+    account_id: uuid.UUID,
+    category_id: uuid.UUID,
+    amount: Decimal,
+    occurred_at: date,
+    source: str,
+    merchant: str | None = None,
+    note: str | None = None,
+) -> Transaction:
+    """Провести обычную операцию (расход/доход) без commit — для переиспользования
+    ручным вводом и регуляркой."""
+    account = await validate_posting(
+        db, workspace_id, account_id=account_id, category_id=category_id, amount=amount
+    )
 
     transaction = Transaction(
         workspace_id=workspace_id,
         account_id=account.id,
-        category_id=category.id,
-        amount=payload.amount,
+        category_id=category_id,
+        amount=amount,
         currency=account.currency,
-        occurred_at=payload.occurred_at,
-        merchant=payload.merchant,
-        note=payload.note,
-        source="manual",
+        occurred_at=occurred_at,
+        merchant=merchant,
+        note=note,
+        source=source,
         created_by=user_id,
     )
     repository.add_transaction(db, transaction)
+    await db.flush()
+    return transaction
+
+
+async def create_transaction(
+    db: AsyncSession, workspace_id: uuid.UUID, user_id: uuid.UUID, payload: TransactionCreate
+) -> Transaction:
+    transaction = await post_transaction(
+        db,
+        workspace_id,
+        user_id,
+        account_id=payload.account_id,
+        category_id=payload.category_id,
+        amount=payload.amount,
+        occurred_at=payload.occurred_at,
+        source="manual",
+        merchant=payload.merchant,
+        note=payload.note,
+    )
     await db.commit()
     return transaction
 

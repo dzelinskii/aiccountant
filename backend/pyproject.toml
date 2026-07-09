@@ -11,8 +11,9 @@ dependencies = [
     "alembic>=1.18.5",
     "pydantic-settings>=2.14.2",
     "argon2-cffi>=25.1.0",
-    "redis>=8.0.1",
+    "redis>=5.0.1,<6.5",
     "email-validator>=2.3.0",
+    "celery[redis]>=5.4",
 ]
 
 [dependency-groups]
@@ -22,7 +23,7 @@ dev = [
     "httpx",
     "ruff",
     "mypy",
-    "testcontainers[postgres,redis]>=4.14.2",
+    "testcontainers[postgres]>=4.14.2",
     "import-linter",
 ]
 
@@ -41,6 +42,10 @@ plugins = ["pydantic.mypy"]
 # testcontainers не поставляет типы для этих подмодулей (нет py.typed)
 [[tool.mypy.overrides]]
 module = ["testcontainers.postgres", "testcontainers.redis"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["celery", "celery.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
@@ -62,3 +67,28 @@ name = "identity не зависит от ledger"
 type = "forbidden"
 source_modules = ["app.identity.service", "app.identity.models", "app.identity.deps"]
 forbidden_modules = ["app.ledger"]
+
+[[tool.importlinter.contracts]]
+name = "recurring не лезет во внутренности identity и ledger"
+type = "forbidden"
+source_modules = ["app.recurring.service", "app.recurring.repository", "app.recurring.tasks"]
+forbidden_modules = ["app.identity", "app.ledger.repository", "app.ledger.models"]
+# recurring.service легально зовёт ledger.service, а тот сам импортирует
+# ledger.repository/ledger.models — это не обход барьера, поэтому транзитивную
+# цепочку через публичный интерфейс ledger игнорируем и проверяем только
+# прямые импорты из recurring. Аналогично recurring.tasks легально импортирует
+# core.celery_app (bootstrap воркера), а тот регистрирует ORM-модели всех
+# модулей для metadata — это инфраструктура, не обход границы.
+ignore_imports = [
+    "app.recurring.service -> app.ledger.service",
+    "app.recurring.tasks -> app.core.celery_app",
+]
+
+[[tool.importlinter.contracts]]
+name = "identity и ledger не зависят от recurring"
+type = "forbidden"
+source_modules = [
+    "app.identity.service", "app.identity.models", "app.identity.deps",
+    "app.ledger.service", "app.ledger.repository", "app.ledger.models",
+]
+forbidden_modules = ["app.recurring"]
