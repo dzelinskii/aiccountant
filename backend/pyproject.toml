@@ -14,6 +14,7 @@ dependencies = [
     "redis>=5.0.1,<6.5",
     "email-validator>=2.3.0",
     "celery[redis]>=5.4",
+    "pypdf>=5.1",
 ]
 
 [dependency-groups]
@@ -25,6 +26,7 @@ dev = [
     "mypy",
     "testcontainers[postgres]>=4.14.2",
     "import-linter",
+    "reportlab>=4.2",
 ]
 
 [tool.ruff]
@@ -46,6 +48,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["celery", "celery.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["pypdf", "pypdf.*", "reportlab", "reportlab.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
