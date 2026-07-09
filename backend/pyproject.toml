@@ -124,3 +124,11 @@ source_modules = [
     "app.ledger.service", "app.ledger.repository", "app.ledger.models",
 ]
 forbidden_modules = ["app.imports"]
+
+[[tool.importlinter.contracts]]
+name = "ai не зависит от доменных модулей"
+type = "forbidden"
+source_modules = ["app.ai"]
+forbidden_modules = [
+    "app.identity", "app.ledger", "app.imports", "app.recurring",
+]
