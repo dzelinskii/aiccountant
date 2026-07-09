@@ -1,8 +1,13 @@
 import json
 import uuid
+from datetime import date
 from decimal import Decimal
 
+from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.ledger import categorization as c
+from app.ledger import repository, service
 from app.ledger.models import Category
 
 
@@ -73,3 +78,159 @@ def test_decide_none_when_no_name() -> None:
     d = c.decide(None, Decimal("0"), Decimal("0.8"), {})
     assert d.kind == "none"
     assert d.category_id is None
+
+
+ALICE = {"email": "alice@example.com", "password": "password123"}
+
+
+class FakeLLM:
+    """LLMClient с очередью записанных ответов (по одному на операцию)."""
+
+    def __init__(self, answers: list[str]) -> None:
+        self._answers = list(answers)
+        self.prompts: list[str] = []
+
+    async def complete_json(self, *, system: str, user: str) -> str:
+        self.prompts.append(user)
+        return self._answers.pop(0)
+
+
+async def _bootstrap(client: AsyncClient) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
+    reg = await client.post("/api/auth/register", json=ALICE)
+    user_id = uuid.UUID(reg.json()["id"])
+    me = await client.get("/api/me")
+    ws = uuid.UUID(me.json()["workspaces"][0]["id"])
+    acc = uuid.UUID(
+        (
+            await client.post(
+                "/api/accounts",
+                params={"workspace_id": str(ws)},
+                json={"name": "Карта", "type": "card", "currency": "RUB"},
+            )
+        ).json()["id"]
+    )
+    return user_id, ws, acc
+
+
+async def test_categorize_applies_above_and_suggests_below_threshold(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    user_id, ws, acc = await _bootstrap(client)
+    high = await service.post_transaction(
+        db_session,
+        ws,
+        user_id,
+        account_id=acc,
+        category_id=None,
+        amount=Decimal("-100.00"),
+        occurred_at=date(2026, 7, 5),
+        source="import",
+        merchant="Пятёрочка",
+    )
+    low = await service.post_transaction(
+        db_session,
+        ws,
+        user_id,
+        account_id=acc,
+        category_id=None,
+        amount=Decimal("-200.00"),
+        occurred_at=date(2026, 7, 5),
+        source="import",
+        merchant="Непонятный мерчант",
+    )
+    await db_session.commit()
+
+    llm = FakeLLM(
+        [
+            json.dumps({"category": "Еда", "confidence": 0.95}),
+            json.dumps({"category": "Еда", "confidence": 0.4}),
+        ]
+    )
+    processed = await c.categorize_uncategorized(
+        db_session, ws, llm, threshold=Decimal("0.8"), fewshot_limit=10
+    )
+    assert processed == 2
+
+    await db_session.refresh(high)
+    await db_session.refresh(low)
+    cats = await repository.list_categories(db_session, ws)
+    food_id = next(cat.id for cat in cats if cat.name == "Еда")
+
+    # выше порога — авто-простановка, не подтверждена человеком
+    assert high.category_id == food_id
+    assert high.category_confirmed is False
+    assert high.category_confidence == Decimal("0.950")
+    assert high.suggested_category_id is None
+    # ниже порога — только подсказка
+    assert low.category_id is None
+    assert low.suggested_category_id == food_id
+    assert low.category_confidence == Decimal("0.400")
+
+
+async def test_categorize_leaves_uncategorized_on_broken_answer(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    user_id, ws, acc = await _bootstrap(client)
+    txn = await service.post_transaction(
+        db_session,
+        ws,
+        user_id,
+        account_id=acc,
+        category_id=None,
+        amount=Decimal("-50.00"),
+        occurred_at=date(2026, 7, 5),
+        source="import",
+        merchant="Что-то",
+    )
+    await db_session.commit()
+
+    llm = FakeLLM(["это не json"])
+    await c.categorize_uncategorized(
+        db_session, ws, llm, threshold=Decimal("0.8"), fewshot_limit=10
+    )
+    await db_session.refresh(txn)
+    assert txn.category_id is None
+    assert txn.suggested_category_id is None
+
+
+async def test_categorize_does_not_touch_other_workspace(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    # первый пользователь/workspace — «свой», его не категоризируем в этом тесте
+    await _bootstrap(client)
+    # второй пользователь получает при регистрации собственный workspace
+    bob = {"email": "bob@example.com", "password": "password123"}
+    reg2 = await client.post("/api/auth/register", json=bob)
+    user2 = uuid.UUID(reg2.json()["id"])
+    me2 = await client.get("/api/me")  # активна сессия только что залогиненного bob
+    ws2 = uuid.UUID(me2.json()["workspaces"][0]["id"])
+    acc2 = uuid.UUID(
+        (
+            await client.post(
+                "/api/accounts",
+                params={"workspace_id": str(ws2)},
+                json={"name": "Нал", "type": "cash", "currency": "RUB"},
+            )
+        ).json()["id"]
+    )
+    foreign = await service.post_transaction(
+        db_session,
+        ws2,
+        user2,
+        account_id=acc2,
+        category_id=None,
+        amount=Decimal("-10.00"),
+        occurred_at=date(2026, 7, 5),
+        source="import",
+        merchant="Чужая операция",
+    )
+    await db_session.commit()
+
+    llm = FakeLLM([])  # для случайного ws категоризацию не запускаем — проверяем изоляцию
+    processed = await c.categorize_uncategorized(
+        db_session, uuid.uuid4(), llm, threshold=Decimal("0.8"), fewshot_limit=10
+    )
+    assert processed == 0
+    await db_session.refresh(foreign)
+    assert foreign.category_id is None
+    assert foreign.suggested_category_id is None
