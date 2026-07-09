@@ -78,7 +78,7 @@ export const getTransactions = (
 
 export const createTransaction = (
   ws: string,
-  body: { account_id: string; category_id: string; amount: string; occurred_at: string; merchant?: string; note?: string },
+  body: { account_id: string; category_id?: string; amount: string; occurred_at: string; merchant?: string; note?: string },
 ) => api<Transaction>(`/api/transactions?${q(ws)}`, { method: 'POST', body: JSON.stringify(body) })
 
 export const createTransfer = (

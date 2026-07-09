@@ -34,7 +34,7 @@ async def _validate(
     db: AsyncSession,
     workspace_id: uuid.UUID,
     account_id: uuid.UUID,
-    category_id: uuid.UUID,
+    category_id: uuid.UUID | None,
     amount: Decimal,
 ) -> object:
     # переводим доменные ошибки ledger в словарь recurring (граница модуля)

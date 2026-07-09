@@ -79,3 +79,12 @@ async def test_update_deactivate_and_delete(client: AsyncClient) -> None:
     deleted = await client.delete(f"/api/recurring/{rule['id']}", params={"workspace_id": s["ws"]})
     assert deleted.status_code == 204
     assert len((await client.get("/api/recurring", params={"workspace_id": s["ws"]})).json()) == 0
+
+
+async def test_rule_without_category(client: AsyncClient) -> None:
+    s = await _setup(client)
+    body = _rule(s)
+    del body["category_id"]
+    resp = await client.post("/api/recurring", params={"workspace_id": s["ws"]}, json=body)
+    assert resp.status_code == 201
+    assert resp.json()["category_id"] is None

@@ -18,7 +18,7 @@ function renderForm(onSubmit: (v: unknown) => void) {
   )
 }
 
-test('валидация: пустая форма не отправляется', async () => {
+test('валидация: без счёта не отправляется', async () => {
   const onSubmit = vi.fn()
   renderForm(onSubmit)
   await userEvent.click(screen.getByRole('button', { name: 'Сохранить' }))
@@ -26,16 +26,25 @@ test('валидация: пустая форма не отправляется'
   expect(await screen.findByText('Выберите счёт')).toBeDefined()
 })
 
-test('расход уходит с отрицательным знаком', async () => {
+test('расход без категории уходит с отрицательным знаком', async () => {
   const onSubmit = vi.fn()
   renderForm(onSubmit)
-  // Mantine v9 держит listbox в DOM с тем же aria-label, поэтому берём именно
-  // combobox-инпут по роли, а не по метке (иначе совпадений несколько)
   await userEvent.click(screen.getByRole('combobox', { name: 'Счёт' }))
   await userEvent.click(await screen.findByText('Карта'))
-  await userEvent.click(screen.getByRole('combobox', { name: 'Категория' }))
-  await userEvent.click(await screen.findByText('Еда (расход)'))
   await userEvent.type(screen.getByLabelText('Сумма'), '500')
   await userEvent.click(screen.getByRole('button', { name: 'Сохранить' }))
-  expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ amount: '-500.00' }))
+  expect(onSubmit).toHaveBeenCalledWith(
+    expect.objectContaining({ amount: '-500.00', category_id: undefined }),
+  )
+})
+
+test('доход уходит с положительным знаком', async () => {
+  const onSubmit = vi.fn()
+  renderForm(onSubmit)
+  await userEvent.click(screen.getByText('Доход'))
+  await userEvent.click(screen.getByRole('combobox', { name: 'Счёт' }))
+  await userEvent.click(await screen.findByText('Карта'))
+  await userEvent.type(screen.getByLabelText('Сумма'), '700')
+  await userEvent.click(screen.getByRole('button', { name: 'Сохранить' }))
+  expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ amount: '700.00' }))
 })

@@ -50,7 +50,7 @@ class CategoryOut(BaseModel):
 
 class TransactionCreate(BaseModel):
     account_id: uuid.UUID
-    category_id: uuid.UUID
+    category_id: uuid.UUID | None = None
     amount: Decimal
     occurred_at: date
     merchant: str | None = Field(default=None, max_length=300)
@@ -99,7 +99,7 @@ class DashboardAccount(BaseModel):
 
 
 class MonthExpense(BaseModel):
-    category_id: uuid.UUID
+    category_id: uuid.UUID | None
     category_name: str
     total: MoneyStr
 

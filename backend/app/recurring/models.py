@@ -14,7 +14,9 @@ class RecurringRule(Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspaces.id"))
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id"))
-    category_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("categories.id"))
+    category_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("categories.id"), nullable=True
+    )
     # знаковая: знак сверяется с kind категории (как у транзакций)
     amount: Mapped[Decimal] = mapped_column(Numeric(20, 4))
     currency: Mapped[str] = mapped_column(String(3))
