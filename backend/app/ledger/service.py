@@ -151,9 +151,11 @@ async def post_transaction(
     source: str,
     merchant: str | None = None,
     note: str | None = None,
+    external_id: str | None = None,
+    import_id: uuid.UUID | None = None,
 ) -> Transaction:
     """Провести обычную операцию (расход/доход) без commit — для переиспользования
-    ручным вводом и регуляркой."""
+    ручным вводом, регуляркой и импортом выписок."""
     account = await validate_posting(
         db, workspace_id, account_id=account_id, category_id=category_id, amount=amount
     )
@@ -169,10 +171,22 @@ async def post_transaction(
         note=note,
         source=source,
         created_by=user_id,
+        external_id=external_id,
+        import_id=import_id,
     )
     repository.add_transaction(db, transaction)
     await db.flush()
     return transaction
+
+
+async def existing_external_ids(
+    db: AsyncSession, workspace_id: uuid.UUID, account_id: uuid.UUID, external_ids: set[str]
+) -> set[str]:
+    return await repository.existing_external_ids(db, workspace_id, account_id, external_ids)
+
+
+async def account_exists(db: AsyncSession, workspace_id: uuid.UUID, account_id: uuid.UUID) -> bool:
+    return await repository.get_account(db, workspace_id, account_id) is not None
 
 
 async def create_transaction(

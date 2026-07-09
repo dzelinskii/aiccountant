@@ -45,6 +45,21 @@ def add_account(db: AsyncSession, account: Account) -> None:
     db.add(account)
 
 
+async def existing_external_ids(
+    db: AsyncSession, workspace_id: uuid.UUID, account_id: uuid.UUID, external_ids: set[str]
+) -> set[str]:
+    if not external_ids:
+        return set()
+    rows = await db.execute(
+        select(Transaction.external_id).where(
+            Transaction.workspace_id == workspace_id,
+            Transaction.account_id == account_id,
+            Transaction.external_id.in_(external_ids),
+        )
+    )
+    return {value for (value,) in rows.all() if value is not None}
+
+
 # дефолтный набор при создании workspace (§3 спеки)
 DEFAULT_CATEGORIES: tuple[tuple[str, str], ...] = (
     ("Еда", "expense"),
