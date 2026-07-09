@@ -110,3 +110,32 @@ async def test_dismiss_suggestion_clears_it(client: AsyncClient, db_session: Asy
     await db_session.refresh(txn)
     assert txn.suggested_category_id is None
     assert txn.category_id is None
+
+
+async def test_dismissed_suggestion_not_recategorized(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    user_id, ws, acc = await _bootstrap(client)
+    cats = await repository.list_categories(db_session, ws)
+    food_id = next(c.id for c in cats if c.name == "Еда")
+    txn = await service.post_transaction(
+        db_session,
+        ws,
+        user_id,
+        account_id=acc,
+        category_id=None,
+        amount=Decimal("-100.00"),
+        occurred_at=date(2026, 7, 5),
+        source="import",
+        merchant="Пятёрочка",
+    )
+    txn.suggested_category_id = food_id
+    await db_session.commit()
+
+    await service.dismiss_suggestion(db_session, ws, txn.id)
+    await db_session.refresh(txn)
+    # dismiss = решение человека: операция остаётся без категории и больше не кандидат
+    assert txn.category_id is None
+    assert txn.category_confirmed is True
+    rows = await repository.list_uncategorized(db_session, ws)
+    assert txn.id not in {t.id for t in rows}

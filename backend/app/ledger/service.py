@@ -308,6 +308,9 @@ async def dismiss_suggestion(
     if transaction is None:
         raise NotFoundError
     transaction.suggested_category_id = None
+    # отклонение подсказки — это решение человека оставить операцию без категории;
+    # помечаем как подтверждённое, чтобы классификатор не предлагал её снова
+    transaction.category_confirmed = True
     await db.commit()
     return transaction
 

@@ -199,13 +199,17 @@ async def recent_transactions(
 
 
 async def list_uncategorized(db: AsyncSession, workspace_id: uuid.UUID) -> list[Transaction]:
-    """Операции без категории и без активной подсказки; переводы не трогаем."""
+    """Операции без категории, без активной подсказки и без принятого человеком
+    решения; переводы не трогаем. Отклонённая подсказка помечается как
+    подтверждённое решение (см. dismiss_suggestion) — поэтому такие строки
+    сюда не попадают и не предлагаются повторно."""
     rows = await db.execute(
         select(Transaction).where(
             Transaction.workspace_id == workspace_id,
             Transaction.category_id.is_(None),
             Transaction.suggested_category_id.is_(None),
             Transaction.transfer_group_id.is_(None),
+            Transaction.category_confirmed.is_(False),
         )
     )
     return list(rows.scalars().all())
