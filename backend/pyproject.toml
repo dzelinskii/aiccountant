@@ -69,6 +69,11 @@ name = "ledger service/repository не зависят от identity"
 type = "forbidden"
 source_modules = ["app.ledger.service", "app.ledger.repository"]
 forbidden_modules = ["app.identity"]
+# app.ledger.tasks легально импортирует core.celery_app (bootstrap воркера),
+# а тот регистрирует ORM-модели всех модулей для metadata — это инфраструктура,
+# не обход границы; транзитивный путь ledger.service → tasks → celery_app → identity
+# игнорируем на этом ребре.
+ignore_imports = ["app.ledger.tasks -> app.core.celery_app"]
 
 [[tool.importlinter.contracts]]
 name = "identity не зависит от ledger"
@@ -100,6 +105,9 @@ source_modules = [
     "app.ledger.service", "app.ledger.repository", "app.ledger.models",
 ]
 forbidden_modules = ["app.recurring"]
+# та же причина: ledger.service → tasks → celery_app → recurring.models — это
+# регистрация моделей в celery_app, а не доменная зависимость ledger от recurring.
+ignore_imports = ["app.ledger.tasks -> app.core.celery_app"]
 
 [[tool.importlinter.contracts]]
 name = "imports не лезет во внутренности identity и ledger"

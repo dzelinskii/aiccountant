@@ -1,8 +1,22 @@
 import uuid
 
+import pytest
 from httpx import AsyncClient
 
 ALICE = {"email": "alice@example.com", "password": "password123"}
+
+# минимальная выписка с одной операцией — для проверки триггера после коммита импорта
+IMPORT_SAMPLE = [
+    "04.07.2026",
+    "12:37",
+    "04.07.2026",
+    "12:37",
+    "-1 150.00 ₽ -1 150.00 ₽ Внешний перевод по",
+    "номеру телефона",
+    "+79897050701",
+    "9358",
+]
+IMPORT_FILE = {"file": ("statement.pdf", b"%PDF-dummy", "application/pdf")}
 
 
 async def _ws_and_account(client: AsyncClient) -> tuple[str, str]:
@@ -48,3 +62,20 @@ async def test_manual_create_with_category_does_not_enqueue(
         },
     )
     assert stub_categorize_enqueue == []
+
+
+async def test_import_commit_enqueues(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_categorize_enqueue: list[uuid.UUID],
+) -> None:
+    # разбор PDF подменяем готовыми строками — важен сам факт коммита ≥1 операции
+    monkeypatch.setattr("app.imports.service.extract_lines", lambda b: IMPORT_SAMPLE)
+    ws, acc = await _ws_and_account(client)
+    resp = await client.post(
+        "/api/imports",
+        params={"workspace_id": ws, "account_id": acc, "commit": "true"},
+        files=IMPORT_FILE,
+    )
+    assert resp.json()["imported"] == 1
+    assert uuid.UUID(ws) in stub_categorize_enqueue
