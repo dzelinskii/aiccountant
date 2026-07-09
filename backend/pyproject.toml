@@ -16,6 +16,7 @@ dependencies = [
     "celery[redis]>=5.4",
     "pypdf>=5.1",
     "python-multipart>=0.0.9",
+    "openai>=1.55",
 ]
 
 [dependency-groups]
