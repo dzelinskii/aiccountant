@@ -12,7 +12,6 @@ TIME_RE = re.compile(r"^\d{2}:\d{2}$")
 AMOUNT_LINE_RE = re.compile(
     r"^([+-][\d\s\xa0]+[.,]\d{2})\s*₽\s+([+-][\d\s\xa0]+[.,]\d{2})\s*₽\s*(.*)$"
 )
-CARD_RE = re.compile(r"^\d{3,4}$")
 TOTAL_RE = re.compile(r"([\d\s\xa0]+[.,]\d{2})\s*₽")
 
 

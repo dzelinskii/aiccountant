@@ -1,6 +1,8 @@
 import hashlib
 import uuid
+from decimal import Decimal
 
+import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.imports import repository
@@ -11,14 +13,28 @@ from app.ledger import service as ledger_service
 
 BANK_PROFILE = "tbank_statement"
 
+logger = structlog.get_logger()
+
 
 def _external_id(account_id: uuid.UUID, op: ParsedOperation) -> str:
     raw = f"{account_id}|{op.occurred_at.isoformat()}|{op.amount}|{op.description}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _check_control_sum(statement: ParsedStatement) -> None:
+    # сверка с итогами банка как контроль разбора; расхождение не отказ, а сигнал
+    income = sum((op.amount for op in statement.operations if op.amount > 0), Decimal(0))
+    expense = sum((-op.amount for op in statement.operations if op.amount < 0), Decimal(0))
+    if statement.total_income is not None and income != statement.total_income:
+        logger.warning("import_control_sum_mismatch", kind="income")
+    if statement.total_expense is not None and expense != statement.total_expense:
+        logger.warning("import_control_sum_mismatch", kind="expense")
+
+
 def _parse(pdf_bytes: bytes) -> ParsedStatement:
-    return parse_statement(extract_lines(pdf_bytes))  # может бросить StatementParseError
+    statement = parse_statement(extract_lines(pdf_bytes))  # может бросить StatementParseError
+    _check_control_sum(statement)
+    return statement
 
 
 async def preview(

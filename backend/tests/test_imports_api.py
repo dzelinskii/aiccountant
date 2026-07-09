@@ -142,3 +142,27 @@ async def test_unparsable_pdf_422(client: AsyncClient, monkeypatch: pytest.Monke
         files=FILES,
     )
     assert resp.status_code == 422
+
+
+async def test_wrong_content_type_rejected(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("app.imports.service.extract_lines", lambda b: SAMPLE)
+    ws, acc = await _setup(client, ALICE)
+    resp = await client.post(
+        "/api/imports",
+        params={"workspace_id": ws, "account_id": acc, "commit": "false"},
+        files={"file": ("statement.txt", b"hello", "text/plain")},
+    )
+    assert resp.status_code == 415
+
+
+async def test_too_large_rejected(client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.imports.router.MAX_UPLOAD_BYTES", 4)
+    ws, acc = await _setup(client, ALICE)
+    resp = await client.post(
+        "/api/imports",
+        params={"workspace_id": ws, "account_id": acc, "commit": "false"},
+        files={"file": ("statement.pdf", b"%PDF-too-big", "application/pdf")},
+    )
+    assert resp.status_code == 413

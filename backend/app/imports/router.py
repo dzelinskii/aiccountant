@@ -14,6 +14,10 @@ from app.ledger import service as ledger_service
 
 router = APIRouter(prefix="/api")
 
+# выписку целиком читаем в память — ограничиваем размер, чтобы аплоад не съел RAM
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+ALLOWED_CONTENT_TYPES = {"application/pdf", "application/octet-stream"}
+
 
 @router.post("/imports")
 async def import_statement(
@@ -24,6 +28,10 @@ async def import_statement(
     file: UploadFile,
     commit: bool = False,
 ) -> ImportPreviewOut | ImportResultOut:
+    if file.content_type not in ALLOWED_CONTENT_TYPES:
+        raise HTTPException(status_code=415, detail="Ожидается PDF-файл")
+    if file.size is not None and file.size > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Файл слишком большой (максимум 10 МБ)")
     if not await ledger_service.account_exists(db, workspace_id, account_id):
         raise HTTPException(status_code=404, detail="Счёт не найден")
     pdf_bytes = await file.read()
