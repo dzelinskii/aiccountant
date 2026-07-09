@@ -10,6 +10,7 @@ const LINKS = [
   { to: '/categories', label: 'Категории' },
   { to: '/transactions', label: 'Операции' },
   { to: '/recurring', label: 'Регулярные' },
+  { to: '/import', label: 'Импорт' },
 ]
 
 export function AppLayout() {

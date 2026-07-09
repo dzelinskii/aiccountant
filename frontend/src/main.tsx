@@ -13,6 +13,7 @@ import { AccountsPage } from './pages/AccountsPage'
 import { CategoriesPage } from './pages/CategoriesPage'
 import { TransactionsPage } from './pages/TransactionsPage'
 import { RecurringPage } from './pages/RecurringPage'
+import { ImportPage } from './pages/ImportPage'
 import { LoginPage } from './pages/LoginPage'
 import { RegisterPage } from './pages/RegisterPage'
 
@@ -38,6 +39,7 @@ const router = createBrowserRouter([
           { path: '/categories', element: <CategoriesPage /> },
           { path: '/transactions', element: <TransactionsPage /> },
           { path: '/recurring', element: <RecurringPage /> },
+          { path: '/import', element: <ImportPage /> },
         ],
       },
     ],
