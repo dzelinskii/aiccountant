@@ -76,8 +76,13 @@ forbidden_modules = ["app.identity", "app.ledger.repository", "app.ledger.models
 # recurring.service легально зовёт ledger.service, а тот сам импортирует
 # ledger.repository/ledger.models — это не обход барьера, поэтому транзитивную
 # цепочку через публичный интерфейс ledger игнорируем и проверяем только
-# прямые импорты из recurring.
-ignore_imports = ["app.recurring.service -> app.ledger.service"]
+# прямые импорты из recurring. Аналогично recurring.tasks легально импортирует
+# core.celery_app (bootstrap воркера), а тот регистрирует ORM-модели всех
+# модулей для metadata — это инфраструктура, не обход границы.
+ignore_imports = [
+    "app.recurring.service -> app.ledger.service",
+    "app.recurring.tasks -> app.core.celery_app",
+]
 
 [[tool.importlinter.contracts]]
 name = "identity и ledger не зависят от recurring"
