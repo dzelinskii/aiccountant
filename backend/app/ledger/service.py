@@ -336,7 +336,7 @@ async def build_dashboard(db: AsyncSession, workspace_id: uuid.UUID) -> Dashboar
             for a, bal in accounts
         ],
         month_expenses=[
-            MonthExpense(category_id=cid, category_name=name, total=total)
+            MonthExpense(category_id=cid, category_name=name or "Без категории", total=total)
             for cid, name, total in expenses
         ],
         recent=[

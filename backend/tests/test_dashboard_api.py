@@ -84,6 +84,21 @@ async def test_dashboard_excludes_transfers_from_expenses(client: AsyncClient) -
     assert resp.json()["month_expenses"] == []
 
 
+async def test_uncategorized_expenses_bucket(client: AsyncClient) -> None:
+    s = await _setup(client)
+    today = date.today().isoformat()
+    # расход без категории
+    await client.post(
+        "/api/transactions",
+        params={"workspace_id": s["ws"]},
+        json={"account_id": s["acc"], "amount": "-400.00", "occurred_at": today},
+    )
+    resp = await client.get("/api/dashboard", params={"workspace_id": s["ws"]})
+    bucket = next(m for m in resp.json()["month_expenses"] if m["category_id"] is None)
+    assert bucket["category_name"] == "Без категории"
+    assert bucket["total"] == "400.0000"
+
+
 async def test_dashboard_excludes_future_month_expenses(client: AsyncClient) -> None:
     # расход, датированный следующим месяцем, не входит в расходы текущего месяца
     s = await _setup(client)

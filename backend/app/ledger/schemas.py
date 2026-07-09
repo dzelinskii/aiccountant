@@ -99,7 +99,7 @@ class DashboardAccount(BaseModel):
 
 
 class MonthExpense(BaseModel):
-    category_id: uuid.UUID
+    category_id: uuid.UUID | None
     category_name: str
     total: MoneyStr
 
