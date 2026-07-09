@@ -37,6 +37,19 @@ def test_parse_answer_broken_json_is_none_zero() -> None:
     assert conf == Decimal("0")
 
 
+def test_parse_answer_non_scalar_category_is_none() -> None:
+    raw = json.dumps({"category": [1, 2], "confidence": 0.9})
+    name, _ = c.parse_answer(raw, {"Еда"})
+    assert name is None
+
+
+def test_parse_answer_nan_confidence_is_zero() -> None:
+    raw = json.dumps({"category": "Еда", "confidence": "NaN"})
+    name, conf = c.parse_answer(raw, {"Еда"})
+    assert name == "Еда"
+    assert conf == Decimal("0")
+
+
 def test_parse_answer_confidence_clamped() -> None:
     _, conf = c.parse_answer(json.dumps({"category": "Еда", "confidence": 5}), {"Еда"})
     assert conf == Decimal("1.000")

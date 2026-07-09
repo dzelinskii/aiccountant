@@ -679,11 +679,16 @@ def parse_answer(raw: str, candidate_names: set[str]) -> tuple[str | None, Decim
     if not isinstance(data, dict):
         return None, Decimal(0)
     name = data.get("category")
-    if name not in candidate_names:
+    # имя от модели может быть чем угодно (list/dict/число) — членство в set
+    # проверяем только для строк, иначе «нет категории»
+    if not isinstance(name, str) or name not in candidate_names:
         name = None
     try:
         confidence = Decimal(str(data.get("confidence", 0))).quantize(Decimal("0.001"))
     except (InvalidOperation, TypeError, ValueError):
+        confidence = Decimal(0)
+    # нечисловые/бесконечные значения (например "NaN") в min/max бросают InvalidOperation
+    if not confidence.is_finite():
         confidence = Decimal(0)
     confidence = max(Decimal(0), min(Decimal(1), confidence))
     return name, confidence
