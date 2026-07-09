@@ -193,44 +193,65 @@ async def test_categorize_leaves_uncategorized_on_broken_answer(
     assert txn.suggested_category_id is None
 
 
-async def test_categorize_does_not_touch_other_workspace(
+async def test_categorize_isolates_workspaces(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
-    # первый пользователь/workspace — «свой», его не категоризируем в этом тесте
-    await _bootstrap(client)
-    # второй пользователь получает при регистрации собственный workspace
+    # alice: своя операция без категории, её категоризацию НЕ запускаем
+    alice_id, ws_alice, acc_alice = await _bootstrap(client)
+    alice_txn = await service.post_transaction(
+        db_session,
+        ws_alice,
+        alice_id,
+        account_id=acc_alice,
+        category_id=None,
+        amount=Decimal("-100.00"),
+        occurred_at=date(2026, 7, 5),
+        source="import",
+        merchant="Алисина еда",
+    )
+    # bob: свой workspace и операция без категории
     bob = {"email": "bob@example.com", "password": "password123"}
     reg2 = await client.post("/api/auth/register", json=bob)
-    user2 = uuid.UUID(reg2.json()["id"])
-    me2 = await client.get("/api/me")  # активна сессия только что залогиненного bob
-    ws2 = uuid.UUID(me2.json()["workspaces"][0]["id"])
-    acc2 = uuid.UUID(
+    bob_id = uuid.UUID(reg2.json()["id"])
+    me2 = await client.get("/api/me")  # активна сессия bob
+    ws_bob = uuid.UUID(me2.json()["workspaces"][0]["id"])
+    acc_bob = uuid.UUID(
         (
             await client.post(
                 "/api/accounts",
-                params={"workspace_id": str(ws2)},
+                params={"workspace_id": str(ws_bob)},
                 json={"name": "Нал", "type": "cash", "currency": "RUB"},
             )
         ).json()["id"]
     )
-    foreign = await service.post_transaction(
+    bob_txn = await service.post_transaction(
         db_session,
-        ws2,
-        user2,
-        account_id=acc2,
+        ws_bob,
+        bob_id,
+        account_id=acc_bob,
         category_id=None,
-        amount=Decimal("-10.00"),
+        amount=Decimal("-50.00"),
         occurred_at=date(2026, 7, 5),
         source="import",
-        merchant="Чужая операция",
+        merchant="Бобова еда",
     )
     await db_session.commit()
 
-    llm = FakeLLM([])  # для случайного ws категоризацию не запускаем — проверяем изоляцию
+    # категоризируем ТОЛЬКО workspace bob
+    llm = FakeLLM([json.dumps({"category": "Еда", "confidence": 0.95})])
     processed = await c.categorize_uncategorized(
-        db_session, uuid.uuid4(), llm, threshold=Decimal("0.8"), fewshot_limit=10
+        db_session, ws_bob, llm, threshold=Decimal("0.8"), fewshot_limit=10
     )
-    assert processed == 0
-    await db_session.refresh(foreign)
-    assert foreign.category_id is None
-    assert foreign.suggested_category_id is None
+    assert processed == 1
+
+    cats_bob = await repository.list_categories(db_session, ws_bob)
+    food_bob = next(cat.id for cat in cats_bob if cat.name == "Еда")
+
+    await db_session.refresh(bob_txn)
+    await db_session.refresh(alice_txn)
+    # операция bob категоризирована
+    assert bob_txn.category_id == food_bob
+    # операция alice не затронута — реальная проверка изоляции по workspace_id
+    assert alice_txn.category_id is None
+    assert alice_txn.suggested_category_id is None
+    assert alice_txn.category_confidence is None
