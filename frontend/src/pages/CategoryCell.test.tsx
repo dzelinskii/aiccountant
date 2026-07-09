@@ -1,5 +1,6 @@
 import { MantineProvider } from '@mantine/core'
 import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { expect, test, vi } from 'vitest'
 import type { Transaction } from '../api/ledger'
 import { CategoryCell } from './CategoryCell'
@@ -40,4 +41,23 @@ test('не показывает бейдж AI у подтверждённой к
   renderCell({ ...base, category_id: 'c1', category_confirmed: true })
   expect(screen.getByText('Еда')).toBeDefined()
   expect(screen.queryByText('AI')).toBeNull()
+})
+
+test('клик по ✓/✗ вызывает onConfirm и onDismiss', async () => {
+  const onConfirm = vi.fn()
+  const onDismiss = vi.fn()
+  render(
+    <MantineProvider>
+      <CategoryCell
+        txn={{ ...base, suggested_category_id: 'c1' }}
+        categoryName={() => 'Еда'}
+        onConfirm={onConfirm}
+        onDismiss={onDismiss}
+      />
+    </MantineProvider>,
+  )
+  await userEvent.click(screen.getByLabelText('Подтвердить категорию'))
+  expect(onConfirm).toHaveBeenCalledTimes(1)
+  await userEvent.click(screen.getByLabelText('Отклонить подсказку'))
+  expect(onDismiss).toHaveBeenCalledTimes(1)
 })
