@@ -1,4 +1,4 @@
-import { Button, NumberInput, Select, Stack, TextInput } from '@mantine/core'
+import { Button, NumberInput, SegmentedControl, Select, Stack, TextInput } from '@mantine/core'
 import { useForm } from '@mantine/form'
 import type { Account, Category } from '../api/ledger'
 import type { Mode, Period, RuleInput } from '../api/recurring'
@@ -27,6 +27,7 @@ export function RecurringRuleForm({
 }) {
   const form = useForm({
     initialValues: {
+      direction: 'expense' as 'expense' | 'income',
       account_id: '',
       category_id: '',
       amount: '',
@@ -40,19 +41,17 @@ export function RecurringRuleForm({
     },
     validate: {
       account_id: (v) => (v ? null : 'Выберите счёт'),
-      category_id: (v) => (v ? null : 'Выберите категорию'),
       amount: (v) => (Number(v) !== 0 && v !== '' ? null : 'Введите сумму'),
     },
   })
 
+  // направление задаёт знак суммы; категория опциональна
   const submit = (v: typeof form.values) => {
-    // знак суммы — из kind категории (расход отрицательный), как в форме операции
-    const kind = categories.find((c) => c.id === v.category_id)?.kind
     const magnitude = Math.abs(Number(v.amount)).toFixed(2)
-    const signed = kind === 'expense' ? `-${magnitude}` : magnitude
+    const signed = v.direction === 'expense' ? `-${magnitude}` : magnitude
     onSubmit({
       account_id: v.account_id,
-      category_id: v.category_id,
+      category_id: v.category_id || null,
       amount: signed,
       period: v.period,
       interval: v.interval,
@@ -64,13 +63,28 @@ export function RecurringRuleForm({
     })
   }
 
+  const visibleCategories = categories.filter((c) => c.kind === form.values.direction)
+
   return (
     <form onSubmit={form.onSubmit(submit)}>
       <Stack>
+        <SegmentedControl
+          fullWidth
+          data={[
+            { value: 'expense', label: 'Расход' },
+            { value: 'income', label: 'Доход' },
+          ]}
+          value={form.values.direction}
+          onChange={(value) => {
+            form.setFieldValue('direction', value as 'expense' | 'income')
+            form.setFieldValue('category_id', '')
+          }}
+        />
         <Select label="Счёт" data={accounts.map((a) => ({ value: a.id, label: a.name }))} {...form.getInputProps('account_id')} />
         <Select
-          label="Категория"
-          data={categories.map((c) => ({ value: c.id, label: `${c.name} (${c.kind === 'expense' ? 'расход' : 'доход'})` }))}
+          label="Категория (необязательно)"
+          clearable
+          data={visibleCategories.map((c) => ({ value: c.id, label: c.name }))}
           {...form.getInputProps('category_id')}
         />
         <NumberInput label="Сумма" {...form.getInputProps('amount')} />

@@ -31,7 +31,7 @@ export interface Occurrence {
 
 export interface RuleInput {
   account_id: string
-  category_id: string
+  category_id: string | null
   amount: string
   period: Period
   interval: number
