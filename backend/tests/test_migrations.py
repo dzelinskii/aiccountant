@@ -32,3 +32,16 @@ async def test_migrations_create_recurring_tables(database_url: str) -> None:
             result = await conn.execute(text("SELECT to_regclass(:name)"), {"name": table})
             assert result.scalar() == table
     await engine.dispose()
+
+
+async def test_recurring_category_is_nullable(database_url: str) -> None:
+    engine = create_async_engine(database_url)
+    async with engine.connect() as conn:
+        result = await conn.execute(
+            text(
+                "SELECT is_nullable FROM information_schema.columns "
+                "WHERE table_name = 'recurring_rules' AND column_name = 'category_id'"
+            )
+        )
+        assert result.scalar() == "YES"
+    await engine.dispose()

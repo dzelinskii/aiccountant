@@ -12,7 +12,7 @@ MODES = "^(autopost|remind)$"
 
 class RuleCreate(BaseModel):
     account_id: uuid.UUID
-    category_id: uuid.UUID
+    category_id: uuid.UUID | None = None
     amount: Decimal
     period: str = Field(pattern=PERIODS)
     interval: int = Field(ge=1)
@@ -36,7 +36,7 @@ class RuleUpdate(BaseModel):
 class RuleOut(BaseModel):
     id: uuid.UUID
     account_id: uuid.UUID
-    category_id: uuid.UUID
+    category_id: uuid.UUID | None
     amount: MoneyStr
     currency: str
     period: str

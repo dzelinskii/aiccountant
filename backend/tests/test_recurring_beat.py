@@ -109,3 +109,33 @@ async def test_inactive_and_ended_rules_skipped(
     processed = await service.process_due_rules(db_session, TODAY)
     assert processed == 0
     assert await _occurrences(db_session, s1["ws"]) == 0
+
+
+async def test_autopost_without_category(client: AsyncClient, db_session: AsyncSession) -> None:
+    await client.post("/api/auth/register", json=ALICE)
+    me = await client.get("/api/me")
+    ws = str(me.json()["workspaces"][0]["id"])
+    acc = (
+        await client.post(
+            "/api/accounts",
+            params={"workspace_id": ws},
+            json={"name": "Карта", "type": "card", "currency": "RUB"},
+        )
+    ).json()
+    await client.post(
+        "/api/recurring",
+        params={"workspace_id": ws},
+        json={
+            "account_id": acc["id"],
+            "amount": "-30000.00",
+            "period": "month",
+            "interval": 1,
+            "anchor_day": 5,
+            "start_date": "2026-01-05",
+            "mode": "autopost",
+        },
+    )
+    await service.process_due_rules(db_session, TODAY)
+    txns = (await client.get("/api/transactions", params={"workspace_id": ws})).json()
+    assert txns["total"] == 1
+    assert txns["items"][0]["category_id"] is None
