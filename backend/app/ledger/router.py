@@ -160,6 +160,8 @@ async def create_transaction(
         raise HTTPException(
             status_code=422, detail="Знак суммы не соответствует типу категории"
         ) from None
+    if transaction.category_id is None:
+        service.enqueue_categorization(workspace_id)
     return _transaction_out(transaction)
 
 

@@ -19,6 +19,7 @@ from app.ledger.schemas import (
     TransactionUpdate,
     TransferCreate,
 )
+from app.ledger.tasks import enqueue_categorize
 
 
 class NotFoundError(Exception):
@@ -187,6 +188,12 @@ async def existing_external_ids(
 
 async def account_exists(db: AsyncSession, workspace_id: uuid.UUID, account_id: uuid.UUID) -> bool:
     return await repository.get_account(db, workspace_id, account_id) is not None
+
+
+def enqueue_categorization(workspace_id: uuid.UUID) -> None:
+    """Публичная точка постановки категоризации в очередь — её зовут роутер и
+    модуль imports; так границы соблюдены (imports ходит только в ledger.service)."""
+    enqueue_categorize(workspace_id)
 
 
 async def create_transaction(
