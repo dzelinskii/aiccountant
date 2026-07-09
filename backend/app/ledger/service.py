@@ -285,6 +285,10 @@ async def update_transaction(
             raise SignMismatchError
 
     transaction.category_id = new_category_id
+    if payload.category_id is not None:
+        # пользователь явно выбрал категорию (подтвердил подсказку или переопределил)
+        transaction.category_confirmed = True
+        transaction.suggested_category_id = None
     if payload.amount is not None:
         transaction.amount = payload.amount
     if payload.occurred_at is not None:
@@ -293,6 +297,17 @@ async def update_transaction(
         transaction.merchant = payload.merchant
     if payload.note is not None:
         transaction.note = payload.note
+    await db.commit()
+    return transaction
+
+
+async def dismiss_suggestion(
+    db: AsyncSession, workspace_id: uuid.UUID, transaction_id: uuid.UUID
+) -> Transaction:
+    transaction = await repository.get_transaction(db, workspace_id, transaction_id)
+    if transaction is None:
+        raise NotFoundError
+    transaction.suggested_category_id = None
     await db.commit()
     return transaction
 

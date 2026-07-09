@@ -2,7 +2,7 @@ import uuid
 from datetime import date
 from decimal import Decimal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 from app.core.money import MoneyStr
 
@@ -84,6 +84,13 @@ class TransactionOut(BaseModel):
     merchant: str | None
     note: str | None
     transfer_group_id: uuid.UUID | None
+    category_confirmed: bool
+    suggested_category_id: uuid.UUID | None
+    category_confidence: Decimal | None
+
+    @field_serializer("category_confidence")
+    def _serialize_confidence(self, value: Decimal | None) -> str | None:
+        return None if value is None else format(value, "f")
 
 
 class TransactionList(BaseModel):

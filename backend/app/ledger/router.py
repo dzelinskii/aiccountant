@@ -200,6 +200,29 @@ async def update_transaction(
     return _transaction_out(transaction)
 
 
+@router.post("/transactions/categorize", status_code=202)
+async def categorize_transactions(
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+) -> dict[str, str]:
+    service.enqueue_categorization(workspace_id)
+    return {"status": "queued"}
+
+
+@router.post("/transactions/{transaction_id}/dismiss-suggestion")
+async def dismiss_suggestion(
+    transaction_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> TransactionOut:
+    try:
+        transaction = await service.dismiss_suggestion(db, workspace_id, transaction_id)
+    except service.NotFoundError:
+        raise HTTPException(status_code=404, detail="Операция не найдена") from None
+    return _transaction_out(transaction)
+
+
 @router.delete("/transactions/{transaction_id}", status_code=204)
 async def delete_transaction(
     transaction_id: uuid.UUID,

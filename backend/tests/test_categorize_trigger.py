@@ -79,3 +79,12 @@ async def test_import_commit_enqueues(
     )
     assert resp.json()["imported"] == 1
     assert uuid.UUID(ws) in stub_categorize_enqueue
+
+
+async def test_categorize_endpoint_enqueues(
+    client: AsyncClient, stub_categorize_enqueue: list[uuid.UUID]
+) -> None:
+    ws, _ = await _ws_and_account(client)
+    resp = await client.post("/api/transactions/categorize", params={"workspace_id": ws})
+    assert resp.status_code == 202
+    assert uuid.UUID(ws) in stub_categorize_enqueue
