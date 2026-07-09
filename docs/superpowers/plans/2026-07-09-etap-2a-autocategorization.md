@@ -1328,7 +1328,8 @@ from pydantic import BaseModel, Field, field_serializer
 
     @field_serializer("category_confidence")
     def _serialize_confidence(self, value: Decimal | None) -> str | None:
-        return None if value is None else format(value, "f")
+        # квантуем до 3 знаков — стабильная ширина на проводе (как делает MoneyStr)
+        return None if value is None else format(value.quantize(Decimal("0.001")), "f")
 ```
 
 - [ ] **Step 4: `update_transaction` — подтверждение при простановке категории**
@@ -1419,31 +1420,9 @@ git commit -m "Ledger API: поля категоризации в ответе, 
 **Files:**
 - Modify: `backend/pyproject.toml` (контракты import-linter)
 
-**Контекст (почему нужны ignore_imports):** в Task 6 `app.ledger.service` начал импортировать `app.ledger.tasks`, а тот — `app.core.celery_app`. `celery_app` для регистрации ORM-моделей воркера импортирует модели всех модулей (`identity`, `ledger`, `recurring`). Поэтому появляется транзитивный путь `app.ledger.service → app.ledger.tasks → app.core.celery_app → app.identity.models` (и `→ app.recurring.models`). Это bootstrap воркера, а не обход границы, — но forbidden-контракты его увидят и упадут. Лечится точечным `ignore_imports` ребра `app.ledger.tasks -> app.core.celery_app` в затронутых контрактах (ровно как уже сделано для `app.recurring.tasks -> app.core.celery_app`).
+**Контекст:** два `ignore_imports` для ребра `app.ledger.tasks -> app.core.celery_app` (в контрактах «ledger не зависит от identity» и «identity и ledger не зависят от recurring») уже добавлены в рамках Task 6 — иначе тот коммит оставлял бы `lint-imports` красным. Здесь остаётся только добавить контракт независимости самого модуля `ai`.
 
-- [ ] **Step 1: Ослабить контракт «ledger не зависит от identity» на ребро tasks→celery_app**
-
-В `backend/pyproject.toml` в контракте `ledger service/repository не зависят от identity` под `forbidden_modules = ["app.identity"]` добавить:
-
-```toml
-# app.ledger.tasks легально импортирует core.celery_app (bootstrap воркера),
-# а тот регистрирует ORM-модели всех модулей для metadata — это инфраструктура,
-# не обход границы; транзитивный путь ledger.service → tasks → celery_app → identity
-# игнорируем на этом ребре.
-ignore_imports = ["app.ledger.tasks -> app.core.celery_app"]
-```
-
-- [ ] **Step 2: Ослабить контракт «identity и ledger не зависят от recurring» на то же ребро**
-
-В `backend/pyproject.toml` в контракте `identity и ledger не зависят от recurring` после `forbidden_modules = ["app.recurring"]` добавить:
-
-```toml
-# та же причина: ledger.service → tasks → celery_app → recurring.models — это
-# регистрация моделей в celery_app, а не доменная зависимость ledger от recurring.
-ignore_imports = ["app.ledger.tasks -> app.core.celery_app"]
-```
-
-- [ ] **Step 3: Добавить контракт независимости `ai`**
+- [ ] **Step 1: Добавить контракт независимости `ai`**
 
 В `backend/pyproject.toml` после последнего контракта (`identity и ledger не зависят от imports`) добавить:
 
@@ -1459,18 +1438,16 @@ forbidden_modules = [
 
 `ledger → ai` при этом разрешён намеренно (обратное направление не запрещаем).
 
-- [ ] **Step 4: Прогнать import-linter полностью (важно: без `| tail`, чтобы не проглотить код возврата)**
+- [ ] **Step 2: Прогнать import-linter полностью (важно: без `| tail`, чтобы не проглотить код возврата)**
 
 Run: `uv run lint-imports`
-Expected: `Contracts: N kept, 0 broken`.
+Expected: `Contracts: 7 kept, 0 broken`.
 
-Если `lint-imports` укажет на ещё один транзитивный путь через `celery_app` (например, для `ledger.repository`/`ledger.models` — но они `tasks` не импортируют, так что не должны) — добавить `ignore_imports` того же ребра в соответствующий контракт с тем же обоснованием. Не расширять `ignore` шире, чем ребро `app.ledger.tasks -> app.core.celery_app`.
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
 git add backend/pyproject.toml
-git commit -m "import-linter: модуль ai доменно-независим; ignore ребра ledger.tasks→celery_app"
+git commit -m "import-linter: модуль ai доменно-независим"
 ```
 
 ---
