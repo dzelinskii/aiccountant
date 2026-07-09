@@ -53,6 +53,14 @@ class Transaction(Base):
     # чтобы ledger не зависел от модуля imports)
     external_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     import_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    # AI-категоризация: подтвердил ли человек текущую категорию (авто-простановка = false)
+    category_confirmed: Mapped[bool] = mapped_column(default=False, server_default=text("false"))
+    # уверенность последнего прогона классификатора (0..1); NUMERIC, не float
+    category_confidence: Mapped[Decimal | None] = mapped_column(Numeric(4, 3), nullable=True)
+    # предложение классификатора ниже порога (категория ещё не применена)
+    suggested_category_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("categories.id"), nullable=True
+    )
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
