@@ -22,3 +22,10 @@ celery_app.conf.update(
 )
 # задачи регистрируются из app/recurring/tasks.py
 celery_app.autodiscover_tasks(["app.recurring"])
+
+# Процесс воркера не импортирует app.main (в отличие от API), поэтому ORM-модели
+# других модулей надо зарегистрировать явно — иначе SQLAlchemy не резолвит FK
+# recurring → workspaces/users/accounts/categories/transactions (как в alembic/env.py).
+from app.identity import models as _identity_models  # noqa: E402,F401
+from app.ledger import models as _ledger_models  # noqa: E402,F401
+from app.recurring import models as _recurring_models  # noqa: E402,F401
