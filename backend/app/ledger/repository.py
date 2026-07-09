@@ -196,3 +196,36 @@ async def recent_transactions(
         .limit(limit)
     )
     return [(t, acc_name, cat_name) for t, acc_name, cat_name in rows.all()]
+
+
+async def list_uncategorized(db: AsyncSession, workspace_id: uuid.UUID) -> list[Transaction]:
+    """Операции без категории и без активной подсказки; переводы не трогаем."""
+    rows = await db.execute(
+        select(Transaction).where(
+            Transaction.workspace_id == workspace_id,
+            Transaction.category_id.is_(None),
+            Transaction.suggested_category_id.is_(None),
+            Transaction.transfer_group_id.is_(None),
+        )
+    )
+    return list(rows.scalars().all())
+
+
+async def recent_confirmed_pairs(
+    db: AsyncSession, workspace_id: uuid.UUID, kind: str, limit: int
+) -> list[tuple[str, str]]:
+    """Последние подтверждённые человеком пары merchant→имя категории нужного kind
+    — few-shot для промпта (фидбек-луп v1)."""
+    rows = await db.execute(
+        select(Transaction.merchant, Category.name)
+        .join(Category, Category.id == Transaction.category_id)
+        .where(
+            Transaction.workspace_id == workspace_id,
+            Transaction.category_confirmed.is_(True),
+            Transaction.merchant.is_not(None),
+            Category.kind == kind,
+        )
+        .order_by(Transaction.created_at.desc())
+        .limit(limit)
+    )
+    return [(m, n) for m, n in rows.all() if m is not None]
