@@ -1,0 +1,12 @@
+[
+  {"description": "Пятёрочка", "sign": "expense", "expected": "Еда"},
+  {"description": "Магнит у дома", "sign": "expense", "expected": "Еда"},
+  {"description": "Яндекс Такси", "sign": "expense", "expected": "Транспорт"},
+  {"description": "Метрополитен проездной", "sign": "expense", "expected": "Транспорт"},
+  {"description": "Аренда квартиры", "sign": "expense", "expected": "Жильё"},
+  {"description": "МТС мобильная связь", "sign": "expense", "expected": "Связь"},
+  {"description": "Кинотеатр КАРО", "sign": "expense", "expected": "Развлечения"},
+  {"description": "Аптека Горздрав", "sign": "expense", "expected": "Здоровье"},
+  {"description": "Зарплата за июль", "sign": "income", "expected": "Зарплата"},
+  {"description": "Возврат за товар", "sign": "income", "expected": "Прочие доходы"}
+]

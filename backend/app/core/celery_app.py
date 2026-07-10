@@ -20,8 +20,8 @@ celery_app.conf.update(
         "scan-due-recurring": {"task": "recurring.scan_due", "schedule": 900.0},
     },
 )
-# задачи регистрируются из app/recurring/tasks.py
-celery_app.autodiscover_tasks(["app.recurring"])
+# задачи регистрируются из app/recurring/tasks.py и app/ledger/tasks.py
+celery_app.autodiscover_tasks(["app.recurring", "app.ledger"])
 
 # Процесс воркера не импортирует app.main (в отличие от API), поэтому ORM-модели
 # других модулей надо зарегистрировать явно — иначе SQLAlchemy не резолвит FK

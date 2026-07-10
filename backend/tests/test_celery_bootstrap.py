@@ -16,6 +16,10 @@ def test_worker_bootstrap_registers_all_models() -> None:
         "have = set(Base.metadata.tables)\n"
         "assert need <= have, f'нет таблиц: {need - have}'\n"
         "assert celery_app.main == 'aiccountant'\n"
+        # autodiscover_tasks по умолчанию ленивый (сработает в реальном воркере при
+        # его старте); в тесте форсируем импорт модулей задач явно
+        "celery_app.loader.import_default_modules()\n"
+        "assert 'ledger.categorize_workspace' in celery_app.tasks\n"
     )
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr

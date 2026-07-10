@@ -1,3 +1,4 @@
+import uuid
 from collections.abc import AsyncIterator, Iterator
 
 import pytest
@@ -64,3 +65,12 @@ async def client(db_session: AsyncSession, redis_client: Redis) -> AsyncIterator
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         yield ac
     app.dependency_overrides.clear()
+
+
+@pytest.fixture(autouse=True)
+def stub_categorize_enqueue(monkeypatch: pytest.MonkeyPatch) -> list[uuid.UUID]:
+    """Во всех тестах глушим реальную постановку задачи в очередь (иначе .delay
+    пойдёт к брокеру). Тесты, которым важен факт триггера, читают этот список."""
+    calls: list[uuid.UUID] = []
+    monkeypatch.setattr("app.ledger.service.enqueue_categorization", lambda ws: calls.append(ws))
+    return calls

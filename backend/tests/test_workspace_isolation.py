@@ -79,6 +79,40 @@ async def test_member_cannot_delete_foreign_transaction(client: AsyncClient) -> 
     assert lst["total"] == 1
 
 
+async def test_member_cannot_dismiss_foreign_suggestion(client: AsyncClient) -> None:
+    ws_a = await _register_ws(client, ALICE)
+    acc = (
+        await client.post(
+            "/api/accounts",
+            params={"workspace_id": ws_a},
+            json={"name": "Карта", "type": "card", "currency": "RUB"},
+        )
+    ).json()
+    cats = (await client.get("/api/categories", params={"workspace_id": ws_a})).json()
+    food = next(c for c in cats if c["name"] == "Еда")
+    txn = (
+        await client.post(
+            "/api/transactions",
+            params={"workspace_id": ws_a},
+            json={
+                "account_id": acc["id"],
+                "category_id": food["id"],
+                "amount": "-100.00",
+                "occurred_at": "2026-07-05",
+            },
+        )
+    ).json()
+
+    client.cookies.clear()
+    ws_b = await _register_ws(client, BOB)
+    # Боб сбрасывает подсказку по чужой операции, подставляя свой workspace — не видна
+    resp = await client.post(
+        f"/api/transactions/{txn['id']}/dismiss-suggestion",
+        params={"workspace_id": ws_b},
+    )
+    assert resp.status_code == 404
+
+
 async def test_member_cannot_use_foreign_account_in_transaction(client: AsyncClient) -> None:
     ws_a = await _register_ws(client, ALICE)
     acc_a = (

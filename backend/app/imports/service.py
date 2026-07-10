@@ -137,4 +137,6 @@ async def commit_import(
         "duplicates": duplicates,
     }
     await db.commit()  # запись импорта и операции — один commit
+    if imported:
+        ledger_service.enqueue_categorization(workspace_id)
     return ImportResultOut(import_id=imp.id, imported=imported, duplicates=duplicates)

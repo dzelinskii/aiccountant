@@ -60,3 +60,22 @@ async def test_migrations_create_imports_and_dedup(database_url: str) -> None:
         )
         assert {r[0] for r in cols} == {"external_id", "import_id"}
     await engine.dispose()
+
+
+async def test_migrations_add_categorization_columns(database_url: str) -> None:
+    engine = create_async_engine(database_url)
+    async with engine.connect() as conn:
+        cols = await conn.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'transactions' "
+                "AND column_name IN ('category_confirmed', 'category_confidence', "
+                "'suggested_category_id')"
+            )
+        )
+        assert {r[0] for r in cols} == {
+            "category_confirmed",
+            "category_confidence",
+            "suggested_category_id",
+        }
+    await engine.dispose()

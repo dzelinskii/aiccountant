@@ -19,6 +19,7 @@ from app.ledger.schemas import (
     TransactionUpdate,
     TransferCreate,
 )
+from app.ledger.tasks import enqueue_categorize
 
 
 class NotFoundError(Exception):
@@ -189,6 +190,12 @@ async def account_exists(db: AsyncSession, workspace_id: uuid.UUID, account_id: 
     return await repository.get_account(db, workspace_id, account_id) is not None
 
 
+def enqueue_categorization(workspace_id: uuid.UUID) -> None:
+    """Публичная точка постановки категоризации в очередь — её зовут роутер и
+    модуль imports; так границы соблюдены (imports ходит только в ledger.service)."""
+    enqueue_categorize(workspace_id)
+
+
 async def create_transaction(
     db: AsyncSession, workspace_id: uuid.UUID, user_id: uuid.UUID, payload: TransactionCreate
 ) -> Transaction:
@@ -278,6 +285,10 @@ async def update_transaction(
             raise SignMismatchError
 
     transaction.category_id = new_category_id
+    if payload.category_id is not None:
+        # пользователь явно выбрал категорию (подтвердил подсказку или переопределил)
+        transaction.category_confirmed = True
+        transaction.suggested_category_id = None
     if payload.amount is not None:
         transaction.amount = payload.amount
     if payload.occurred_at is not None:
@@ -286,6 +297,20 @@ async def update_transaction(
         transaction.merchant = payload.merchant
     if payload.note is not None:
         transaction.note = payload.note
+    await db.commit()
+    return transaction
+
+
+async def dismiss_suggestion(
+    db: AsyncSession, workspace_id: uuid.UUID, transaction_id: uuid.UUID
+) -> Transaction:
+    transaction = await repository.get_transaction(db, workspace_id, transaction_id)
+    if transaction is None:
+        raise NotFoundError
+    transaction.suggested_category_id = None
+    # отклонение подсказки — это решение человека оставить операцию без категории;
+    # помечаем как подтверждённое, чтобы классификатор не предлагал её снова
+    transaction.category_confirmed = True
     await db.commit()
     return transaction
 

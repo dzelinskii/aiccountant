@@ -3,10 +3,12 @@ import { useDisclosure } from '@mantine/hooks'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import {
-  createTransaction, createTransfer, deleteTransaction, getAccounts, getCategories, getTransactions,
+  categorizeUncategorized, createTransaction, createTransfer, deleteTransaction, dismissSuggestion,
+  getAccounts, getCategories, getTransactions, updateTransaction, type Transaction,
 } from '../api/ledger'
 import { formatMoney } from '../lib/money'
 import { useWorkspaceStore } from '../store/workspace'
+import { CategoryCell } from './CategoryCell'
 import { TransactionForm, type TransactionFormValues } from './TransactionForm'
 import { TransferForm, type TransferFormValues } from './TransferForm'
 
@@ -55,10 +57,23 @@ export function TransactionsPage() {
     mutationFn: (id: string) => deleteTransaction(ws, id),
     onSuccess: invalidate,
   })
+  const confirmMut = useMutation({
+    mutationFn: (t: Transaction) =>
+      updateTransaction(ws, t.id, { category_id: t.suggested_category_id ?? undefined }),
+    onSuccess: invalidate,
+  })
+  const dismissMut = useMutation({
+    mutationFn: (t: Transaction) => dismissSuggestion(ws, t.id),
+    onSuccess: invalidate,
+  })
+  const categorizeMut = useMutation({
+    mutationFn: () => categorizeUncategorized(ws),
+    onSuccess: invalidate,
+  })
 
   const accountName = (id: string) => accounts?.find((a) => a.id === id)?.name ?? '—'
   const categoryName = (id: string | null) =>
-    id ? (categories?.find((c) => c.id === id)?.name ?? '—') : null
+    id ? (categories?.find((c) => c.id === id)?.name ?? null) : null
   const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1
 
   return (
@@ -68,6 +83,10 @@ export function TransactionsPage() {
         <Group>
           <Button onClick={txn.open}>Добавить расход/доход</Button>
           <Button variant="light" onClick={transfer.open}>Перевод</Button>
+          <Button variant="light" loading={categorizeMut.isPending}
+            onClick={() => categorizeMut.mutate()}>
+            Категоризировать без категории
+          </Button>
         </Group>
       </Group>
 
@@ -101,7 +120,14 @@ export function TransactionsPage() {
             <Table.Tr key={t.id}>
               <Table.Td>{t.occurred_at}</Table.Td>
               <Table.Td>{accountName(t.account_id)}</Table.Td>
-              <Table.Td>{t.transfer_group_id ? 'Перевод' : (categoryName(t.category_id) ?? '—')}</Table.Td>
+              <Table.Td>
+                <CategoryCell
+                  txn={t}
+                  categoryName={categoryName}
+                  onConfirm={(x) => confirmMut.mutate(x)}
+                  onDismiss={(x) => dismissMut.mutate(x)}
+                />
+              </Table.Td>
               <Table.Td ta="right">{formatMoney(t.amount, t.currency)}</Table.Td>
               <Table.Td>
                 <Button variant="subtle" color="red" size="xs" onClick={() => deleteMut.mutate(t.id)}>
