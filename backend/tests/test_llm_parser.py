@@ -114,7 +114,7 @@ async def test_description_normalizes_whitespace() -> None:
                 {
                     "occurred_at": "2026-07-05",
                     "amount": "-1.00",
-                    "description": "  Кофейня\n\tна   Тверской  ",
+                    "description": "  Кофейня\n\tна\x00   Тверской  ",
                 }
             ]
         }
@@ -122,6 +122,19 @@ async def test_description_normalizes_whitespace() -> None:
     parser = LLMStatementParser(FakeLLM(answer), max_chars=10000)
     statement = await parser.parse_async(["текст"])
     assert statement.operations[0].description == "Кофейня на Тверской"
+    assert "\x00" not in statement.operations[0].description
+
+
+async def test_numeric_amount_keeps_full_precision() -> None:
+    # сумма пришла JSON-числом, а не строкой: без parse_float=Decimal json.loads
+    # материализует float и молча теряет разряд — деньги портятся до валидации
+    raw = (
+        '{"operations": [{"occurred_at": "2026-07-05", '
+        '"amount": 12345678901234.5678, "description": "x"}]}'
+    )
+    parser = LLMStatementParser(FakeLLM(raw), max_chars=10000)
+    statement = await parser.parse_async(["текст"])
+    assert statement.operations[0].amount == Decimal("12345678901234.5678")
 
 
 async def test_llm_parser_works_as_route_fallback() -> None:
@@ -203,6 +216,28 @@ HOSTILE_PAYLOADS = [
             {"operations": [{"occurred_at": "05.07.2026", "amount": "-1.00", "description": "x"}]}
         ),
         id="date-not-iso8601",
+    ),
+    pytest.param(
+        json.dumps(
+            {
+                "operations": [
+                    {"occurred_at": "2026-07-05", "amount": "-1.00", "description": "x"}
+                ],
+                "total_income": "1.00001",
+            }
+        ),
+        id="total-income-too-many-decimal-places",
+    ),
+    pytest.param(
+        json.dumps(
+            {
+                "operations": [
+                    {"occurred_at": "2026-07-05", "amount": "-1.00", "description": "x"}
+                ],
+                "total_expense": "1E999999999",
+            }
+        ),
+        id="total-expense-huge-exponent",
     ),
 ]
 
