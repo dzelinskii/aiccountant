@@ -26,3 +26,17 @@ class ImportResultOut(BaseModel):
     import_id: uuid.UUID
     imported: int
     duplicates: int
+
+
+class ImportStartedOut(BaseModel):
+    import_id: uuid.UUID
+    status: str
+
+
+class ImportStatusOut(BaseModel):
+    import_id: uuid.UUID
+    status: str  # processing | ready | failed
+    parser: str | None
+    error: str | None
+    warnings: list[str]
+    preview: ImportPreviewOut | None
