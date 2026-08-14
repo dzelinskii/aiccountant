@@ -1,9 +1,12 @@
 import uuid
 from datetime import date
+from typing import Literal
 
 from pydantic import BaseModel
 
 from app.core.money import MoneyStr
+
+ImportStatus = Literal["processing", "ready", "failed", "completed"]
 
 
 class ImportOperationOut(BaseModel):
@@ -35,7 +38,7 @@ class ImportStartedOut(BaseModel):
 
 class ImportStatusOut(BaseModel):
     import_id: uuid.UUID
-    status: str  # processing | ready | failed
+    status: ImportStatus
     parser: str | None
     error: str | None
     warnings: list[str]

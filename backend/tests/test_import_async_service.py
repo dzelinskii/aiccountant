@@ -3,13 +3,16 @@ from collections.abc import Awaitable, Callable
 from datetime import date
 from decimal import Decimal
 
+import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.imports import repository, service
 from app.imports.parser import ParsedOperation, ParsedStatement, StatementParseError
+from app.ledger import service as ledger_service
 
 ALICE = {"email": "alice@example.com", "password": "password123"}
+BOB = {"email": "bob@example.com", "password": "password123"}
 
 SAMPLE = ParsedStatement(
     operations=[
@@ -42,8 +45,10 @@ def _fixed_parse(
     return _parse
 
 
-async def _bootstrap(client: AsyncClient) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
-    reg = await client.post("/api/auth/register", json=ALICE)
+async def _bootstrap(
+    client: AsyncClient, creds: dict[str, str]
+) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
+    reg = await client.post("/api/auth/register", json=creds)
     user_id = uuid.UUID(reg.json()["id"])
     me = await client.get("/api/me")
     ws = uuid.UUID(me.json()["workspaces"][0]["id"])
@@ -62,7 +67,7 @@ async def _bootstrap(client: AsyncClient) -> tuple[uuid.UUID, uuid.UUID, uuid.UU
 async def test_start_import_creates_processing_record(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
-    user_id, ws, acc = await _bootstrap(client)
+    user_id, ws, acc = await _bootstrap(client, ALICE)
     imp = await service.start_import(
         db_session, ws, acc, user_id, "statement.pdf", ["строка выписки"]
     )
@@ -73,10 +78,20 @@ async def test_start_import_creates_processing_record(
     assert stored is not None
 
 
+async def test_start_import_strips_nul_byte(client: AsyncClient, db_session: AsyncSession) -> None:
+    # pypdf иногда отдаёт \x00 в извлечённом тексте; Postgres text-колонка его не
+    # примет (CharacterNotInRepertoireError) — запись не должна падать из-за этого
+    user_id, ws, acc = await _bootstrap(client, ALICE)
+    imp = await service.start_import(
+        db_session, ws, acc, user_id, "s.pdf", ["строка с \x00 символом"]
+    )
+    assert "\x00" not in (imp.raw_text or "")
+
+
 async def test_run_parse_stores_ready_payload(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
-    user_id, ws, acc = await _bootstrap(client)
+    user_id, ws, acc = await _bootstrap(client, ALICE)
     imp = await service.start_import(db_session, ws, acc, user_id, "s.pdf", ["текст"])
 
     await service.run_parse(db_session, imp.id, parse=_fixed_parse(SAMPLE, "tbank_statement"))
@@ -96,7 +111,7 @@ async def test_run_parse_stores_ready_payload(
 async def test_run_parse_marks_failed_on_error(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
-    user_id, ws, acc = await _bootstrap(client)
+    user_id, ws, acc = await _bootstrap(client, ALICE)
     imp = await service.start_import(db_session, ws, acc, user_id, "s.pdf", ["текст"])
 
     async def _boom(lines: list[str]) -> tuple[ParsedStatement, str]:
@@ -106,14 +121,34 @@ async def test_run_parse_marks_failed_on_error(
 
     await db_session.refresh(imp)
     assert imp.status == "failed"
-    assert imp.error is not None
+    assert imp.error == "формат не распознан"  # наше сообщение — писалось для пользователя
     assert imp.parsed_payload is None
+
+
+async def test_run_parse_hides_foreign_exception_details(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    # чужие исключения (SDK провайдера, сеть) могут нести ключи и текст выписки —
+    # наружу отдаём общее сообщение, не то, что бросил провайдер
+    user_id, ws, acc = await _bootstrap(client, ALICE)
+    imp = await service.start_import(db_session, ws, acc, user_id, "s.pdf", ["текст"])
+
+    async def _leaky(lines: list[str]) -> tuple[ParsedStatement, str]:
+        raise RuntimeError("Incorrect API key provided: sk-proj-AbCd***XyZ9.")
+
+    await service.run_parse(db_session, imp.id, parse=_leaky)
+
+    await db_session.refresh(imp)
+    assert imp.status == "failed"
+    assert imp.error is not None
+    assert "sk-proj" not in imp.error
+    assert imp.error == "Не удалось разобрать выписку"
 
 
 async def test_status_returns_preview_with_duplicate_flags(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
-    user_id, ws, acc = await _bootstrap(client)
+    user_id, ws, acc = await _bootstrap(client, ALICE)
     imp = await service.start_import(db_session, ws, acc, user_id, "s.pdf", ["текст"])
     await service.run_parse(db_session, imp.id, parse=_fixed_parse(SAMPLE, "llm"))
 
@@ -130,7 +165,7 @@ async def test_status_returns_preview_with_duplicate_flags(
 async def test_commit_creates_transactions_and_is_idempotent(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
-    user_id, ws, acc = await _bootstrap(client)
+    user_id, ws, acc = await _bootstrap(client, ALICE)
     imp = await service.start_import(db_session, ws, acc, user_id, "s.pdf", ["текст"])
     await service.run_parse(db_session, imp.id, parse=_fixed_parse(SAMPLE, "llm"))
 
@@ -138,16 +173,24 @@ async def test_commit_creates_transactions_and_is_idempotent(
     assert result.imported == 2
     assert result.duplicates == 0
 
-    # повторный коммит того же импорта не задваивает операции
+    await db_session.refresh(imp)
+    assert imp.status == "completed"  # терминальный статус — коммит не предлагается повторно
+    stats_after_first = dict(imp.stats)
+
+    # повторный коммит — идемпотентный ответ (тот же результат), без пересоздания
+    # операций и БЕЗ порчи stats (аудит не должен соврать, что второй раз ничего не импортировали)
     again = await service.commit_from_import(db_session, ws, imp.id, user_id)
-    assert again.imported == 0
-    assert again.duplicates == 2
+    assert again.imported == 2
+    assert again.duplicates == 0
+
+    await db_session.refresh(imp)
+    assert imp.stats == stats_after_first
 
 
 async def test_control_sum_mismatch_becomes_warning(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
-    user_id, ws, acc = await _bootstrap(client)
+    user_id, ws, acc = await _bootstrap(client, ALICE)
     imp = await service.start_import(db_session, ws, acc, user_id, "s.pdf", ["текст"])
     skewed = ParsedStatement(
         operations=SAMPLE.operations,
@@ -166,8 +209,79 @@ async def test_control_sum_mismatch_becomes_warning(
 async def test_import_of_other_workspace_not_visible(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
-    user_id, ws, acc = await _bootstrap(client)
+    user_id, ws, acc = await _bootstrap(client, ALICE)
     imp = await service.start_import(db_session, ws, acc, user_id, "s.pdf", ["текст"])
     await service.run_parse(db_session, imp.id, parse=_fixed_parse(SAMPLE, "llm"))
 
     assert await service.get_import_status(db_session, uuid.uuid4(), imp.id) is None
+
+
+async def test_foreign_workspace_cannot_read_or_commit_import(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    user_id, ws, acc = await _bootstrap(client, ALICE)
+    imp = await service.start_import(db_session, ws, acc, user_id, "s.pdf", ["текст"])
+    await service.run_parse(db_session, imp.id, parse=_fixed_parse(SAMPLE, "llm"))
+
+    client.cookies.clear()
+    bob_id, ws_bob, _ = await _bootstrap(client, BOB)
+
+    assert await service.get_import_status(db_session, ws_bob, imp.id) is None
+
+    with pytest.raises(service.ImportNotReadyError):
+        await service.commit_from_import(db_session, ws_bob, imp.id, bob_id)
+
+    # у Боба не появилось ни одной операции, а импорт Алисы остался нетронутым
+    _, bob_total = await ledger_service.list_transactions(db_session, ws_bob)
+    assert bob_total == 0
+    await db_session.refresh(imp)
+    assert imp.status == "ready"
+
+
+async def test_commit_raises_on_corrupted_payload(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    # parsed_payload — наш собственный, не ввод пользователя; порча (пустой
+    # operations) должна падать явно, а не тихо отрапортовать imported=0
+    user_id, ws, acc = await _bootstrap(client, ALICE)
+    imp = await service.start_import(db_session, ws, acc, user_id, "s.pdf", ["текст"])
+    await service.run_parse(db_session, imp.id, parse=_fixed_parse(SAMPLE, "llm"))
+
+    imp.parsed_payload = {
+        "operations": [],
+        "total_income": None,
+        "total_expense": None,
+        "warnings": [],
+    }
+    await db_session.commit()
+
+    with pytest.raises(StatementParseError):
+        await service.commit_from_import(db_session, ws, imp.id, user_id)
+
+
+async def test_payload_with_null_description_becomes_empty_string(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    user_id, ws, acc = await _bootstrap(client, ALICE)
+    imp = await service.start_import(db_session, ws, acc, user_id, "s.pdf", ["текст"])
+    await service.run_parse(db_session, imp.id, parse=_fixed_parse(SAMPLE, "llm"))
+
+    imp.parsed_payload = {
+        "operations": [
+            {
+                "occurred_at": "2026-07-05",
+                "amount": "-10.00",
+                "currency": "RUB",
+                "description": None,
+            }
+        ],
+        "total_income": None,
+        "total_expense": None,
+        "warnings": [],
+    }
+    await db_session.commit()
+
+    status = await service.get_import_status(db_session, ws, imp.id)
+    assert status is not None
+    assert status.preview is not None
+    assert status.preview.operations[0].description == ""

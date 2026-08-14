@@ -3,11 +3,13 @@ import uuid
 from collections.abc import Awaitable, Callable
 from datetime import date
 from decimal import Decimal
+from typing import cast
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.imports import repository
+from app.imports.llm_parser import StatementTooLargeError
 from app.imports.models import Import
 from app.imports.parser import (
     ParsedOperation,
@@ -20,6 +22,7 @@ from app.imports.schemas import (
     ImportOperationOut,
     ImportPreviewOut,
     ImportResultOut,
+    ImportStatus,
     ImportStatusOut,
 )
 from app.ledger import service as ledger_service
@@ -27,6 +30,11 @@ from app.ledger import service as ledger_service
 BANK_PROFILE = "tbank_statement"
 
 logger = structlog.get_logger()
+
+
+class ImportNotReadyError(Exception):
+    """Импорт не в статусе, из которого можно подтвердить (не найден/не разобран).
+    Это состояние, а не ошибка разбора — отдельный тип, чтобы роутер маппил иначе."""
 
 
 def _external_ids(account_id: uuid.UUID, operations: list[ParsedOperation]) -> list[str]:
@@ -174,17 +182,25 @@ def _statement_to_payload(statement: ParsedStatement, warnings: list[str]) -> di
 
 
 def _payload_to_statement(payload: dict[str, object]) -> ParsedStatement:
+    # это наш собственный payload (не ввод пользователя): пустой/нетипизированный
+    # "operations" или битый элемент внутри — порча данных, а не законный случай
+    # (и парсер, и LLM-разбор гарантируют хотя бы одну операцию), поэтому падаем
+    # явно одним типом ошибки, а не молча теряем операции
     raw_ops = payload.get("operations")
-    ops_list = raw_ops if isinstance(raw_ops, list) else []
-    operations = [
-        ParsedOperation(
-            occurred_at=date.fromisoformat(str(op["occurred_at"])),
-            amount=Decimal(str(op["amount"])),
-            currency=str(op["currency"]),
-            description=str(op["description"]),
-        )
-        for op in ops_list
-    ]
+    if not isinstance(raw_ops, list) or not raw_ops:
+        raise StatementParseError("повреждён сохранённый разбор выписки")
+    try:
+        operations = [
+            ParsedOperation(
+                occurred_at=date.fromisoformat(str(op["occurred_at"])),
+                amount=Decimal(str(op["amount"])),
+                currency=str(op["currency"]),
+                description="" if op.get("description") is None else str(op["description"]),
+            )
+            for op in raw_ops
+        ]
+    except (KeyError, ValueError, TypeError) as exc:
+        raise StatementParseError("повреждён сохранённый разбор выписки") from exc
     income = payload.get("total_income")
     expense = payload.get("total_expense")
     return ParsedStatement(
@@ -215,6 +231,9 @@ async def start_import(
     lines: list[str],
 ) -> Import:
     """Создать запись импорта со статусом processing и сохранённым текстом выписки."""
+    # NUL: Postgres text-колонка его не примет (CharacterNotInRepertoireError), а pypdf
+    # иногда отдаёт его в тексте — вырезаем до записи, а не молимся, что его не будет
+    raw_text = "\n".join(lines).replace("\x00", "")
     imp = Import(
         workspace_id=workspace_id,
         account_id=account_id,
@@ -223,7 +242,7 @@ async def start_import(
         status="processing",
         stats={},
         created_by=user_id,
-        raw_text="\n".join(lines),
+        raw_text=raw_text,
     )
     repository.add_import(db, imp)
     await db.commit()
@@ -244,12 +263,21 @@ async def run_parse(
     lines = (imp.raw_text or "").splitlines()
     try:
         statement, parser_name = await parse(lines)
-    except Exception as exc:  # разбор мог упасть и в LLM, и в детерминированном парсере
+    except (StatementParseError, StatementTooLargeError) as exc:
         imp.status = "failed"
-        imp.error = str(exc)[:500]
+        imp.error = str(exc)[:500]  # наши сообщения писались для пользователя
         imp.raw_text = None  # PII: сырой текст больше не нужен
         await db.commit()
         logger.warning("import_parse_failed", import_id=str(imp.id))
+        return
+    except Exception as exc:
+        # чужие исключения (SDK провайдера, сеть) могут нести ключи и текст выписки —
+        # наружу отдаём общее сообщение, в лог только тип
+        imp.status = "failed"
+        imp.error = "Не удалось разобрать выписку"
+        imp.raw_text = None
+        await db.commit()
+        logger.warning("import_parse_failed", import_id=str(imp.id), error_type=type(exc).__name__)
         return
     warnings = _control_sum_warnings(statement)
     imp.parser = parser_name
@@ -315,7 +343,8 @@ async def get_import_status(
         preview = await _build_preview(db, workspace_id, imp.account_id, statement)
     return ImportStatusOut(
         import_id=imp.id,
-        status=imp.status,
+        # значение — из закрытого набора, который сами же и пишем в run_parse/commit_from_import
+        status=cast(ImportStatus, imp.status),
         parser=imp.parser,
         error=imp.error,
         warnings=warnings,
@@ -328,8 +357,17 @@ async def commit_from_import(
 ) -> ImportResultOut:
     """Создать операции из уже разобранного импорта — повторно не парсим."""
     imp = await repository.get_import(db, workspace_id, import_id)
+    if imp is not None and imp.status == "completed":
+        # повторный коммит — идемпотентный ответ без пересоздания операций и без
+        # переписывания stats (иначе аудит соврёт, что второй раз ничего не импортировали)
+        stats = imp.stats
+        return ImportResultOut(
+            import_id=imp.id,
+            imported=stats.get("imported", 0),
+            duplicates=stats.get("duplicates", 0),
+        )
     if imp is None or imp.status != "ready" or imp.parsed_payload is None:
-        raise StatementParseError("импорт не готов к подтверждению")
+        raise ImportNotReadyError("импорт не готов к подтверждению")
     statement = _payload_to_statement(imp.parsed_payload)
     ext_ids = _external_ids(imp.account_id, statement.operations)
     existing = await ledger_service.existing_external_ids(
@@ -363,6 +401,7 @@ async def commit_from_import(
         "imported": imported,
         "duplicates": duplicates,
     }
+    imp.status = "completed"  # терминальный статус: отличает закоммиченный импорт от ready
     await db.commit()
     if imported:
         ledger_service.enqueue_categorization(workspace_id)

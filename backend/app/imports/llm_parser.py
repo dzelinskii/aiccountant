@@ -50,6 +50,15 @@ def _clean_description(text: str) -> str:
     return " ".join(text.replace("\x00", "").split())
 
 
+def _canonical_amount(amount: Decimal) -> Decimal:
+    """Каноническая форма суммы: банки печатают копейки, а LLM может вернуть
+    «1000» или «1000.00» для одной операции — разные строки дают разный dedup-хеш.
+    Приводим к двум знакам, только если это не меняет значение (FX с четырьмя
+    знаками оставляем как есть — молча округлять деньги нельзя)."""
+    rounded = amount.quantize(Decimal("0.01"))
+    return rounded if rounded == amount else amount
+
+
 def _to_statement(payload: _LLMStatement) -> ParsedStatement:
     operations: list[ParsedOperation] = []
     for op in payload.operations:
@@ -59,7 +68,7 @@ def _to_statement(payload: _LLMStatement) -> ParsedStatement:
         operations.append(
             ParsedOperation(
                 occurred_at=op.occurred_at,
-                amount=op.amount,
+                amount=_canonical_amount(op.amount),
                 currency="RUB",
                 description=_clean_description(op.description),
             )
