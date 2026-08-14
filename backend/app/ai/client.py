@@ -41,14 +41,16 @@ def build_llm_client(model: str | None = None) -> OpenAICompatLLMClient:
     # пустой ключ допустим для локальных keyless-эндпоинтов (Ollama), поэтому не падаем
     # здесь; если ключ реально нужен, ошибка авторизации всплывёт при первом вызове провайдера
     #
-    # timeout/max_retries — явно и небольшими: дефолты SDK (read=600s, max_retries=2)
+    # timeout/max_retries — явно и с запасом: дефолты SDK (read=600s, max_retries=2)
     # дают до ~30 минут на один вызов, а добивание зависших импортов рассчитано на
-    # разбор короче 15 минут (app.imports.tasks.STUCK_AFTER) — без ограничения этот
-    # запас ничем не обеспечен.
+    # разбор короче 15 минут (app.imports.tasks.STUCK_AFTER). Крупная выписка на
+    # генерации ответа — самая долгая часть запроса, поэтому таймаут не тесный
+    # (300с): худший случай 300×(1+1)=600с всё ещё укладывается с запасом в 900с
+    # порога. Фабрика общая с категоризацией (там вызовы короткие — запас не важен).
     client = AsyncOpenAI(
         base_url=settings.llm_base_url,
         api_key=settings.llm_api_key or "unset",
-        timeout=120,
+        timeout=300,
         max_retries=1,
     )
     return OpenAICompatLLMClient(client, model or settings.llm_model_categorize)

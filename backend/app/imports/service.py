@@ -311,8 +311,7 @@ async def fail_stuck_imports(db: AsyncSession, older_than: datetime) -> int:
     stuck_ids = await repository.fail_stuck(db, older_than, message)
     for import_id in stuck_ids:
         logger.warning("import_parse_stuck", import_id=str(import_id))
-    if stuck_ids:
-        await db.commit()
+    await db.commit()
     return len(stuck_ids)
 
 
