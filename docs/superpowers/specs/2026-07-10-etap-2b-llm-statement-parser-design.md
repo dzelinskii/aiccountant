@@ -112,7 +112,9 @@ def route(text) -> (ParsedStatement, parser_name):
 - `parser` `VARCHAR(30) NULL` — какой парсер сработал (`tbank_statement`/`llm`);
 - `parsed_payload` `JSONB NULL` — разобранные операции + итоги + предупреждения
   (заполняется задачей; коммит читает отсюда — **перепарсивания нет**);
-- `error` `TEXT NULL` — сообщение при `status=failed`.
+- `error` `VARCHAR(500) NULL` — сообщение при `status=failed` (длинные обрезаем);
+- `raw_text` `TEXT NULL` — текст выписки для фоновой задачи; отдельной колонкой,
+  а не внутри `parsed_payload`, чтобы очищать сразу после разбора (PII).
 
 `status` (уже есть) — значения `processing` | `ready` | `failed`
 (вместо прежнего единственного `completed`; при коммите — `imported`... нет:
@@ -123,8 +125,8 @@ def route(text) -> (ParsedStatement, parser_name):
 
 1. `POST /api/imports?workspace_id=&account_id=` (multipart PDF): проверить
    тип/размер файла и принадлежность счёта; извлечь текст (`extract_lines`);
-   создать `Import(status=processing)` с сырым текстом в `parsed_payload`
-   (временно, до разбора); поставить задачу; вернуть `202 {import_id, status}`.
+   создать `Import(status=processing)` с сырым текстом в `raw_text`;
+   поставить задачу; вернуть `202 {import_id, status}`.
 2. Задача `imports.parse_statement_job(import_id)`: загрузить текст → `route(text)`
    → валидация → записать операции/итоги/предупреждения в `parsed_payload`,
    `parser`, `status=ready`; при `StatementParseError`/ошибке → `status=failed`,
