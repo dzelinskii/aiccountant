@@ -228,7 +228,8 @@ async def test_foreign_workspace_cannot_read_or_commit_import(
 
     assert await service.get_import_status(db_session, ws_bob, imp.id) is None
 
-    with pytest.raises(service.ImportNotReadyError):
+    # чужой импорт для commit_from_import неотличим от несуществующего — 404, не 409
+    with pytest.raises(service.ImportNotFoundError):
         await service.commit_from_import(db_session, ws_bob, imp.id, bob_id)
 
     # у Боба не появилось ни одной операции, а импорт Алисы остался нетронутым

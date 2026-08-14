@@ -1,21 +1,30 @@
 import uuid
+from datetime import date
+from decimal import Decimal
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.imports import service
+from app.imports.parser import ParsedOperation, ParsedStatement
+from tests.test_import_async_service import _fixed_parse
 
 ALICE = {"email": "alice@example.com", "password": "password123"}
 
 # минимальная выписка с одной операцией — для проверки триггера после коммита импорта
-IMPORT_SAMPLE = [
-    "04.07.2026",
-    "12:37",
-    "04.07.2026",
-    "12:37",
-    "-1 150.00 ₽ -1 150.00 ₽ Внешний перевод по",
-    "номеру телефона",
-    "+79897050701",
-    "9358",
-]
+IMPORT_SAMPLE_STATEMENT = ParsedStatement(
+    operations=[
+        ParsedOperation(
+            occurred_at=date(2026, 7, 4),
+            amount=Decimal("-1150.00"),
+            currency="RUB",
+            description="Внешний перевод по номеру телефона",
+        )
+    ],
+    total_income=None,
+    total_expense=None,
+)
 IMPORT_FILE = {"file": ("statement.pdf", b"%PDF-dummy", "application/pdf")}
 
 
@@ -66,16 +75,27 @@ async def test_manual_create_with_category_does_not_enqueue(
 
 async def test_import_commit_enqueues(
     client: AsyncClient,
+    db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
     stub_categorize_enqueue: list[uuid.UUID],
 ) -> None:
-    # разбор PDF подменяем готовыми строками — важен сам факт коммита ≥1 операции
-    monkeypatch.setattr("app.imports.service.extract_lines", lambda b: IMPORT_SAMPLE)
+    # разбор выписки подменяем готовым результатом — важен сам факт коммита ≥1 операции,
+    # а не то, как именно был получен разбор (детерминированный парсер или LLM)
+    monkeypatch.setattr("app.imports.router.extract_lines", lambda b: ["строка выписки"])
     ws, acc = await _ws_and_account(client)
+    started = (
+        await client.post(
+            "/api/imports", params={"workspace_id": ws, "account_id": acc}, files=IMPORT_FILE
+        )
+    ).json()
+    await service.run_parse(
+        db_session,
+        uuid.UUID(started["import_id"]),
+        parse=_fixed_parse(IMPORT_SAMPLE_STATEMENT, "tbank_statement"),
+    )
+
     resp = await client.post(
-        "/api/imports",
-        params={"workspace_id": ws, "account_id": acc, "commit": "true"},
-        files=IMPORT_FILE,
+        f"/api/imports/{started['import_id']}/commit", params={"workspace_id": ws}
     )
     assert resp.json()["imported"] == 1
     assert uuid.UUID(ws) in stub_categorize_enqueue

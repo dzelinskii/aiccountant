@@ -1,49 +1,16 @@
+import uuid
+
 import pytest
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.imports import service
+from tests.test_import_async_service import SAMPLE, _fixed_parse
 
 ALICE = {"email": "alice@example.com", "password": "password123"}
 BOB = {"email": "bob@example.com", "password": "password123"}
 
-SAMPLE = [
-    "04.07.2026",
-    "12:37",
-    "04.07.2026",
-    "12:37",
-    "-1 150.00 ₽ -1 150.00 ₽ Внешний перевод по",
-    "номеру телефона",
-    "+79897050701",
-    "9358",
-    "02.07.2026",
-    "17:12",
-    "02.07.2026",
-    "17:12",
-    "+5 000.00 ₽ +5 000.00 ₽ Пополнение. Система",
-    "быстрых платежей",
-    "9358",
-    "10.06.2026",
-    "13:03",
-    "10.06.2026",
-    "13:03",
-    "-14 405.33 ₽ -14 405.33 ₽ Пополнение Кубышки 9358",
-    "451 358,48 ₽Пополнения:",
-    "502 119,39 ₽Расходы:",
-]
 FILES = {"file": ("statement.pdf", b"%PDF-dummy", "application/pdf")}
-
-# две идентичные операции одного дня (в выписке бывают реальные повторы —
-# банк не даёт id операции): не должны схлопнуться в одну
-DUP_SAMPLE = [
-    "29.06.2026",
-    "11:30",
-    "29.06.2026",
-    "11:30",
-    "-29 600.00 ₽ -29 600.00 ₽ Внутренний перевод на договор 9358",
-    "29.06.2026",
-    "11:30",
-    "29.06.2026",
-    "11:30",
-    "-29 600.00 ₽ -29 600.00 ₽ Внутренний перевод на договор 9358",
-]
 
 
 async def _setup(client: AsyncClient, creds: dict[str, str]) -> tuple[str, str]:
@@ -60,113 +27,125 @@ async def _setup(client: AsyncClient, creds: dict[str, str]) -> tuple[str, str]:
     return ws, acc
 
 
-async def test_preview_counts(client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("app.imports.service.extract_lines", lambda b: SAMPLE)
-    ws, acc = await _setup(client, ALICE)
-    resp = await client.post(
-        "/api/imports",
-        params={"workspace_id": ws, "account_id": acc, "commit": "false"},
-        files=FILES,
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["new_count"] == 3
-    assert body["duplicate_count"] == 0
-    assert body["operations"][0]["amount"] == "-1150.0000"
-    assert body["operations"][1]["amount"] == "5000.0000"
-    assert all(op["is_duplicate"] is False for op in body["operations"])
-
-
-async def test_commit_inserts_and_reimport_is_deduped(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+async def test_start_import_returns_202_and_enqueues_parse(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_parse_enqueue: list[uuid.UUID],
 ) -> None:
-    monkeypatch.setattr("app.imports.service.extract_lines", lambda b: SAMPLE)
+    monkeypatch.setattr("app.imports.router.extract_lines", lambda b: ["строка выписки"])
     ws, acc = await _setup(client, ALICE)
 
-    r1 = await client.post(
-        "/api/imports",
-        params={"workspace_id": ws, "account_id": acc, "commit": "true"},
-        files=FILES,
+    resp = await client.post(
+        "/api/imports", params={"workspace_id": ws, "account_id": acc}, files=FILES
     )
-    assert r1.status_code == 200
-    assert r1.json()["imported"] == 3
+
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["status"] == "processing"
+    assert uuid.UUID(body["import_id"]) in stub_parse_enqueue
+
+
+async def test_full_flow_status_and_commit(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # разбор в бою асинхронный (LLM ходит по сети): брокер в тестах заглушен,
+    # поэтому фоновую задачу здесь имитируем прямым вызовом service.run_parse
+    monkeypatch.setattr("app.imports.router.extract_lines", lambda b: ["строка выписки"])
+    ws, acc = await _setup(client, ALICE)
+
+    started = (
+        await client.post(
+            "/api/imports", params={"workspace_id": ws, "account_id": acc}, files=FILES
+        )
+    ).json()
+    import_id = started["import_id"]
+
+    await service.run_parse(
+        db_session, uuid.UUID(import_id), parse=_fixed_parse(SAMPLE, "tbank_statement")
+    )
+
+    status = (await client.get(f"/api/imports/{import_id}", params={"workspace_id": ws})).json()
+    assert status["status"] == "ready"
+    assert status["parser"] == "tbank_statement"
+    assert status["preview"]["new_count"] == 2
+    assert status["preview"]["duplicate_count"] == 0
+
+    commit = await client.post(f"/api/imports/{import_id}/commit", params={"workspace_id": ws})
+    assert commit.status_code == 200
+    assert commit.json()["imported"] == 2
 
     txns = (await client.get("/api/transactions", params={"workspace_id": ws})).json()
-    assert txns["total"] == 3
-    assert all(t["category_id"] is None for t in txns["items"])
-
-    r2 = await client.post(
-        "/api/imports",
-        params={"workspace_id": ws, "account_id": acc, "commit": "true"},
-        files=FILES,
-    )
-    assert r2.json()["imported"] == 0
-    assert r2.json()["duplicates"] == 3
-    after = (await client.get("/api/transactions", params={"workspace_id": ws})).json()
-    assert after["total"] == 3  # повторный импорт не задвоил
+    assert txns["total"] == 2
 
 
-async def test_uncategorized_import_in_dashboard_bucket(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+async def test_status_of_foreign_workspace_is_404(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("app.imports.service.extract_lines", lambda b: SAMPLE)
+    monkeypatch.setattr("app.imports.router.extract_lines", lambda b: ["строка выписки"])
     ws, acc = await _setup(client, ALICE)
-    await client.post(
-        "/api/imports",
-        params={"workspace_id": ws, "account_id": acc, "commit": "true"},
-        files=FILES,
-    )
-    dash = (await client.get("/api/dashboard", params={"workspace_id": ws})).json()
-    # расходы без категории сведены в бакет «Без категории» (если попали в текущий месяц —
-    # проверяем сам факт наличия бакета среди расходов, суммы зависят от дат выписки)
-    assert (
-        any(m["category_id"] is None for m in dash["month_expenses"])
-        or dash["month_expenses"] == []
-    )
+    started = (
+        await client.post(
+            "/api/imports", params={"workspace_id": ws, "account_id": acc}, files=FILES
+        )
+    ).json()
 
-
-async def test_foreign_account_rejected(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr("app.imports.service.extract_lines", lambda b: SAMPLE)
-    ws_a, acc_a = await _setup(client, ALICE)
     client.cookies.clear()
-    ws_b, _ = await _setup(client, BOB)
-    # Боб импортирует в чужой счёт под своим workspace → 404
+    ws_bob, _ = await _setup(client, BOB)
+
+    resp = await client.get(f"/api/imports/{started['import_id']}", params={"workspace_id": ws_bob})
+    assert resp.status_code == 404
+
+
+async def test_commit_of_foreign_workspace_is_404(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # тот же код, что и у GET /imports/{id} — иначе расхождение 404-vs-409
+    # раскрыло бы сам факт существования чужого импорта
+    monkeypatch.setattr("app.imports.router.extract_lines", lambda b: ["строка выписки"])
+    ws, acc = await _setup(client, ALICE)
+    started = (
+        await client.post(
+            "/api/imports", params={"workspace_id": ws, "account_id": acc}, files=FILES
+        )
+    ).json()
+    await service.run_parse(
+        db_session, uuid.UUID(started["import_id"]), parse=_fixed_parse(SAMPLE, "tbank_statement")
+    )
+
+    client.cookies.clear()
+    ws_bob, _ = await _setup(client, BOB)
+
     resp = await client.post(
-        "/api/imports",
-        params={"workspace_id": ws_b, "account_id": acc_a, "commit": "false"},
-        files=FILES,
+        f"/api/imports/{started['import_id']}/commit", params={"workspace_id": ws_bob}
     )
     assert resp.status_code == 404
-    # чужой workspace → 403
-    resp2 = await client.post(
-        "/api/imports",
-        params={"workspace_id": ws_a, "account_id": acc_a, "commit": "false"},
-        files=FILES,
-    )
-    assert resp2.status_code == 403
 
 
-async def test_unparsable_pdf_422(client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("app.imports.service.extract_lines", lambda b: ["мусор", "нет операций"])
+async def test_commit_while_still_processing_is_409(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("app.imports.router.extract_lines", lambda b: ["строка выписки"])
     ws, acc = await _setup(client, ALICE)
+    started = (
+        await client.post(
+            "/api/imports", params={"workspace_id": ws, "account_id": acc}, files=FILES
+        )
+    ).json()
+
     resp = await client.post(
-        "/api/imports",
-        params={"workspace_id": ws, "account_id": acc, "commit": "false"},
-        files=FILES,
+        f"/api/imports/{started['import_id']}/commit", params={"workspace_id": ws}
     )
-    assert resp.status_code == 422
+    assert resp.status_code == 409
 
 
 async def test_wrong_content_type_rejected(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("app.imports.service.extract_lines", lambda b: SAMPLE)
+    monkeypatch.setattr("app.imports.router.extract_lines", lambda b: ["строка выписки"])
     ws, acc = await _setup(client, ALICE)
     resp = await client.post(
         "/api/imports",
-        params={"workspace_id": ws, "account_id": acc, "commit": "false"},
+        params={"workspace_id": ws, "account_id": acc},
         files={"file": ("statement.txt", b"hello", "text/plain")},
     )
     assert resp.status_code == 415
@@ -177,45 +156,20 @@ async def test_too_large_rejected(client: AsyncClient, monkeypatch: pytest.Monke
     ws, acc = await _setup(client, ALICE)
     resp = await client.post(
         "/api/imports",
-        params={"workspace_id": ws, "account_id": acc, "commit": "false"},
+        params={"workspace_id": ws, "account_id": acc},
         files={"file": ("statement.pdf", b"%PDF-too-big", "application/pdf")},
     )
     assert resp.status_code == 413
 
 
-async def test_identical_operations_not_collapsed(
+async def test_unknown_account_rejected(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("app.imports.service.extract_lines", lambda b: DUP_SAMPLE)
-    ws, acc = await _setup(client, ALICE)
-
-    prev = (
-        await client.post(
-            "/api/imports",
-            params={"workspace_id": ws, "account_id": acc, "commit": "false"},
-            files=FILES,
-        )
-    ).json()
-    assert prev["new_count"] == 2  # обе одинаковые операции — новые, не схлопнуты
-
-    r1 = (
-        await client.post(
-            "/api/imports",
-            params={"workspace_id": ws, "account_id": acc, "commit": "true"},
-            files=FILES,
-        )
-    ).json()
-    assert r1["imported"] == 2
-
-    # повторный импорт того же файла идемпотентен
-    r2 = (
-        await client.post(
-            "/api/imports",
-            params={"workspace_id": ws, "account_id": acc, "commit": "true"},
-            files=FILES,
-        )
-    ).json()
-    assert r2["imported"] == 0
-    assert r2["duplicates"] == 2
-    txns = (await client.get("/api/transactions", params={"workspace_id": ws})).json()
-    assert txns["total"] == 2
+    monkeypatch.setattr("app.imports.router.extract_lines", lambda b: ["строка выписки"])
+    ws, _ = await _setup(client, ALICE)
+    resp = await client.post(
+        "/api/imports",
+        params={"workspace_id": ws, "account_id": str(uuid.uuid4())},
+        files=FILES,
+    )
+    assert resp.status_code == 404

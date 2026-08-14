@@ -74,3 +74,14 @@ def stub_categorize_enqueue(monkeypatch: pytest.MonkeyPatch) -> list[uuid.UUID]:
     calls: list[uuid.UUID] = []
     monkeypatch.setattr("app.ledger.service.enqueue_categorization", lambda ws: calls.append(ws))
     return calls
+
+
+@pytest.fixture(autouse=True)
+def stub_parse_enqueue(monkeypatch: pytest.MonkeyPatch) -> list[uuid.UUID]:
+    """Во всех тестах глушим реальную постановку разбора в очередь (иначе .delay
+    пойдёт к брокеру). Тесты, которым важен факт триггера, читают этот список."""
+    calls: list[uuid.UUID] = []
+    monkeypatch.setattr(
+        "app.imports.router.enqueue_parse", lambda import_id: calls.append(import_id)
+    )
+    return calls
