@@ -1,6 +1,7 @@
 import { Alert, Button, Card, FileInput, Group, Loader, Select, Stack, Text, Title } from '@mantine/core'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
+import { ApiError } from '../api/client'
 import { commitImport, getImportStatus, startImport } from '../api/imports'
 import { getAccounts } from '../api/ledger'
 import { useWorkspaceStore } from '../store/workspace'
@@ -15,8 +16,27 @@ export function ImportPage() {
 
   const { data: accounts } = useQuery({ queryKey: ['accounts', ws], queryFn: () => getAccounts(ws) })
 
+  // объявлен раньше startMut, потому что его reset() нужен в onMutate ниже
+  const commitMut = useMutation({
+    mutationFn: () => commitImport(ws, importId!),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['transactions', ws] })
+      await queryClient.invalidateQueries({ queryKey: ['accounts', ws] })
+      await queryClient.invalidateQueries({ queryKey: ['dashboard', ws] })
+      // статус станет completed (preview: null) — панель уйдёт вместе со старой кнопкой,
+      // а подтверждение об импорте живёт уровнем выше, в самой странице
+      await queryClient.invalidateQueries({ queryKey: ['import-status', ws, importId] })
+    },
+  })
+
   const startMut = useMutation({
     mutationFn: () => startImport(ws, accountId!, file!),
+    // сбрасываем ДО запроса, а не в onSuccess: если запрос упадёт, importId и
+    // результат предыдущего коммита всё равно не должны продолжать висеть на экране
+    onMutate: () => {
+      setImportId(null)
+      commitMut.reset()
+    },
     onSuccess: (started) => setImportId(started.import_id),
   })
 
@@ -28,16 +48,11 @@ export function ImportPage() {
     refetchInterval: (query) => (query.state.data?.status === 'processing' ? 1500 : false),
   })
   const status = statusQuery.data
-  const isProcessing = importId !== null && (status === undefined || status.status === 'processing')
-
-  const commitMut = useMutation({
-    mutationFn: () => commitImport(ws, importId!),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['transactions', ws] })
-      await queryClient.invalidateQueries({ queryKey: ['accounts', ws] })
-      await queryClient.invalidateQueries({ queryKey: ['dashboard', ws] })
-    },
-  })
+  // при сбое ПЕРВОГО запроса статуса data остаётся undefined — без учёта isError
+  // isProcessing навсегда останется true (поллинг уже встал из-за retry: false),
+  // и спиннер крутится без возможности восстановиться
+  const isProcessing =
+    importId !== null && !statusQuery.isError && (status === undefined || status.status === 'processing')
 
   const reset = () => {
     setImportId(null)
@@ -71,7 +86,11 @@ export function ImportPage() {
           >
             Разобрать
           </Button>
-          {startMut.isError && <Alert color="red">Не удалось загрузить выписку</Alert>}
+          {startMut.isError && (
+            <Alert color="red">
+              {startMut.error instanceof ApiError ? startMut.error.message : 'Не удалось загрузить выписку'}
+            </Alert>
+          )}
         </Stack>
       </Card>
 
@@ -81,6 +100,8 @@ export function ImportPage() {
           <Text>Разбираем выписку…</Text>
         </Group>
       )}
+
+      {statusQuery.isError && <Alert color="red">Не удалось получить статус разбора</Alert>}
 
       {status?.status === 'failed' && (
         <Alert color="red">{status.error ?? 'Не удалось разобрать выписку'}</Alert>
@@ -92,9 +113,18 @@ export function ImportPage() {
           parser={status.parser}
           warnings={status.warnings}
           importing={commitMut.isPending}
-          imported={commitMut.data?.imported ?? null}
           onImport={() => commitMut.mutate()}
         />
+      )}
+
+      {commitMut.isError && (
+        <Alert color="red">
+          {commitMut.error instanceof ApiError ? commitMut.error.message : 'Не удалось импортировать операции'}
+        </Alert>
+      )}
+
+      {commitMut.isSuccess && commitMut.data && (
+        <Alert color="green">Импортировано операций: {commitMut.data.imported}</Alert>
       )}
     </Stack>
   )

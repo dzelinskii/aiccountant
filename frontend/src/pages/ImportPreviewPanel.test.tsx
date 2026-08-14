@@ -27,7 +27,6 @@ function renderPanel(
         parser={extra.parser ?? null}
         warnings={extra.warnings ?? []}
         importing={false}
-        imported={null}
         onImport={onImport}
       />
     </MantineProvider>,

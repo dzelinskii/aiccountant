@@ -1,4 +1,4 @@
-import { api, ApiError } from './client'
+import { api, ApiError, detailToMessage } from './client'
 
 export interface ImportOperation {
   occurred_at: string
@@ -18,7 +18,6 @@ export interface ImportPreview {
 
 export interface ImportStarted {
   import_id: string
-  status: string
 }
 
 export interface ImportStatus {
@@ -51,7 +50,7 @@ export async function startImport(ws: string, accountId: string, file: File): Pr
   })
   if (!res.ok) {
     const body = await res.json().catch(() => null)
-    throw new ApiError(res.status, body?.detail ?? res.statusText)
+    throw new ApiError(res.status, detailToMessage(body?.detail) ?? res.statusText)
   }
   return res.json() as Promise<ImportStarted>
 }
