@@ -26,7 +26,7 @@
 ## Карта файлов
 
 Создаются:
-- `backend/app/imports/routing.py` — `StatementParser` (Protocol), реестр детерминированных парсеров, `route(...)`, `control_sum_warnings(...)`.
+- `backend/app/imports/routing.py` — `DeterministicParser`/`FallbackParser` (Protocol) и `route_statement(...)`. Реестр парсеров собирается в `imports/tasks.py` (Task 5), предупреждения контрольной суммы считает `imports/service.py` (Task 4).
 - `backend/app/imports/llm_parser.py` — `LLMStatementParser` + Pydantic-модель ответа LLM + валидация.
 - `backend/app/imports/tasks.py` — Celery-задача `imports.parse_statement_job`.
 - `backend/alembic/versions/0007_import_async.py` — миграция колонок.
@@ -1175,7 +1175,79 @@ def enqueue_parse(import_id: uuid.UUID) -> None:
     parse_statement_job.delay(str(import_id))
 ```
 
-- [ ] **Step 2: Зарегистрировать задачу в Celery**
+- [ ] **Step 2: Reaper застрявших импортов (beat)**
+
+Если воркер умер или брокер потерял сообщение, запись остаётся в `processing`
+навсегда — с непустым `raw_text` (PII) и вечным поллингом на фронте. Гарантия
+«сырой текст живёт только до конца разбора» без этого не выполняется.
+
+В `backend/app/imports/repository.py` добавить:
+
+```python
+async def stuck_processing(db: AsyncSession, older_than: datetime) -> list[Import]:
+    """Импорты, застрявшие в разборе (воркер умер / сообщение потеряно)."""
+    rows = await db.execute(
+        select(Import).where(Import.status == "processing", Import.created_at < older_than)
+    )
+    return list(rows.scalars().all())
+```
+
+(добавить `from datetime import datetime` в импорты.)
+
+В `backend/app/imports/service.py`:
+
+```python
+async def fail_stuck_imports(db: AsyncSession, older_than: datetime) -> int:
+    """Пометить зависшие разборы как failed и стереть сырой текст (PII)."""
+    stuck = await repository.stuck_processing(db, older_than)
+    for imp in stuck:
+        imp.status = "failed"
+        imp.error = "Разбор не завершился — попробуйте загрузить файл ещё раз"
+        imp.raw_text = None
+        logger.warning("import_parse_stuck", import_id=str(imp.id))
+    if stuck:
+        await db.commit()
+    return len(stuck)
+```
+
+В `backend/app/imports/tasks.py` добавить задачу и в `celery_app.conf.beat_schedule`
+(в `backend/app/core/celery_app.py`) — запись `"reap-stuck-imports"` с
+`{"task": "imports.reap_stuck", "schedule": 600.0}`:
+
+```python
+@celery_app.task(name="imports.reap_stuck")  # type: ignore[untyped-decorator]
+def reap_stuck_imports() -> int:
+    return asyncio.run(_reap())
+
+
+async def _reap() -> int:
+    # запас больше самого долгого разумного LLM-разбора
+    threshold = datetime.now(UTC) - timedelta(minutes=15)
+    async with session_factory() as db:
+        return await service.fail_stuck_imports(db, threshold)
+```
+
+(импорты `from datetime import UTC, datetime, timedelta`.)
+
+Тест в `backend/tests/test_import_async_service.py`:
+
+```python
+async def test_fail_stuck_imports_clears_raw_text(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    user_id, ws, acc = await _bootstrap(client)
+    imp = await service.start_import(db_session, ws, acc, user_id, "s.pdf", ["текст"])
+
+    # порог в будущем — запись считается зависшей
+    failed = await service.fail_stuck_imports(db_session, datetime.now(UTC) + timedelta(hours=1))
+
+    assert failed == 1
+    await db_session.refresh(imp)
+    assert imp.status == "failed"
+    assert imp.raw_text is None  # PII не остаётся висеть
+```
+
+- [ ] **Step 3: Зарегистрировать задачу в Celery**
 
 В `backend/app/core/celery_app.py`:
 - заменить `celery_app.autodiscover_tasks(["app.recurring", "app.ledger"])` на
@@ -1183,13 +1255,13 @@ def enqueue_parse(import_id: uuid.UUID) -> None:
 - в блок импортов моделей внизу добавить:
   `from app.imports import models as _imports_models  # noqa: E402,F401`.
 
-- [ ] **Step 3: Ослабить контракт import-linter на ребро tasks→celery_app**
+- [ ] **Step 4: Ослабить контракт import-linter на ребро tasks→celery_app**
 
 В `backend/pyproject.toml` в контракте `imports не лезет во внутренности identity и ledger`:
 - добавить `"app.imports.tasks"` в `source_modules`;
 - в `ignore_imports` добавить `"app.imports.tasks -> app.core.celery_app"` с комментарием-обоснованием (bootstrap воркера регистрирует ORM-модели всех модулей — инфраструктура, не обход границы; ровно как у `recurring.tasks`/`ledger.tasks`).
 
-- [ ] **Step 4: Расширить bootstrap-тест воркера**
+- [ ] **Step 5: Расширить bootstrap-тест воркера**
 
 В `backend/tests/test_celery_bootstrap.py` в строку-код субпроцесса добавить (рядом с существующей проверкой `ledger.categorize_workspace`):
 
@@ -1199,21 +1271,21 @@ def enqueue_parse(import_id: uuid.UUID) -> None:
 
 и в набор `need` добавить `'imports'`.
 
-- [ ] **Step 5: Прогнать**
+- [ ] **Step 6: Прогнать**
 
 Run: `uv run pytest tests/test_celery_bootstrap.py tests/test_statement_routing.py tests/test_import_async_service.py -q`
 Expected: PASS.
 
-- [ ] **Step 6: Линт/типы/границы**
+- [ ] **Step 7: Линт/типы/границы**
 
 Run: `uv run ruff format . && uv run ruff check . && uv run mypy && uv run lint-imports`
 Expected: без ошибок; `Contracts: 7 kept, 0 broken`.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add app/imports/tasks.py app/core/celery_app.py pyproject.toml tests/test_celery_bootstrap.py
-git commit -m "Импорт: Celery-задача разбора выписки с реестром парсеров"
+git add app/imports/tasks.py app/imports/service.py app/imports/repository.py app/core/celery_app.py pyproject.toml tests/test_celery_bootstrap.py tests/test_import_async_service.py
+git commit -m "Импорт: Celery-задача разбора выписки, реестр парсеров и reaper зависших импортов"
 ```
 
 ---
@@ -1281,6 +1353,41 @@ async def test_status_and_commit_flow(
     assert committed.json()["imported"] == len(SAMPLE_STATEMENT.operations)
 
 
+async def test_commit_of_foreign_import_is_404(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Чужой импорт неотличим от несуществующего — одинаковый 404 и на статусе,
+    и на коммите; иначе расхождение кодов само выдавало бы факт существования."""
+    ws, acc = await _ws_and_account(client)
+    monkeypatch.setattr("app.imports.router.extract_lines", lambda data: SAMPLE_LINES)
+    started = await client.post(
+        "/api/imports",
+        params={"workspace_id": ws, "account_id": acc},
+        files={"file": ("s.pdf", b"%PDF-fake", "application/pdf")},
+    )
+    import_id = started.json()["import_id"]
+    resp = await client.post(
+        f"/api/imports/{import_id}/commit", params={"workspace_id": str(uuid.uuid4())}
+    )
+    assert resp.status_code in (403, 404)
+
+
+async def test_commit_before_parse_is_409(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Свой импорт, но разбор ещё идёт — это состояние, а не отсутствие."""
+    ws, acc = await _ws_and_account(client)
+    monkeypatch.setattr("app.imports.router.extract_lines", lambda data: SAMPLE_LINES)
+    started = await client.post(
+        "/api/imports",
+        params={"workspace_id": ws, "account_id": acc},
+        files={"file": ("s.pdf", b"%PDF-fake", "application/pdf")},
+    )
+    import_id = started.json()["import_id"]
+    resp = await client.post(f"/api/imports/{import_id}/commit", params={"workspace_id": ws})
+    assert resp.status_code == 409
+
+
 async def test_status_of_foreign_workspace_is_404(
     client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1312,9 +1419,11 @@ Expected: FAIL — эндпоинты `GET /api/imports/{id}` и `POST /api/impo
 Заменить содержимое `backend/app/imports/router.py`:
 
 ```python
+import asyncio
 import uuid
 from typing import Annotated
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1322,12 +1431,13 @@ from app.core.db import get_db
 from app.identity.deps import require_workspace_member
 from app.identity.models import User
 from app.imports import service
-from app.imports.parser import StatementParseError, extract_lines
+from app.imports.parser import extract_lines
 from app.imports.schemas import ImportResultOut, ImportStartedOut, ImportStatusOut
 from app.imports.tasks import enqueue_parse
 from app.ledger import service as ledger_service
 
 router = APIRouter(prefix="/api")
+logger = structlog.get_logger()
 
 # выписку целиком читаем в память — ограничиваем размер, чтобы аплоад не съел RAM
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
@@ -1350,13 +1460,28 @@ async def start_import(
         raise HTTPException(status_code=404, detail="Счёт не найден")
     pdf_bytes = await file.read()
     try:
-        lines = extract_lines(pdf_bytes)
-    except Exception:
+        # pypdf синхронный и CPU-bound: в event loop он подвесил бы все запросы воркера
+        lines = await asyncio.to_thread(extract_lines, pdf_bytes)
+    except Exception as exc:
+        # битый/не-PDF файл: разбирать нечего, в фон не ставим. Тип пишем в лог —
+        # иначе баг в нашем коде неотличим от кривого файла; сообщение не логируем,
+        # оно может нести текст выписки
+        logger.warning("import_extract_failed", error_type=type(exc).__name__)
         raise HTTPException(status_code=422, detail="Не удалось прочитать PDF") from None
     imp = await service.start_import(
         db, workspace_id, account_id, user.id, file.filename or "statement.pdf", lines
     )
-    enqueue_parse(imp.id)
+    try:
+        enqueue_parse(imp.id)
+    except Exception as exc:
+        # брокер недоступен: не оставляем строку с текстом выписки (PII) ждать reaper
+        await service.mark_import_failed(
+            db, imp.id, "Не удалось поставить разбор в очередь — попробуйте позже"
+        )
+        logger.warning(
+            "import_enqueue_failed", import_id=str(imp.id), error_type=type(exc).__name__
+        )
+        raise HTTPException(status_code=503, detail="Сервис разбора недоступен") from None
     return ImportStartedOut(import_id=imp.id, status=imp.status)
 
 
@@ -1382,9 +1507,28 @@ async def commit_import(
 ) -> ImportResultOut:
     try:
         return await service.commit_from_import(db, workspace_id, import_id, user.id)
-    except StatementParseError:
+    except service.ImportNotFoundError:
+        raise HTTPException(status_code=404, detail="Импорт не найден") from None
+    except service.ImportNotReadyError:
         raise HTTPException(status_code=409, detail="Импорт не готов к подтверждению") from None
 ```
+
+**Про коды ответа (решено по итогам ревью Task 4):** различаем по *состоянию*, но не по
+*владению*. «Не найден» и «чужой» дают одинаковый **404** — ровно как уже делает
+статусный эндпоинт, поэтому существование чужого импорта не палится. Неверный
+статус своего импорта (`processing`/`failed`) — **409**. Склеивать все три случая
+в один код бессмысленно и даже вредно: `GET /imports/{id}` уже отдаёт 404 для
+чужого, так что расхождение 404-на-GET vs 409-на-commit само различало бы случаи.
+Фронту разделение нужно практически: 404 — тупик (прекратить поллинг), 409 —
+ждать или показать ошибку.
+
+Поэтому в `app/imports/service.py` разведи два исключения: оставь
+`ImportNotReadyError` для неверного статуса и добавь рядом
+`class ImportNotFoundError(Exception)`; в `commit_from_import` поднимай
+`ImportNotFoundError`, когда `repository.get_import` вернул `None`, и
+`ImportNotReadyError`, когда запись найдена, но `status != "ready"`
+(с учётом идемпотентной ветки `completed`). Тесты Task 4, ожидающие
+`ImportNotReadyError` для чужого импорта, поправь на `ImportNotFoundError`.
 
 - [ ] **Step 4: Удалить синхронный поток из сервиса**
 
@@ -1463,7 +1607,9 @@ export interface ImportStarted {
 
 export interface ImportStatus {
   import_id: string
-  status: 'processing' | 'ready' | 'failed'
+  // 'completed' обязателен: без него поллинг не увидит терминальное состояние
+  // после коммита и будет опрашивать статус вечно
+  status: 'processing' | 'ready' | 'failed' | 'completed'
   parser: string | null
   error: string | null
   warnings: string[]
@@ -1518,9 +1664,11 @@ export const commitImport = (ws: string, id: string) =>
 и отрисовать над таблицей (внутри существующего контейнера, до счётчиков):
 
 ```tsx
+      {/* подпись по имени парсера: жёсткое «иначе Т-Банк» соврало бы, как только
+          в реестре появится второй банк */}
       {parser && (
         <Badge variant="light" color={parser === 'llm' ? 'blue' : 'gray'}>
-          {parser === 'llm' ? 'AI-разбор' : 'Т-Банк'}
+          {PARSER_LABELS[parser] ?? parser}
         </Badge>
       )}
       {warnings.map((w) => (
