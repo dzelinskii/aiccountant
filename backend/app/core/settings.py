@@ -17,10 +17,14 @@ class Settings(BaseSettings):
     llm_base_url: str = "https://api.openai.com/v1"
     llm_api_key: str = ""
     llm_model_categorize: str = "gpt-4o-mini"
+    # разбор произвольной выписки тяжелее категоризации — отдельная модель
+    llm_model_parse: str = "gpt-4o-mini"
     # порог уверенности: выше — авто-простановка, ниже — подсказка на подтверждение
     categorize_confidence_threshold: Decimal = Decimal("0.8")
     # сколько подтверждённых примеров merchant→категория подмешивать в промпт (few-shot)
     categorize_fewshot_limit: int = 10
+    # кап на объём текста выписки, уходящий в LLM (символы); больше — отказ с понятной ошибкой
+    import_max_text_chars: int = 60000
 
 
 @lru_cache
