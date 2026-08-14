@@ -139,13 +139,15 @@ async def test_numeric_amount_keeps_full_precision() -> None:
 
 async def test_amount_without_cents_canonicalized_for_stable_dedup() -> None:
     # LLM может вернуть «1000» вместо «1000.00» для одной и той же операции —
-    # разное строковое представление даёт разный dedup-хеш в _external_ids
+    # разное строковое представление даёт разный dedup-хеш в _external_ids.
+    # Decimal("1000") == Decimal("1000.00") численно, поэтому сравнивать нужно
+    # именно str(...) — так же, как это делает _external_ids
     answer = json.dumps(
         {"operations": [{"occurred_at": "2026-07-05", "amount": "1000", "description": "x"}]}
     )
     parser = LLMStatementParser(FakeLLM(answer), max_chars=10000)
     statement = await parser.parse_async(["текст"])
-    assert statement.operations[0].amount == Decimal("1000.00")
+    assert str(statement.operations[0].amount) == "1000.00"
 
 
 async def test_amount_with_one_decimal_place_padded_to_two() -> None:
@@ -154,7 +156,7 @@ async def test_amount_with_one_decimal_place_padded_to_two() -> None:
     )
     parser = LLMStatementParser(FakeLLM(answer), max_chars=10000)
     statement = await parser.parse_async(["текст"])
-    assert statement.operations[0].amount == Decimal("-1150.50")
+    assert str(statement.operations[0].amount) == "-1150.50"
 
 
 async def test_four_decimal_amount_not_silently_rounded() -> None:

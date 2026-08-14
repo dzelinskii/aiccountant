@@ -285,3 +285,42 @@ async def test_payload_with_null_description_becomes_empty_string(
     assert status is not None
     assert status.preview is not None
     assert status.preview.operations[0].description == ""
+
+
+def _payload_with_op(**op_overrides: object) -> dict[str, object]:
+    op: dict[str, object] = {
+        "occurred_at": "2026-07-05",
+        "amount": "-10.00",
+        "currency": "RUB",
+        "description": "x",
+    }
+    op.update(op_overrides)
+    return {"operations": [op], "total_income": None, "total_expense": None, "warnings": []}
+
+
+BROKEN_PAYLOADS = [
+    pytest.param(_payload_with_op(amount="не число"), id="amount-not-a-number"),
+    pytest.param(_payload_with_op(amount=None), id="amount-null"),
+    pytest.param(_payload_with_op(amount="NaN"), id="amount-nan"),
+    pytest.param({**_payload_with_op(), "total_income": "мусор"}, id="total-income-junk"),
+    pytest.param({**_payload_with_op(), "total_expense": "NaN"}, id="total-expense-nan"),
+]
+
+
+@pytest.mark.parametrize("payload", BROKEN_PAYLOADS)
+async def test_commit_raises_on_broken_amount_fields(
+    client: AsyncClient, db_session: AsyncSession, payload: dict[str, object]
+) -> None:
+    # decimal.InvalidOperation не наследует ValueError (MRO: InvalidOperation ->
+    # DecimalException -> ArithmeticError) — битые суммы не должны улетать голым
+    # типом исключения, а NaN/Infinity должны отлавливаться отдельно (Decimal их
+    # строит без ошибки, но потом они отравляют сравнение контрольной суммы)
+    user_id, ws, acc = await _bootstrap(client, ALICE)
+    imp = await service.start_import(db_session, ws, acc, user_id, "s.pdf", ["текст"])
+    await service.run_parse(db_session, imp.id, parse=_fixed_parse(SAMPLE, "llm"))
+
+    imp.parsed_payload = payload
+    await db_session.commit()
+
+    with pytest.raises(StatementParseError):
+        await service.commit_from_import(db_session, ws, imp.id, user_id)

@@ -2,7 +2,7 @@ import hashlib
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import cast
 
 import structlog
@@ -181,6 +181,15 @@ def _statement_to_payload(statement: ParsedStatement, warnings: list[str]) -> di
     }
 
 
+def _finite_decimal(raw: object) -> Decimal:
+    value = Decimal(str(raw))
+    if not value.is_finite():
+        # Decimal("NaN")/Decimal("Infinity") строятся без ошибки, но дальше
+        # молча отравляют сравнения контрольной суммы — это тоже порча данных
+        raise ValueError(f"не конечное число: {value}")
+    return value
+
+
 def _payload_to_statement(payload: dict[str, object]) -> ParsedStatement:
     # это наш собственный payload (не ввод пользователя): пустой/нетипизированный
     # "operations" или битый элемент внутри — порча данных, а не законный случай
@@ -193,20 +202,22 @@ def _payload_to_statement(payload: dict[str, object]) -> ParsedStatement:
         operations = [
             ParsedOperation(
                 occurred_at=date.fromisoformat(str(op["occurred_at"])),
-                amount=Decimal(str(op["amount"])),
+                amount=_finite_decimal(op["amount"]),
                 currency=str(op["currency"]),
                 description="" if op.get("description") is None else str(op["description"]),
             )
             for op in raw_ops
         ]
-    except (KeyError, ValueError, TypeError) as exc:
+        income = payload.get("total_income")
+        expense = payload.get("total_expense")
+        total_income = None if income is None else _finite_decimal(income)
+        total_expense = None if expense is None else _finite_decimal(expense)
+    except (KeyError, ValueError, TypeError, InvalidOperation) as exc:
         raise StatementParseError("повреждён сохранённый разбор выписки") from exc
-    income = payload.get("total_income")
-    expense = payload.get("total_expense")
     return ParsedStatement(
         operations=operations,
-        total_income=None if income is None else Decimal(str(income)),
-        total_expense=None if expense is None else Decimal(str(expense)),
+        total_income=total_income,
+        total_expense=total_expense,
     )
 
 
