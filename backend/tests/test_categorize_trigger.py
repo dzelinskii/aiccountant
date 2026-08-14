@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.imports import service
 from app.imports.parser import ParsedOperation, ParsedStatement
-from tests.test_import_async_service import _fixed_parse
+from tests.fixtures import fixed_parse
 
 ALICE = {"email": "alice@example.com", "password": "password123"}
 
@@ -91,7 +91,7 @@ async def test_import_commit_enqueues(
     await service.run_parse(
         db_session,
         uuid.UUID(started["import_id"]),
-        parse=_fixed_parse(IMPORT_SAMPLE_STATEMENT, "tbank_statement"),
+        parse=fixed_parse(IMPORT_SAMPLE_STATEMENT, "tbank_statement"),
     )
 
     resp = await client.post(

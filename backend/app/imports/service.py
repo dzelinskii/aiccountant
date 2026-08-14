@@ -190,6 +190,19 @@ async def run_parse(
     logger.info("import_parsed", import_id=str(imp.id), parser=parser_name)
 
 
+async def mark_import_failed(db: AsyncSession, import_id: uuid.UUID, message: str) -> None:
+    """Пометить импорт failed и стереть сырой текст (PII) — для случая, когда разбор
+    не удалось даже поставить в очередь (брокер недоступен), а не когда сам разбор
+    провалился. Без записи не оставляем PII висеть в processing до reaper'а."""
+    imp = await repository.get_import_any_workspace(db, import_id)
+    if imp is None:
+        return
+    imp.status = "failed"
+    imp.error = message[:500]
+    imp.raw_text = None
+    await db.commit()
+
+
 async def fail_stuck_imports(db: AsyncSession, older_than: datetime) -> int:
     """Пометить зависшие разборы как failed и стереть сырой текст (PII). Один
     UPDATE в repository.fail_stuck — гонка с воркером, коммитящим ready в этот

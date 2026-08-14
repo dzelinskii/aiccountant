@@ -1,6 +1,8 @@
+import asyncio
 import uuid
-from typing import Annotated
+from typing import Annotated, cast
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,7 +11,7 @@ from app.identity.deps import require_workspace_member
 from app.identity.models import User
 from app.imports import service
 from app.imports.parser import extract_lines
-from app.imports.schemas import ImportResultOut, ImportStartedOut, ImportStatusOut
+from app.imports.schemas import ImportResultOut, ImportStartedOut, ImportStatus, ImportStatusOut
 from app.imports.tasks import enqueue_parse
 from app.ledger import service as ledger_service
 
@@ -18,6 +20,8 @@ router = APIRouter(prefix="/api")
 # выписку целиком читаем в память — ограничиваем размер, чтобы аплоад не съел RAM
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 ALLOWED_CONTENT_TYPES = {"application/pdf", "application/octet-stream"}
+
+logger = structlog.get_logger()
 
 
 @router.post("/imports", status_code=202)
@@ -36,15 +40,31 @@ async def start_import(
         raise HTTPException(status_code=404, detail="Счёт не найден")
     pdf_bytes = await file.read()
     try:
-        lines = extract_lines(pdf_bytes)
-    except Exception:
-        # битый/не-PDF файл: разбирать нечего, в фон не ставим
+        # pypdf синхронный и CPU-bound — на многостраничной выписке extract_text()
+        # может идти секунды и подвесить весь event loop воркера, поэтому уносим в поток
+        lines = await asyncio.to_thread(extract_lines, pdf_bytes)
+    except Exception as exc:
+        # битый/не-PDF файл: разбирать нечего, в фон не ставим. Тип пишем в лог —
+        # иначе баг в нашем коде неотличим от кривого файла; сообщение не логируем,
+        # оно может нести текст выписки
+        logger.warning("import_extract_failed", error_type=type(exc).__name__)
         raise HTTPException(status_code=422, detail="Не удалось прочитать PDF") from None
     imp = await service.start_import(
         db, workspace_id, account_id, user.id, file.filename or "statement.pdf", lines
     )
-    enqueue_parse(imp.id)
-    return ImportStartedOut(import_id=imp.id, status=imp.status)
+    try:
+        enqueue_parse(imp.id)
+    except Exception as exc:
+        # брокер недоступен: не оставляем строку с текстом выписки (PII) висеть в
+        # processing до reaper'а (у него порог 15 минут) — гасим сразу
+        await service.mark_import_failed(
+            db, imp.id, "Не удалось поставить разбор в очередь — попробуйте позже"
+        )
+        logger.warning(
+            "import_enqueue_failed", import_id=str(imp.id), error_type=type(exc).__name__
+        )
+        raise HTTPException(status_code=503, detail="Сервис разбора недоступен") from None
+    return ImportStartedOut(import_id=imp.id, status=cast(ImportStatus, imp.status))
 
 
 @router.get("/imports/{import_id}")

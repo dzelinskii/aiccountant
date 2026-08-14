@@ -1,5 +1,4 @@
 import uuid
-from collections.abc import Awaitable, Callable
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
@@ -10,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.imports import repository, service
 from app.imports.parser import ParsedOperation, ParsedStatement, StatementParseError
 from app.ledger import service as ledger_service
+from tests.fixtures import fixed_parse as _fixed_parse
 
 ALICE = {"email": "alice@example.com", "password": "password123"}
 BOB = {"email": "bob@example.com", "password": "password123"}
@@ -32,17 +32,6 @@ SAMPLE = ParsedStatement(
     total_income=Decimal("5000.00"),
     total_expense=Decimal("1150.00"),
 )
-
-
-def _fixed_parse(
-    statement: ParsedStatement, name: str
-) -> Callable[[list[str]], Awaitable[tuple[ParsedStatement, str]]]:
-    """Колбэк разбора с заранее известным результатом (разбор асинхронный — LLM)."""
-
-    async def _parse(lines: list[str]) -> tuple[ParsedStatement, str]:
-        return statement, name
-
-    return _parse
 
 
 async def _bootstrap(

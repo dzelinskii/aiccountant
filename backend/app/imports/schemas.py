@@ -33,7 +33,7 @@ class ImportResultOut(BaseModel):
 
 class ImportStartedOut(BaseModel):
     import_id: uuid.UUID
-    status: str
+    status: ImportStatus
 
 
 class ImportStatusOut(BaseModel):
