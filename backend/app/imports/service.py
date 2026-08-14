@@ -190,11 +190,15 @@ async def run_parse(
     logger.info("import_parsed", import_id=str(imp.id), parser=parser_name)
 
 
-async def mark_import_failed(db: AsyncSession, import_id: uuid.UUID, message: str) -> None:
+async def mark_import_failed(
+    db: AsyncSession, workspace_id: uuid.UUID, import_id: uuid.UUID, message: str
+) -> None:
     """Пометить импорт failed и стереть сырой текст (PII) — для случая, когда разбор
     не удалось даже поставить в очередь (брокер недоступен), а не когда сам разбор
-    провалился. Без записи не оставляем PII висеть в processing до reaper'а."""
-    imp = await repository.get_import_any_workspace(db, import_id)
+    провалился. Без записи не оставляем PII висеть в processing до reaper'а.
+    Фильтруем по workspace_id (в отличие от фоновой get_import_any_workspace) —
+    вызывается из обработчика запроса, а не из фоновой задачи по чужому id."""
+    imp = await repository.get_import(db, workspace_id, import_id)
     if imp is None:
         return
     imp.status = "failed"

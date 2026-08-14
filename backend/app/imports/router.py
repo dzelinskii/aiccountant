@@ -58,7 +58,7 @@ async def start_import(
         # брокер недоступен: не оставляем строку с текстом выписки (PII) висеть в
         # processing до reaper'а (у него порог 15 минут) — гасим сразу
         await service.mark_import_failed(
-            db, imp.id, "Не удалось поставить разбор в очередь — попробуйте позже"
+            db, workspace_id, imp.id, "Не удалось поставить разбор в очередь — попробуйте позже"
         )
         logger.warning(
             "import_enqueue_failed", import_id=str(imp.id), error_type=type(exc).__name__
