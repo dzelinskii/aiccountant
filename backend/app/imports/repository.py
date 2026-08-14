@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.imports.models import Import
@@ -26,9 +26,17 @@ async def get_import_any_workspace(db: AsyncSession, import_id: uuid.UUID) -> Im
     return result
 
 
-async def stuck_processing(db: AsyncSession, older_than: datetime) -> list[Import]:
-    """Импорты, застрявшие в разборе (воркер умер / сообщение потеряно)."""
-    rows = await db.execute(
-        select(Import).where(Import.status == "processing", Import.created_at < older_than)
+async def fail_stuck(db: AsyncSession, older_than: datetime, message: str) -> list[uuid.UUID]:
+    """Пометить зависшие разборы failed одним UPDATE: условие перепроверяется под
+    блокировкой строки, поэтому только что завершившийся разбор (воркер успел
+    закоммитить ready между выборкой и обновлением) не будет затёрт задним числом.
+    Заодно не тянем raw_text (PII) в память воркера. Для фоновой задачи — без
+    фильтра по workspace, охват намеренно кросс-workspace."""
+    stmt = (
+        update(Import)
+        .where(Import.status == "processing", Import.created_at < older_than)
+        .values(status="failed", error=message, raw_text=None)
+        .returning(Import.id)
     )
-    return list(rows.scalars().all())
+    rows = await db.execute(stmt)
+    return [row_id for (row_id,) in rows.all()]

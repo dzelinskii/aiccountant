@@ -269,7 +269,9 @@ async def run_parse(
     """Разобрать сохранённый текст и записать результат. Разбор асинхронный (LLM-фолбэк
     ходит по сети). Ошибка разбора — статус failed с понятным текстом, не молчаливый пропуск."""
     imp = await repository.get_import_any_workspace(db, import_id)
-    if imp is None:
+    if imp is None or imp.status != "processing":
+        # отставшее сообщение после того, как reaper уже пометил запись failed
+        # (или разбор как-то запустился дважды) — не тратим LLM-вызов впустую
         return
     lines = (imp.raw_text or "").splitlines()
     try:
@@ -302,16 +304,16 @@ async def run_parse(
 
 
 async def fail_stuck_imports(db: AsyncSession, older_than: datetime) -> int:
-    """Пометить зависшие разборы как failed и стереть сырой текст (PII)."""
-    stuck = await repository.stuck_processing(db, older_than)
-    for imp in stuck:
-        imp.status = "failed"
-        imp.error = "Разбор не завершился — попробуйте загрузить файл ещё раз"
-        imp.raw_text = None
-        logger.warning("import_parse_stuck", import_id=str(imp.id))
-    if stuck:
+    """Пометить зависшие разборы как failed и стереть сырой текст (PII). Один
+    UPDATE в repository.fail_stuck — гонка с воркером, коммитящим ready в этот
+    же момент, исключена перепроверкой условия под блокировкой строки."""
+    message = "Разбор не завершился — попробуйте загрузить файл ещё раз"
+    stuck_ids = await repository.fail_stuck(db, older_than, message)
+    for import_id in stuck_ids:
+        logger.warning("import_parse_stuck", import_id=str(import_id))
+    if stuck_ids:
         await db.commit()
-    return len(stuck)
+    return len(stuck_ids)
 
 
 async def _build_preview(

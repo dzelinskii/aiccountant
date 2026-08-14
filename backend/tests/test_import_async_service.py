@@ -342,7 +342,7 @@ async def test_fail_stuck_imports_clears_raw_text(
     assert imp.raw_text is None  # PII не остаётся висеть
 
 
-async def test_fail_stuck_imports_skips_fresh_and_finished(
+async def test_fail_stuck_imports_skips_fresh(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
     user_id, ws, acc = await _bootstrap(client, ALICE)
@@ -354,3 +354,22 @@ async def test_fail_stuck_imports_skips_fresh_and_finished(
     assert failed == 0
     await db_session.refresh(fresh)
     assert fresh.status == "processing"
+
+
+async def test_fail_stuck_imports_skips_ready(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    # ключевой фильтр — Import.status == "processing": без него reaper гасил бы
+    # и уже успешно разобранные импорты. Проверяем на завершённом разборе
+    # (status=ready), а не только на свежем processing.
+    user_id, ws, acc = await _bootstrap(client, ALICE)
+    imp = await service.start_import(db_session, ws, acc, user_id, "s.pdf", ["текст"])
+    await service.run_parse(db_session, imp.id, parse=_fixed_parse(SAMPLE, "llm"))
+
+    # порог в будущем — если бы фильтр по статусу пропал, запись попала бы под добивание
+    failed = await service.fail_stuck_imports(db_session, datetime.now(UTC) + timedelta(hours=1))
+
+    assert failed == 0
+    await db_session.refresh(imp)
+    assert imp.status == "ready"
+    assert imp.parsed_payload is not None
