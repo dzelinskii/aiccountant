@@ -112,7 +112,10 @@ ignore_imports = ["app.ledger.tasks -> app.core.celery_app"]
 [[tool.importlinter.contracts]]
 name = "imports не лезет во внутренности identity и ledger"
 type = "forbidden"
-source_modules = ["app.imports.service", "app.imports.repository", "app.imports.parser"]
+source_modules = [
+    "app.imports.service", "app.imports.repository", "app.imports.parser",
+    "app.imports.routing",
+]
 forbidden_modules = ["app.identity", "app.ledger.repository", "app.ledger.models"]
 ignore_imports = ["app.imports.service -> app.ledger.service"]
 

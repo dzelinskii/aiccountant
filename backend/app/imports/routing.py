@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from typing import Protocol
 
 import structlog
@@ -28,7 +29,7 @@ class FallbackParser(Protocol):
 
 async def route_statement(
     lines: list[str],
-    parsers: list[DeterministicParser],
+    parsers: Sequence[DeterministicParser],
     fallback: FallbackParser,
 ) -> tuple[ParsedStatement, str]:
     """Отдать разбор первого узнавшего формат парсера; если никто не узнал или
@@ -40,5 +41,7 @@ async def route_statement(
             return parser.parse(lines), parser.name
         except StatementParseError:
             # detect ошибся (похожая шапка) — не падаем, отдаём формат фолбэку
-            logger.warning("statement_parser_detect_mismatch", parser=parser.name)
+            logger.warning(
+                "statement_parser_detect_mismatch", parser=parser.name, reason="parse_failed"
+            )
     return await fallback.parse_async(lines), fallback.name

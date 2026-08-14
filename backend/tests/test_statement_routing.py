@@ -10,6 +10,7 @@ from app.imports.parser import (
     TBankStatementParser,
 )
 from app.imports.routing import route_statement
+from tests.test_statement_parser import SAMPLE
 
 
 class _AlwaysParser:
@@ -105,7 +106,79 @@ async def test_route_raises_when_fallback_also_fails() -> None:
         await route_statement(["что-то"], [], _BrokenFallback())
 
 
+async def test_route_picks_first_of_two_detecting_parsers() -> None:
+    class _FirstParser:
+        name = "first"
+
+        def detect(self, lines: list[str]) -> bool:
+            return True
+
+        def parse(self, lines: list[str]) -> ParsedStatement:
+            return ParsedStatement(operations=[], total_income=None, total_expense=None)
+
+    class _SecondParser:
+        name = "second"
+
+        def detect(self, lines: list[str]) -> bool:
+            return True
+
+        def parse(self, lines: list[str]) -> ParsedStatement:  # pragma: no cover
+            raise AssertionError("не должен вызываться — первый парсер уже выиграл")
+
+    fallback = _FallbackParser()
+    _, name = await route_statement(["что-то"], [_FirstParser(), _SecondParser()], fallback)
+    assert name == "first"
+    assert fallback.called is False
+
+
+async def test_route_tries_next_parser_after_failure() -> None:
+    class _BrokenParser:
+        name = "broken"
+
+        def detect(self, lines: list[str]) -> bool:
+            return True
+
+        def parse(self, lines: list[str]) -> ParsedStatement:
+            raise StatementParseError("не смог")
+
+    fallback = _FallbackParser()
+    statement, name = await route_statement(
+        ["МОЙБАНК выписка"], [_BrokenParser(), _AlwaysParser()], fallback
+    )
+    assert name == "always"
+    assert len(statement.operations) == 1
+    assert fallback.called is False
+
+
+async def test_route_uses_real_tbank_parser_on_real_fixture() -> None:
+    fallback = _FallbackParser()
+    statement, name = await route_statement(SAMPLE, [TBankStatementParser()], fallback)
+    assert name == "tbank_statement"
+    assert len(statement.operations) == 3
+    assert fallback.called is False
+
+
 def test_tbank_parser_detects_own_format() -> None:
     parser = TBankStatementParser()
-    assert parser.detect(["Справка о движении средств", "прочее"]) is True
+    assert parser.detect(["Движение средств за период с 06.06.2026 по 06.07.2026"]) is True
     assert parser.detect(["Выписка по счёту Альфа-Банк"]) is False
+
+
+def test_tbank_parser_rejects_single_footer_marker() -> None:
+    # одно «Расходы:» встречается и в выписках чужих банков — не должно матчить
+    parser = TBankStatementParser()
+    assert parser.detect(["АО Альфа-Банк", "Выписка", "Расходы: 100,00 RUB"]) is False
+
+
+def test_tbank_parser_detects_both_footer_markers_without_header() -> None:
+    parser = TBankStatementParser()
+    assert parser.detect(["451 358,48 ₽Пополнения:", "502 119,39 ₽Расходы:"]) is True
+
+
+def test_tbank_parser_wraps_bad_dates_as_statement_parse_error() -> None:
+    # маркеры совпали, но строки внутри не разбираются (битая дата) — граница
+    # парсера должна отдать StatementParseError, а не голый ValueError, чтобы
+    # маршрутизатор ушёл в фолбэк, а не упал
+    parser = TBankStatementParser()
+    with pytest.raises(StatementParseError):
+        parser.parse(["32.13.2026", "12:00", "32.13.2026", "12:00", "-1 150.00 ₽ -1 150.00 ₽ Тест"])
