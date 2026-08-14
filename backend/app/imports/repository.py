@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,3 +24,11 @@ async def get_import_any_workspace(db: AsyncSession, import_id: uuid.UUID) -> Im
     """Для фоновой задачи: workspace берём из самой записи, а не из запроса."""
     result: Import | None = await db.scalar(select(Import).where(Import.id == import_id))
     return result
+
+
+async def stuck_processing(db: AsyncSession, older_than: datetime) -> list[Import]:
+    """Импорты, застрявшие в разборе (воркер умер / сообщение потеряно)."""
+    rows = await db.execute(
+        select(Import).where(Import.status == "processing", Import.created_at < older_than)
+    )
+    return list(rows.scalars().all())

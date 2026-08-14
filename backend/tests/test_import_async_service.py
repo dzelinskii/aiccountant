@@ -1,6 +1,6 @@
 import uuid
 from collections.abc import Awaitable, Callable
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -324,3 +324,33 @@ async def test_commit_raises_on_broken_amount_fields(
 
     with pytest.raises(StatementParseError):
         await service.commit_from_import(db_session, ws, imp.id, user_id)
+
+
+async def test_fail_stuck_imports_clears_raw_text(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    user_id, ws, acc = await _bootstrap(client, ALICE)
+    imp = await service.start_import(db_session, ws, acc, user_id, "s.pdf", ["текст"])
+
+    # порог в будущем — запись считается зависшей
+    failed = await service.fail_stuck_imports(db_session, datetime.now(UTC) + timedelta(hours=1))
+
+    assert failed == 1
+    await db_session.refresh(imp)
+    assert imp.status == "failed"
+    assert imp.error is not None
+    assert imp.raw_text is None  # PII не остаётся висеть
+
+
+async def test_fail_stuck_imports_skips_fresh_and_finished(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    user_id, ws, acc = await _bootstrap(client, ALICE)
+    fresh = await service.start_import(db_session, ws, acc, user_id, "s.pdf", ["текст"])
+
+    # порог в прошлом — свежий импорт трогать нельзя
+    failed = await service.fail_stuck_imports(db_session, datetime.now(UTC) - timedelta(hours=1))
+
+    assert failed == 0
+    await db_session.refresh(fresh)
+    assert fresh.status == "processing"

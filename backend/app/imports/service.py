@@ -1,7 +1,7 @@
 import hashlib
 import uuid
 from collections.abc import Awaitable, Callable
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import cast
 
@@ -299,6 +299,19 @@ async def run_parse(
     imp.raw_text = None  # PII: дальше работаем с разобранными операциями
     await db.commit()
     logger.info("import_parsed", import_id=str(imp.id), parser=parser_name)
+
+
+async def fail_stuck_imports(db: AsyncSession, older_than: datetime) -> int:
+    """Пометить зависшие разборы как failed и стереть сырой текст (PII)."""
+    stuck = await repository.stuck_processing(db, older_than)
+    for imp in stuck:
+        imp.status = "failed"
+        imp.error = "Разбор не завершился — попробуйте загрузить файл ещё раз"
+        imp.raw_text = None
+        logger.warning("import_parse_stuck", import_id=str(imp.id))
+    if stuck:
+        await db.commit()
+    return len(stuck)
 
 
 async def _build_preview(
