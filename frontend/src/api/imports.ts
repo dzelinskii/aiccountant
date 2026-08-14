@@ -1,4 +1,4 @@
-import { ApiError } from './client'
+import { api, ApiError } from './client'
 
 export interface ImportOperation {
   occurred_at: string
@@ -16,18 +16,35 @@ export interface ImportPreview {
   total_expense: string | null
 }
 
+export interface ImportStarted {
+  import_id: string
+  status: string
+}
+
+export interface ImportStatus {
+  import_id: string
+  status: 'processing' | 'ready' | 'failed' | 'completed'
+  parser: string | null
+  error: string | null
+  warnings: string[]
+  preview: ImportPreview | null
+}
+
 export interface ImportResult {
   import_id: string
   imported: number
   duplicates: number
 }
 
+const q = (ws: string, extra: Record<string, string> = {}) =>
+  new URLSearchParams({ workspace_id: ws, ...extra }).toString()
+
 // multipart: не выставляем Content-Type вручную — браузер сам добавит boundary
-async function upload<T>(ws: string, accountId: string, file: File, commit: boolean): Promise<T> {
+export async function startImport(ws: string, accountId: string, file: File): Promise<ImportStarted> {
   const form = new FormData()
   form.append('file', file)
-  const qs = new URLSearchParams({ workspace_id: ws, account_id: accountId, commit: String(commit) })
-  const res = await fetch(`/api/imports?${qs.toString()}`, {
+  const qs = q(ws, { account_id: accountId })
+  const res = await fetch(`/api/imports?${qs}`, {
     method: 'POST',
     credentials: 'same-origin',
     body: form,
@@ -36,11 +53,11 @@ async function upload<T>(ws: string, accountId: string, file: File, commit: bool
     const body = await res.json().catch(() => null)
     throw new ApiError(res.status, body?.detail ?? res.statusText)
   }
-  return res.json() as Promise<T>
+  return res.json() as Promise<ImportStarted>
 }
 
-export const previewImport = (ws: string, accountId: string, file: File) =>
-  upload<ImportPreview>(ws, accountId, file, false)
+export const getImportStatus = (ws: string, id: string) =>
+  api<ImportStatus>(`/api/imports/${id}?${q(ws)}`)
 
-export const commitImport = (ws: string, accountId: string, file: File) =>
-  upload<ImportResult>(ws, accountId, file, true)
+export const commitImport = (ws: string, id: string) =>
+  api<ImportResult>(`/api/imports/${id}/commit?${q(ws)}`, { method: 'POST' })

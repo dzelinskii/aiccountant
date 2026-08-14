@@ -4,11 +4,15 @@ import { formatMoney } from '../lib/money'
 
 export function ImportPreviewPanel({
   preview,
+  parser,
+  warnings,
   importing,
   imported,
   onImport,
 }: {
   preview: ImportPreview
+  parser: string | null
+  warnings: string[]
   importing: boolean
   imported: number | null
   onImport: () => void
@@ -16,13 +20,20 @@ export function ImportPreviewPanel({
   return (
     <Card withBorder>
       <Group justify="space-between" mb="sm">
-        <Text>
-          Новых: <b>{preview.new_count}</b>, дублей: {preview.duplicate_count}
-        </Text>
+        <Group gap="xs">
+          {parser === 'llm' && <Badge color="blue">AI-разбор</Badge>}
+          {parser && parser !== 'llm' && <Badge color="gray">Т-Банк</Badge>}
+          <Text>
+            Новых: <b>{preview.new_count}</b>, дублей: {preview.duplicate_count}
+          </Text>
+        </Group>
         <Button disabled={preview.new_count === 0} loading={importing} onClick={onImport}>
           Импортировать {preview.new_count} новых
         </Button>
       </Group>
+      {warnings.map((w) => (
+        <Alert color="yellow" mb="sm" key={w}>{w}</Alert>
+      ))}
       {imported !== null && <Alert color="green" mb="sm">Импортировано операций: {imported}</Alert>}
       <Table>
         <Table.Thead>
