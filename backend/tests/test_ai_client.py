@@ -72,3 +72,8 @@ def test_build_llm_client_uses_categorize_model(monkeypatch: pytest.MonkeyPatch)
         assert client._model == "custom-model"
     finally:
         get_settings.cache_clear()
+
+
+def test_build_llm_client_uses_explicit_model_override() -> None:
+    # явно переданная модель (например, для LLM-разбора выписки) важнее настройки категоризации
+    assert build_llm_client("parse-model")._model == "parse-model"

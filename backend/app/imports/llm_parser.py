@@ -1,22 +1,30 @@
 import json
 from datetime import date
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
+from typing import Annotated
 
 import structlog
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from app.ai.client import LLMClient
 from app.imports.parser import ParsedOperation, ParsedStatement, StatementParseError
 
 logger = structlog.get_logger()
 
+# границы совпадают с NUMERIC(20,4) в ledger: за ними Postgres молча округлит
+# или упадёт уже на вставке — ловим это на разборе, а не после коммита
+Money = Annotated[Decimal, Field(max_digits=20, decimal_places=4)]
+
 SYSTEM_PROMPT = (
     "Ты разбираешь банковские выписки. По тексту выписки верни ТОЛЬКО JSON вида "
     '{"operations": [{"occurred_at": "ГГГГ-ММ-ДД", "amount": "-1150.00", '
     '"description": "описание"}], "total_income": "5000.00", "total_expense": "1150.00"}. '
     "Сумма — строка со знаком: расход отрицательный, приход положительный, точка как "
-    "десятичный разделитель, без пробелов и символов валюты. Итоги (total_income/"
-    "total_expense) — положительные строки или null, если в выписке их нет. "
+    "десятичный разделитель, не больше двух знаков после точки, без пробелов и символов "
+    "валюты. Дата — строго ISO 8601 в формате ГГГГ-ММ-ДД; если в выписке дата дана как "
+    "ДД.ММ.ГГГГ, сконвертируй. Если у операции указано несколько дат (например, дата "
+    "совершения и дата обработки/списания), бери дату совершения операции. Итоги "
+    "(total_income/total_expense) — положительные строки или null, если в выписке их нет. "
     "Не выдумывай операции: переноси только те, что есть в тексте."
 )
 
@@ -27,14 +35,19 @@ class StatementTooLargeError(Exception):
 
 class _LLMOperation(BaseModel):
     occurred_at: date
-    amount: Decimal
+    amount: Money
     description: str = ""
 
 
 class _LLMStatement(BaseModel):
     operations: list[_LLMOperation]
-    total_income: Decimal | None = None
-    total_expense: Decimal | None = None
+    total_income: Money | None = None
+    total_expense: Money | None = None
+
+
+def _clean_description(text: str) -> str:
+    # NUL: Postgres text-колонка его не примет, а Python не считает пробелом
+    return " ".join(text.replace("\x00", "").split())
 
 
 def _to_statement(payload: _LLMStatement) -> ParsedStatement:
@@ -48,7 +61,7 @@ def _to_statement(payload: _LLMStatement) -> ParsedStatement:
                 occurred_at=op.occurred_at,
                 amount=op.amount,
                 currency="RUB",
-                description=" ".join(op.description.split()),
+                description=_clean_description(op.description),
             )
         )
     if not operations:
@@ -76,9 +89,11 @@ class LLMStatementParser:
             raise StatementTooLargeError("выписка слишком большая для LLM-разбора")
         raw = await self._llm.complete_json(system=SYSTEM_PROMPT, user=text)
         try:
-            data = json.loads(raw)
+            # parse_float=Decimal: float для денег запрещён, даже как промежуточное
+            # представление на пути json → pydantic
+            data = json.loads(raw, parse_float=Decimal)
             payload = _LLMStatement.model_validate(data)
-        except (json.JSONDecodeError, TypeError, ValidationError, InvalidOperation) as exc:
+        except (json.JSONDecodeError, ValidationError) as exc:
             logger.warning("llm_statement_invalid_answer")
             raise StatementParseError("LLM вернул неразбираемый ответ") from exc
         return _to_statement(payload)

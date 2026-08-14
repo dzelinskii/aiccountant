@@ -85,6 +85,18 @@ async def test_too_large_text_raises_before_llm_call() -> None:
     assert llm.prompts == []  # до провайдера не дошли — не жжём токены
 
 
+async def test_text_exactly_at_cap_does_not_raise_too_large() -> None:
+    # граница: ровно max_chars — это ещё «влезает», не «слишком много» (строгое >)
+    answer = json.dumps(
+        {"operations": [{"occurred_at": "2026-07-05", "amount": "-1.00", "description": "x"}]}
+    )
+    max_chars = 10
+    llm = FakeLLM(answer)
+    parser = LLMStatementParser(llm, max_chars=max_chars)
+    await parser.parse_async(["x" * max_chars])
+    assert llm.prompts  # дошли до LLM — кап на границе не сработал
+
+
 async def test_prompt_contains_statement_text() -> None:
     answer = json.dumps(
         {"operations": [{"occurred_at": "2026-07-05", "amount": "-1.00", "description": "x"}]}
@@ -95,6 +107,23 @@ async def test_prompt_contains_statement_text() -> None:
     assert "СТРОКА-МАРКЕР" in llm.prompts[0]
 
 
+async def test_description_normalizes_whitespace() -> None:
+    answer = json.dumps(
+        {
+            "operations": [
+                {
+                    "occurred_at": "2026-07-05",
+                    "amount": "-1.00",
+                    "description": "  Кофейня\n\tна   Тверской  ",
+                }
+            ]
+        }
+    )
+    parser = LLMStatementParser(FakeLLM(answer), max_chars=10000)
+    statement = await parser.parse_async(["текст"])
+    assert statement.operations[0].description == "Кофейня на Тверской"
+
+
 async def test_llm_parser_works_as_route_fallback() -> None:
     answer = json.dumps(
         {"operations": [{"occurred_at": "2026-07-05", "amount": "-1.00", "description": "x"}]}
@@ -103,3 +132,85 @@ async def test_llm_parser_works_as_route_fallback() -> None:
     statement, name = await route_statement(["чужой формат"], [], parser)
     assert name == "llm"
     assert len(statement.operations) == 1
+
+
+def test_too_large_error_is_not_parse_error() -> None:
+    # «слишком большая» — это предусловие вызова LLM (кап на вход текста), а не
+    # ошибка разбора ответа; вызывающий код обязан ловить их по отдельности
+    assert not issubclass(StatementTooLargeError, StatementParseError)
+
+
+HOSTILE_PAYLOADS = [
+    pytest.param(json.dumps({"operations": None}), id="operations-null"),
+    pytest.param(
+        json.dumps([{"occurred_at": "2026-07-05", "amount": "-1.00", "description": "x"}]),
+        id="top-level-list",
+    ),
+    pytest.param(
+        json.dumps(
+            {"operations": [{"occurred_at": "2026-07-05", "amount": {"a": 1}, "description": "x"}]}
+        ),
+        id="amount-nested-object",
+    ),
+    pytest.param(
+        json.dumps(
+            {"operations": [{"occurred_at": "2026-07-05", "amount": None, "description": "x"}]}
+        ),
+        id="amount-null",
+    ),
+    pytest.param(
+        json.dumps(
+            {"operations": [{"occurred_at": "2026-07-05", "amount": "NaN", "description": "x"}]}
+        ),
+        id="amount-nan",
+    ),
+    pytest.param(
+        json.dumps(
+            {
+                "operations": [
+                    {"occurred_at": "2026-07-05", "amount": "Infinity", "description": "x"}
+                ]
+            }
+        ),
+        id="amount-infinity",
+    ),
+    pytest.param(
+        json.dumps(
+            {
+                "operations": [
+                    {"occurred_at": "2026-07-05", "amount": "1E999999999", "description": "x"}
+                ]
+            }
+        ),
+        id="amount-huge-exponent",
+    ),
+    pytest.param(
+        json.dumps(
+            {
+                "operations": [
+                    {
+                        "occurred_at": "2026-07-05",
+                        "amount": "1150.123456789",
+                        "description": "x",
+                    }
+                ]
+            }
+        ),
+        id="amount-too-many-decimal-places",
+    ),
+    pytest.param(
+        json.dumps(
+            {"operations": [{"occurred_at": "05.07.2026", "amount": "-1.00", "description": "x"}]}
+        ),
+        id="date-not-iso8601",
+    ),
+]
+
+
+@pytest.mark.parametrize("answer", HOSTILE_PAYLOADS)
+async def test_hostile_payload_raises_parse_error(answer: str) -> None:
+    # фиксируем поведение на враждебных ответах LLM: ни один не должен долетать
+    # до ledger как валидные данные, все — StatementParseError, без исключений
+    parser = LLMStatementParser(FakeLLM(answer), max_chars=10000)
+    with pytest.raises(StatementParseError):
+        await parser.parse_async(["текст"])

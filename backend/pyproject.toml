@@ -114,7 +114,7 @@ name = "imports не лезет во внутренности identity и ledger
 type = "forbidden"
 source_modules = [
     "app.imports.service", "app.imports.repository", "app.imports.parser",
-    "app.imports.routing",
+    "app.imports.routing", "app.imports.llm_parser",
 ]
 forbidden_modules = ["app.identity", "app.ledger.repository", "app.ledger.models"]
 ignore_imports = ["app.imports.service -> app.ledger.service"]
