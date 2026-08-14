@@ -125,3 +125,20 @@ def parse_statement(raw_lines: list[str]) -> ParsedStatement:
     if not operations:
         raise StatementParseError("не найдено ни одной операции — неверный формат выписки")
     return ParsedStatement(operations, total_income, total_expense)
+
+
+TBANK_MARKERS = ("Справка о движении средств", "Пополнения:", "Расходы:")
+
+
+class TBankStatementParser:
+    """Детерминированный парсер «Справки о движении средств» Т-Банка."""
+
+    name = "tbank_statement"
+
+    def detect(self, lines: list[str]) -> bool:
+        # узнаём формат по устойчивым маркерам шапки/футера справки
+        text = "\n".join(lines)
+        return any(marker in text for marker in TBANK_MARKERS)
+
+    def parse(self, lines: list[str]) -> ParsedStatement:
+        return parse_statement(lines)
