@@ -16,10 +16,19 @@ const preview: ImportPreview = {
   total_expense: '1150.0000',
 }
 
-function renderPanel(onImport: () => void) {
+function renderPanel(
+  onImport: () => void,
+  extra: { parser?: string | null; warnings?: string[] } = {},
+) {
   return render(
     <MantineProvider>
-      <ImportPreviewPanel preview={preview} importing={false} imported={null} onImport={onImport} />
+      <ImportPreviewPanel
+        preview={preview}
+        parser={extra.parser ?? null}
+        warnings={extra.warnings ?? []}
+        importing={false}
+        onImport={onImport}
+      />
     </MantineProvider>,
   )
 }
@@ -36,4 +45,10 @@ test('кнопка импорта зовёт onImport', async () => {
   renderPanel(onImport)
   await userEvent.click(screen.getByRole('button', { name: /Импортировать/ }))
   expect(onImport).toHaveBeenCalled()
+})
+
+test('показывает бейдж AI-разбора и предупреждение', () => {
+  renderPanel(vi.fn(), { parser: 'llm', warnings: ['Контрольная сумма не сошлась'] })
+  expect(screen.getByText('AI-разбор')).toBeDefined()
+  expect(screen.getByText('Контрольная сумма не сошлась')).toBeDefined()
 })

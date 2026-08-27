@@ -2,7 +2,7 @@ import io
 import re
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from pypdf import PdfReader
 
@@ -125,3 +125,28 @@ def parse_statement(raw_lines: list[str]) -> ParsedStatement:
     if not operations:
         raise StatementParseError("не найдено ни одной операции — неверный формат выписки")
     return ParsedStatement(operations, total_income, total_expense)
+
+
+TBANK_HEADER_MARKER = "Движение средств за период"
+TBANK_FOOTER_MARKERS = ("Пополнения:", "Расходы:")
+
+
+class TBankStatementParser:
+    """Детерминированный парсер «Справки о движении средств» Т-Банка."""
+
+    name = "tbank_statement"
+
+    def detect(self, lines: list[str]) -> bool:
+        # склейка через пробел: pypdf рвёт заголовок на строки, для поиска подстроки
+        # переносы значения не несут
+        text = " ".join(lines)
+        # заголовок либо оба итога сразу: одиночное «Расходы:» встречается и у чужих
+        # банков, а частичный разбор чужой выписки хуже, чем уход в LLM-фолбэк
+        return TBANK_HEADER_MARKER in text or all(m in text for m in TBANK_FOOTER_MARKERS)
+
+    def parse(self, lines: list[str]) -> ParsedStatement:
+        try:
+            return parse_statement(lines)
+        except (ValueError, InvalidOperation) as exc:
+            # формат похож по маркерам, но строки не разобрались — отдаём фолбэку
+            raise StatementParseError("формат похож, но строки не разобрались") from exc

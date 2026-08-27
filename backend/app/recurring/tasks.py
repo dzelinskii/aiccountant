@@ -2,7 +2,7 @@ import asyncio
 from datetime import UTC, datetime
 
 from app.core.celery_app import celery_app
-from app.core.db import session_factory
+from app.core.db import worker_session_factory
 from app.recurring import service
 
 
@@ -14,6 +14,6 @@ def scan_due() -> int:
 
 
 async def _scan() -> int:
-    async with session_factory() as db:
+    async with worker_session_factory() as db:
         today = datetime.now(UTC).date()
         return await service.process_due_rules(db, today)

@@ -5,7 +5,7 @@ import structlog
 
 from app.ai.client import build_llm_client
 from app.core.celery_app import celery_app
-from app.core.db import session_factory
+from app.core.db import worker_session_factory
 from app.core.settings import get_settings
 from app.ledger import categorization
 
@@ -23,7 +23,7 @@ async def _run(workspace_id: uuid.UUID) -> int:
     settings = get_settings()
     llm = build_llm_client()
     logger.info("categorize_workspace_started", workspace_id=str(workspace_id))
-    async with session_factory() as db:
+    async with worker_session_factory() as db:
         processed = await categorization.categorize_uncategorized(
             db,
             workspace_id,

@@ -1,6 +1,9 @@
 import io
+from collections.abc import Awaitable, Callable
 
 from reportlab.pdfgen import canvas
+
+from app.imports.parser import ParsedStatement
 
 
 def make_simple_pdf(lines: list[str]) -> bytes:
@@ -15,3 +18,15 @@ def make_simple_pdf(lines: list[str]) -> bytes:
         y -= 16
     pdf.save()
     return buf.getvalue()
+
+
+def fixed_parse(
+    statement: ParsedStatement, name: str
+) -> Callable[[list[str]], Awaitable[tuple[ParsedStatement, str]]]:
+    """Колбэк разбора с заранее известным результатом — разбор в бою асинхронный
+    (LLM ходит по сети), в тестах результат подставляем напрямую, не гоняя парсер."""
+
+    async def _parse(lines: list[str]) -> tuple[ParsedStatement, str]:
+        return statement, name
+
+    return _parse

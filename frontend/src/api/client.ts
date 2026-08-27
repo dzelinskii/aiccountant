@@ -23,7 +23,7 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
 
 // FastAPI отдаёт detail строкой (наши HTTPException) либо массивом объектов
 // (ошибки валидации Pydantic, 422) — приводим к читаемой строке
-function detailToMessage(detail: unknown): string | undefined {
+export function detailToMessage(detail: unknown): string | undefined {
   if (typeof detail === 'string') return detail
   if (Array.isArray(detail)) {
     return detail.map((e) => (e as { msg?: string }).msg ?? String(e)).join('; ')
