@@ -13,6 +13,7 @@ from app.imports.llm_parser import StatementTooLargeError
 from app.imports.models import Import
 from app.imports.parser import ParsedOperation, ParsedStatement, StatementParseError
 from app.imports.schemas import (
+    BANK_EXTERNAL_ID_PREFIX,
     ImportOperationOut,
     ImportPreviewOut,
     ImportResultOut,
@@ -54,11 +55,16 @@ def _external_ids(account_id: uuid.UUID, operations: list[ParsedOperation]) -> l
 def _payload_external_ids(
     payload: dict[str, object], account_id: uuid.UUID, operations: list[ParsedOperation]
 ) -> list[str]:
-    """Идентификаторы для дедупа: от банка, если он их дал, иначе наш хеш."""
+    """Идентификаторы для дедупа: от банка, если он их дал, иначе наш хеш.
+    Список пишем сами (create_parsed_import); если ключ есть, но битый — это
+    порча данных, а не законный случай, и должна падать так же, как остальная
+    порча parsed_payload в _payload_to_statement, а не тихо откатываться на хеш."""
     stored = payload.get("external_ids")
-    if isinstance(stored, list) and len(stored) == len(operations):
-        return [str(x) for x in stored]
-    return _external_ids(account_id, operations)
+    if stored is None:
+        return _external_ids(account_id, operations)
+    if not isinstance(stored, list) or len(stored) != len(operations):
+        raise StatementParseError("повреждён сохранённый разбор выписки")
+    return [str(x) for x in stored]
 
 
 def _statement_to_payload(statement: ParsedStatement, warnings: list[str]) -> dict[str, object]:
@@ -181,9 +187,10 @@ async def create_parsed_import(
         total_expense=None,
     )
     # идентификаторы от банка кладём в payload сразу: дописывать в уже
-    # присвоенный JSONB нельзя — SQLAlchemy не отследит правку на месте
+    # присвоенный JSONB нельзя — SQLAlchemy не отследит правку на месте.
+    # Префикс отделяет их пространство от наших sha256-хешей (см. BANK_EXTERNAL_ID_PREFIX)
     payload = _statement_to_payload(statement, [])
-    payload["external_ids"] = [op.external_id for op in operations]
+    payload["external_ids"] = [BANK_EXTERNAL_ID_PREFIX + op.external_id for op in operations]
 
     imp = Import(
         workspace_id=workspace_id,
@@ -198,6 +205,7 @@ async def create_parsed_import(
     )
     repository.add_import(db, imp)
     await db.commit()
+    logger.info("parsed_import_created", import_id=str(imp.id), operations=len(operations))
     return imp
 
 
@@ -277,9 +285,12 @@ async def _build_preview(
     db: AsyncSession,
     workspace_id: uuid.UUID,
     account_id: uuid.UUID,
-    statement: ParsedStatement,
     payload: dict[str, object],
 ) -> ImportPreviewOut:
+    # statement выводим из того же payload, что и id для дедупа — раньше их
+    # передавали отдельными параметрами, и вызывающий код мог по ошибке
+    # рассинхронизировать пару (statement из одного payload, id из другого)
+    statement = _payload_to_statement(payload)
     ext_ids = _payload_external_ids(payload, account_id, statement.operations)
     existing = await ledger_service.existing_external_ids(
         db, workspace_id, account_id, set(ext_ids)
@@ -323,8 +334,7 @@ async def get_import_status(
         raw_warnings = payload.get("warnings")
         warnings_list = raw_warnings if isinstance(raw_warnings, list) else []
         warnings = [str(w) for w in warnings_list]
-        statement = _payload_to_statement(payload)
-        preview = await _build_preview(db, workspace_id, imp.account_id, statement, payload)
+        preview = await _build_preview(db, workspace_id, imp.account_id, payload)
     return ImportStatusOut(
         import_id=imp.id,
         # значение — из закрытого набора, который сами же и пишем в run_parse/commit_from_import

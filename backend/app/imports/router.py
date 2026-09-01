@@ -73,7 +73,7 @@ async def start_import(
     return ImportStartedOut(import_id=imp.id, status=cast(ImportStatus, imp.status))
 
 
-@router.post("/imports/parsed")
+@router.post("/imports/parsed", status_code=201)
 async def create_parsed_import(
     payload: ParsedImportIn,
     workspace_id: uuid.UUID,
@@ -81,8 +81,14 @@ async def create_parsed_import(
     user: Annotated[User, Depends(require_workspace_member)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ImportStartedOut:
-    if not await ledger_service.account_exists(db, workspace_id, account_id):
+    currency = await ledger_service.get_account_currency(db, workspace_id, account_id)
+    if currency is None:
         raise HTTPException(status_code=404, detail="Счёт не найден")
+    if any(op.currency != currency for op in payload.operations):
+        # молча создавать операции в валюте счёта, показывая клиенту превью в его
+        # валюте — вводит в заблуждение; при рассинхроне настройки коллектора лучше
+        # явный отказ, чем неверная сумма после коммита
+        raise HTTPException(status_code=422, detail="Валюта операции не совпадает с валютой счёта")
     imp = await service.create_parsed_import(
         db, workspace_id, account_id, user.id, payload.parser, payload.operations
     )
