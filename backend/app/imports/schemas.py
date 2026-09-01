@@ -85,6 +85,17 @@ class ParsedOperationIn(BaseModel):
     # добавляем сами при сохранении, длину здесь ограничиваем с запасом под него
     external_id: str = Field(min_length=1, max_length=64 - len(BANK_EXTERNAL_ID_PREFIX))
 
+    @field_validator("amount", mode="before")
+    @classmethod
+    def _amount_not_float(cls, value: object) -> object:
+        if isinstance(value, float):
+            # к моменту валидации разряды уже потеряны: 12345678901234.5678
+            # приходит как 12345678901234.568, и починить это здесь нечем.
+            # На проводе сумма — строка, как и везде в проекте (тот же приём —
+            # parse_float=Decimal в app/imports/llm_parser.py)
+            raise ValueError("сумма должна быть строкой, а не числом JSON")
+        return value
+
     @field_validator("amount")
     @classmethod
     def _amount_not_zero(cls, value: Decimal) -> Decimal:
@@ -100,9 +111,16 @@ class ParsedOperationIn(BaseModel):
         return _reject_control_chars(value)
 
 
+# десять лет истории по счёту — это порядка 8000 операций одним ответом банка,
+# так что запас втрое покрывает первичный импорт с большим окном. Верхняя
+# граница нужна затем же, зачем MAX_UPLOAD_BYTES у загрузки файла: тело
+# читается в память целиком, и предсказуемость важнее гостеприимства
+MAX_PARSED_OPERATIONS = 25_000
+
+
 class ParsedImportIn(BaseModel):
     parser: str = Field(min_length=1, max_length=30, pattern=r"^[a-z0-9_]+$")
-    operations: list[ParsedOperationIn] = Field(min_length=1)
+    operations: list[ParsedOperationIn] = Field(min_length=1, max_length=MAX_PARSED_OPERATIONS)
 
     @model_validator(mode="after")
     def _unique_external_ids(self) -> "ParsedImportIn":

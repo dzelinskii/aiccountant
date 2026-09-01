@@ -1,3 +1,4 @@
+import json
 import uuid
 
 import pytest
@@ -7,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.imports import service
 from app.imports.models import Import
 from app.imports.parser import StatementParseError
+from app.imports.schemas import MAX_PARSED_OPERATIONS
 
 ALICE = {"email": "alice@example.com", "password": "password123"}
 BOB = {"email": "bob@example.com", "password": "password123"}
@@ -217,6 +219,34 @@ async def test_empty_operations_rejected(client: AsyncClient) -> None:
         "/api/imports/parsed",
         params={"workspace_id": ws, "account_id": acc},
         json={"parser": "tbank_collector", "operations": []},
+    )
+    assert resp.status_code == 422
+
+
+async def test_float_amount_rejected(client: AsyncClient) -> None:
+    """Число JSON вместо строки теряет разряды ещё до валидации — отвергаем на входе."""
+    ws, acc = await _ws_and_account(client)
+    resp = await client.post(
+        "/api/imports/parsed",
+        params={"workspace_id": ws, "account_id": acc},
+        content=json.dumps(
+            {
+                "parser": "tbank_collector",
+                "operations": [{**OPS[0], "amount": 12345678901234.5678}],
+            }
+        ),
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code == 422
+
+
+async def test_too_many_operations_rejected(client: AsyncClient) -> None:
+    ws, acc = await _ws_and_account(client)
+    operations = [{**OPS[0], "external_id": f"op-{i}"} for i in range(MAX_PARSED_OPERATIONS + 1)]
+    resp = await client.post(
+        "/api/imports/parsed",
+        params={"workspace_id": ws, "account_id": acc},
+        json={"parser": "tbank_collector", "operations": operations},
     )
     assert resp.status_code == 422
 
