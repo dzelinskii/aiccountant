@@ -43,6 +43,20 @@
       "amount": { "value": 99.99, "currency": { "code": 643, "name": "RUB", "strCode": "643" } },
       "accountAmount": { "value": 99.99, "currency": { "code": 643, "name": "RUB", "strCode": "643" } },
       "description": "Неуспешная операция"
+    },
+    {
+      "id": "op-4",
+      "status": "OK",
+      "type": "Credit",
+      "group": "INCOME",
+      "isInner": false,
+      "account": "acc-1",
+      "operationTime": { "milliseconds": 1783641600000 },
+      "debitingTime": { "milliseconds": 1783641600000 },
+      "amount": { "value": 123456789012345.6789, "currency": { "code": 643, "name": "RUB", "strCode": "643" } },
+      "accountAmount": { "value": 123456789012345.6789, "currency": { "code": 643, "name": "RUB", "strCode": "643" } },
+      "description": "Крупный перевод",
+      "category": { "id": "cat-transfer", "name": "Переводы" }
     }
   ]
 }

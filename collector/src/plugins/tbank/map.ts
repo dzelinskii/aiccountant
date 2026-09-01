@@ -6,6 +6,13 @@ import type { CollectedAccount, CollectedOperation } from './types'
  * пути (правило проекта — деньги никогда не проходят через float). Дата —
  * исключение: миллисекунды с эпохи на много порядков меньше
  * Number.MAX_SAFE_INTEGER, точность там не теряется.
+ *
+ * Отдельный принцип: запись, у которой есть id и статус OK (то есть банк
+ * считает её нашей операцией), но которую мы не можем разобрать — не
+ * пропускаем молча, а бросаем исключение. Тихий пропуск неотличим по счётчику
+ * от «пришло 8285, отдали 8285»: банк переименует поле — и весь сбор
+ * отрапортует успехом с пустым импортом. Единственный намеренный тихий
+ * фильтр — status !== "OK": это не наши деньги, а не непонятный ответ банка.
  */
 export function toOperations(raw: readonly unknown[]): CollectedOperation[] {
   const result: CollectedOperation[] = []
@@ -17,31 +24,30 @@ export function toOperations(raw: readonly unknown[]): CollectedOperation[] {
 }
 
 export function toAccounts(raw: readonly unknown[]): CollectedAccount[] {
-  const result: CollectedAccount[] = []
-  for (const item of raw) {
-    const account = toAccount(item)
-    if (account) result.push(account)
-  }
-  return result
+  return raw.map(toAccount)
 }
 
 function toOperation(item: unknown): CollectedOperation | null {
-  if (!isRecord(item)) return null
+  if (!isRecord(item)) {
+    throw new Error('Операция в ответе банка пришла не объектом')
+  }
+  const status = getStr(item, 'status')
+  if (status !== 'OK') return null // намеренно: FAILED и подобные — не наши деньги, а не сбой разбора
+
   const id = getStr(item, 'id')
-  if (!id) return null
-  if (getStr(item, 'status') !== 'OK') return null
+  if (!id) throw new Error('У операции банка со статусом OK нет id')
+  const context = `Операция ${id}`
 
   const operationTime = getRecord(item, 'operationTime')
   const millis = operationTime ? toMillis(operationTime['milliseconds']) : undefined
-  if (millis === undefined) return null
+  if (millis === undefined) throw new Error(`${context}: не удалось разобрать дату операции`)
 
   const accountAmount = getRecord(item, 'accountAmount')
   const rawValue = accountAmount ? toAmountString(accountAmount['value']) : undefined
-  if (rawValue === undefined) return null
+  if (rawValue === undefined) throw new Error(`${context}: не удалось разобрать сумму операции`)
 
   const type = getStr(item, 'type') ?? ''
   const currencyRecord = accountAmount ? getRecord(accountAmount, 'currency') : undefined
-  const strCode = currencyRecord ? getStr(currencyRecord, 'strCode') : undefined
 
   const merchant = getRecord(item, 'merchant')
   const merchantName = merchant ? getStr(merchant, 'name') : undefined
@@ -49,48 +55,107 @@ function toOperation(item: unknown): CollectedOperation | null {
 
   return {
     occurred_at: formatDate(millis),
-    amount: withSign(rawValue, type),
-    currency: strCode ? mapCurrency(strCode) : 'RUB',
-    description: description && description.length > 0 ? description : (merchantName ?? ''),
+    amount: signedAmount(rawValue, type, context),
+    currency: resolveCurrency(currencyRecord, context),
+    description: limitDescription(description && description.length > 0 ? description : (merchantName ?? '')),
     external_id: id,
   }
 }
 
-function toAccount(item: unknown): CollectedAccount | null {
-  if (!isRecord(item)) return null
+function toAccount(item: unknown): CollectedAccount {
+  if (!isRecord(item)) {
+    throw new Error('Счёт в ответе банка пришёл не объектом')
+  }
   const id = getStr(item, 'id')
-  if (!id) return null
+  if (!id) throw new Error('У счёта банка нет id')
+  const context = `Счёт ${id}`
 
   const currencyRecord = getRecord(item, 'currency')
-  const strCode = currencyRecord ? getStr(currencyRecord, 'strCode') : undefined
 
   return {
     id,
     name: getStr(item, 'name') ?? '',
     type: getStr(item, 'accountType') ?? '',
-    currency: strCode ? mapCurrency(strCode) : 'RUB',
+    currency: resolveCurrency(currencyRecord, context),
   }
 }
 
-// Знак — только по type: банк отдаёт value беззнаковой величиной что для
-// Credit, что для Debit, минус в самом value ниоткуда не берётся
-function withSign(value: string, type: string): string {
-  return type === 'Debit' ? `-${value}` : value
+// Бэкенд (ParsedOperationIn._amount_not_zero, backend/app/imports/schemas.py)
+// отдельно отвергает нулевую сумму, а "--5" от двойного знака уронит decimal_parsing.
+// ParsedImportIn.operations — список, pydantic валидирует его целиком, поэтому
+// одна такая запись даёт 422 на весь запрос — тысячи нормальных операций
+// до бэкенда в этом случае не доедут. Дешевле отсечь на своей стороне
+function signedAmount(rawValue: string, type: string, context: string): string {
+  if (rawValue.startsWith('-')) {
+    // По нашим наблюдениям банк всегда отдаёт value беззнаковой величиной,
+    // знак — отдельно, в type. Возвраты и отмены — как раз то место, где
+    // это предположение о чужом API может однажды не подтвердиться. Если
+    // угадать знак неправильно, "--5" на бэкенде превратится в decimal_parsing
+    // и уронит всю пачку операций — лучше остановиться и разобраться руками
+    throw new Error(`${context}: сумма от банка пришла уже со знаком ("${rawValue}") — не ожидали`)
+  }
+  if (type !== 'Debit' && type !== 'Credit') {
+    // Неизвестный type молча трактовать как доход нельзя: "Transfer" или
+    // отсутствующее поле дали бы положительную сумму, и расход записался бы
+    // в леджер как приход
+    throw new Error(`${context}: неизвестный тип операции "${type}" (ожидался Credit или Debit)`)
+  }
+  if (isZeroAmount(rawValue)) {
+    throw new Error(`${context}: нулевая сумма операции — бэкенд её не примет`)
+  }
+  return type === 'Debit' ? `-${rawValue}` : rawValue
 }
 
-// Транслируем только цифровой ISO-код рубля — это единственная валюта, с
-// которой сегодня реально работает приложение. Для остальных кодов отдаём
-// strCode как есть, а не молча подменяем на RUB: так рассинхронизация видна
-// сразу (например, в проверке на границе бэкенда), а не прячется в отчётах
-function mapCurrency(strCode: string): string {
-  return strCode === '643' ? 'RUB' : strCode
+// "0", "0.0", "0.00" — численно ноль независимо от числа нулей после точки;
+// строковым сравнением с одним литералом это не поймать
+function isZeroAmount(value: string): boolean {
+  return /^0(\.0+)?$/.test(value)
+}
+
+const MAX_DESCRIPTION_LENGTH = 1000 // ровно предел ParsedOperationIn.description на бэкенде
+
+function limitDescription(value: string): string {
+  return value.length > MAX_DESCRIPTION_LENGTH ? value.slice(0, MAX_DESCRIPTION_LENGTH) : value
+}
+
+const ALPHA3_CURRENCY = /^[A-Za-z]{3}$/
+// Подтверждено разведкой только про рубль; остальные коды маппить не на чем
+const KNOWN_NUMERIC_CURRENCIES: Record<string, string> = { '643': 'RUB' }
+
+// Разведка живого ЛК сняла только имена полей currency, не значения — что
+// именно лежит в strCode (буквенный код по конвенции имени или числовой ISO
+// 4217 код) наверняка неизвестно. Поэтому проверяем оба поля (strCode и name)
+// и оба формата. Числовой код, которого нет в KNOWN_NUMERIC_CURRENCIES,
+// намеренно не подставляем как есть: бэкенд сверяет currency операции с
+// currency счёта (backend/app/imports/router.py), а счета заводятся
+// буквенными кодами ("RUB") — числовой код там не совпадёт ни с чем и уронит
+// 422 на весь запрос с сообщением про "несовпадение валюты счёта", хотя
+// причина на самом деле в формате кода. Явная ошибка здесь укажет на
+// настоящую причину сразу, а не после похода на бэкенд
+function resolveCurrency(currency: Record<string, unknown> | undefined, context: string): string {
+  const candidates = currency ? [getStr(currency, 'strCode'), getStr(currency, 'name')] : []
+  for (const candidate of candidates) {
+    if (candidate && ALPHA3_CURRENCY.test(candidate)) return candidate.toUpperCase()
+  }
+  for (const candidate of candidates) {
+    if (candidate && /^\d+$/.test(candidate)) {
+      const known = KNOWN_NUMERIC_CURRENCIES[candidate]
+      if (known) return known
+      throw new Error(`${context}: неизвестный числовой код валюты "${candidate}"`)
+    }
+  }
+  throw new Error(`${context}: не удалось распознать валюту`)
 }
 
 // Банк показывает операции по московскому времени (это видно и по его же
 // запросам — фронт передаёт timeZone=+03:00), а дашборд считает статистику по
 // календарному месяцу. Дата в UTC для ночной операции могла бы уехать на
-// предыдущие сутки, а на границе месяца — ещё и исказить месячную статистику
-const MOSCOW_DATE = new Intl.DateTimeFormat('en-CA', {
+// предыдущие сутки, а на границе месяца — ещё и исказить месячную статистику.
+// en-CA гарантированно даёт формат ГГГГ-ММ-ДД только при наличии данных этой
+// локали в рантайме — на урезанном ICU (в том числе в мобильных движках) он
+// молча откатывается на другой формат, который бэкенд отвергнет. formatToParts
+// не зависит от локали вообще, только от порядка полей, который мы задаём сами
+const MOSCOW_PARTS = new Intl.DateTimeFormat('en-US', {
   timeZone: 'Europe/Moscow',
   year: 'numeric',
   month: '2-digit',
@@ -98,29 +163,48 @@ const MOSCOW_DATE = new Intl.DateTimeFormat('en-CA', {
 })
 
 function formatDate(millis: number): string {
-  return MOSCOW_DATE.format(new Date(millis))
+  const parts = MOSCOW_PARTS.formatToParts(new Date(millis))
+  const year = partValue(parts, 'year')
+  const month = partValue(parts, 'month')
+  const day = partValue(parts, 'day')
+  return `${year}-${month}-${day}`
 }
+
+function partValue(parts: Intl.DateTimeFormatPart[], type: Intl.DateTimeFormatPartTypes): string {
+  const part = parts.find((p) => p.type === type)
+  if (!part) throw new Error(`Не удалось получить часть даты "${type}"`)
+  return part.value
+}
+
+// ECMA-262: максимальное валидное время для Date — за этой границей
+// new Date(millis) создаёт "Invalid Date", а форматирование такой даты
+// бросает RangeError без указания, какая операция тому виной
+const MAX_VALID_MILLIS = 8_640_000_000_000_000
 
 function toMillis(value: unknown): number | undefined {
-  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined
-  if (typeof value === 'string') {
+  if (typeof value === 'number') return isValidMillis(value) ? value : undefined
+  if (typeof value === 'string' && value.trim() !== '') {
     const num = Number(value)
-    return Number.isFinite(num) ? num : undefined
+    return isValidMillis(num) ? num : undefined
   }
+  // пустая строка отдельно: Number('') === 0 молча дал бы 1970-01-01
   return undefined
 }
 
-// В отличие от даты, сумму числом никогда не делаем — только строка на всём
-// пути. Ветка для number оставлена на случай вызова функции напрямую с уже
-// разобранным (не через parseLossless) объектом; боевой путь идёт строкой
+function isValidMillis(value: number): boolean {
+  return Number.isFinite(value) && Math.abs(value) <= MAX_VALID_MILLIS
+}
+
+// Сумму числом никогда не делаем — только строка. Ветки для JS number здесь
+// нет: это тот самый баг, который весь модуль предотвращает (String(большое
+// число с плавающей точкой) уже потерял бы разряды до вызова этой функции) —
+// боевой путь всегда идёт строкой из parseLossless
 function toAmountString(value: unknown): string | undefined {
-  if (typeof value === 'string') return value
-  if (typeof value === 'number') return String(value)
-  return undefined
+  return typeof value === 'string' ? value : undefined
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function getStr(record: Record<string, unknown>, key: string): string | undefined {
