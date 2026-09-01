@@ -262,6 +262,28 @@ async def test_currency_mismatch_rejected(client: AsyncClient) -> None:
     assert resp.status_code == 422
 
 
+async def test_currency_check_is_case_insensitive(client: AsyncClient) -> None:
+    # AccountCreate регистр валюты не нормализует — счёт "rub" и операция "RUB"
+    # это одна и та же валюта, а не повод для 422
+    await client.post("/api/auth/register", json=ALICE)
+    me = await client.get("/api/me")
+    ws = str(me.json()["workspaces"][0]["id"])
+    acc = (
+        await client.post(
+            "/api/accounts",
+            params={"workspace_id": ws},
+            json={"name": "Карта", "type": "card", "currency": "rub"},
+        )
+    ).json()["id"]
+
+    resp = await client.post(
+        "/api/imports/parsed",
+        params={"workspace_id": ws, "account_id": acc},
+        json={"parser": "tbank_collector", "operations": OPS},
+    )
+    assert resp.status_code == 201
+
+
 async def test_corrupted_external_ids_raises(client: AsyncClient, db_session: AsyncSession) -> None:
     """external_ids в payload пишем сами (create_parsed_import) — несовпадение длины
     с operations означает порчу данных и должно падать явно, а не тихо
@@ -275,6 +297,9 @@ async def test_corrupted_external_ids_raises(client: AsyncClient, db_session: As
     imp = await db_session.get(Import, uuid.UUID(started.json()["import_id"]))
     assert imp is not None
     assert isinstance(imp.parsed_payload, dict)
+    # префикс отделяет id банка от наших sha256-хешей (см. BANK_EXTERNAL_ID_PREFIX) —
+    # инвариант держится и на длине поля в схеме, но здесь фиксируем сам факт
+    assert imp.parsed_payload["external_ids"] == ["bank:bank-op-1", "bank:bank-op-2"]
     external_ids = imp.parsed_payload["external_ids"]
     assert isinstance(external_ids, list)
     payload = dict(imp.parsed_payload)

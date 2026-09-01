@@ -84,10 +84,10 @@ async def create_parsed_import(
     currency = await ledger_service.get_account_currency(db, workspace_id, account_id)
     if currency is None:
         raise HTTPException(status_code=404, detail="Счёт не найден")
-    if any(op.currency != currency for op in payload.operations):
-        # молча создавать операции в валюте счёта, показывая клиенту превью в его
-        # валюте — вводит в заблуждение; при рассинхроне настройки коллектора лучше
-        # явный отказ, чем неверная сумма после коммита
+    if any(op.currency.upper() != currency.upper() for op in payload.operations):
+        # регистр не нормализуем нигде на пути счёта (AccountCreate его не приводит),
+        # поэтому сравниваем без учёта регистра — иначе счёт "rub" вводит в заблуждение
+        # отказом коллектору, который прислал "RUB", хотя валюта та же самая
         raise HTTPException(status_code=422, detail="Валюта операции не совпадает с валютой счёта")
     imp = await service.create_parsed_import(
         db, workspace_id, account_id, user.id, payload.parser, payload.operations
