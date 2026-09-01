@@ -4,13 +4,19 @@
       "error",
       {
         "name": "fetch",
-        "message": "Сетевые запросы идут только через AllowlistClient (src/http/) — иначе allowlist перестаёт быть проверяемой гарантией."
+        "message": "Сетевые запросы идут только через AllowlistClient (src/http/) — иначе allowlist перестаёт быть проверяемой гарантией. Единственное исключение — src/runner/push.ts: allowlist закрывает утечку токена банка на чужой хост, а туда уходит токен нашего приложения на наш же адрес из конфига, который не приходит из ответов банка."
       }
     ]
   },
   "overrides": [
     {
       "files": ["src/http/**"],
+      "rules": {
+        "no-restricted-globals": "off"
+      }
+    },
+    {
+      "files": ["src/runner/push.ts"],
       "rules": {
         "no-restricted-globals": "off"
       }
