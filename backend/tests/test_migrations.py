@@ -90,3 +90,16 @@ async def test_migrations_add_import_async_columns(database_url: str) -> None:
         columns = {name for (name,) in rows.all()}
     await engine.dispose()
     assert {"parser", "parsed_payload", "error", "raw_text"} <= columns
+
+
+async def test_migrations_create_api_tokens(database_url: str) -> None:
+    engine = create_async_engine(database_url)
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns WHERE table_name = 'api_tokens'"
+            )
+        )
+        columns = {name for (name,) in rows.all()}
+    await engine.dispose()
+    assert {"id", "workspace_id", "name", "token_hash", "revoked_at"} <= columns
