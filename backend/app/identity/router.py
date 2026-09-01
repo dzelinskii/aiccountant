@@ -13,6 +13,7 @@ from app.identity.deps import (
     SESSION_COOKIE,
     get_current_user,
     require_owner,
+    require_session_user,
     require_workspace_member,
 )
 from app.identity.models import User
@@ -126,6 +127,7 @@ async def create_token(
     payload: ApiTokenCreate,
     workspace_id: uuid.UUID,
     user: Annotated[User, Depends(require_workspace_member)],
+    _session: Annotated[User, Depends(require_session_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ApiTokenCreated:
     api_token, token = await service.create_api_token(db, workspace_id, user.id, payload.name)
@@ -142,6 +144,7 @@ async def create_token(
 async def list_tokens(
     workspace_id: uuid.UUID,
     _user: Annotated[User, Depends(require_workspace_member)],
+    _session: Annotated[User, Depends(require_session_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> list[ApiTokenOut]:
     rows = await service.list_api_tokens(db, workspace_id)
@@ -153,6 +156,7 @@ async def revoke_token(
     token_id: uuid.UUID,
     workspace_id: uuid.UUID,
     _user: Annotated[User, Depends(require_workspace_member)],
+    _session: Annotated[User, Depends(require_session_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> None:
     if not await service.revoke_api_token(db, workspace_id, token_id):

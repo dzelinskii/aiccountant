@@ -1,5 +1,6 @@
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.requests import Request
 
 from app.identity.deps import require_workspace_member
 from app.identity.models import Membership, User, Workspace
@@ -17,7 +18,10 @@ async def test_require_workspace_member_binds_log_context(db_session: AsyncSessi
     await db_session.flush()
 
     structlog.contextvars.clear_contextvars()
-    returned = await require_workspace_member(workspace.id, user, db_session)
+    # вызываем зависимость напрямую, минуя FastAPI — нужен минимальный Request
+    # только для request.state, который проверяет область действия токена
+    request = Request({"type": "http"})
+    returned = await require_workspace_member(request, workspace.id, user, db_session)
 
     assert returned is user
     bound = structlog.contextvars.get_contextvars()
