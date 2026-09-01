@@ -1,11 +1,13 @@
 import uuid
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import hash_password, verify_password
-from app.identity.models import Membership, User, Workspace
+from app.identity.models import ApiToken, Membership, User, Workspace
+from app.identity.tokens import generate_token, hash_token
 
 DEFAULT_WORKSPACE_NAME = "Домохозяйство"
 
@@ -78,3 +80,50 @@ async def invite_member(db: AsyncSession, workspace_id: uuid.UUID, email: str) -
         await db.rollback()
         raise AlreadyMemberError from exc
     return membership
+
+
+async def user_by_api_token(db: AsyncSession, token: str) -> User | None:
+    """Найти владельца действующего токена. Ищем по хешу — одним запросом по индексу."""
+    api_token = await db.scalar(
+        select(ApiToken).where(
+            ApiToken.token_hash == hash_token(token), ApiToken.revoked_at.is_(None)
+        )
+    )
+    if api_token is None:
+        return None
+    api_token.last_used_at = datetime.now(UTC)
+    await db.commit()
+    return await db.get(User, api_token.created_by)
+
+
+async def create_api_token(
+    db: AsyncSession, workspace_id: uuid.UUID, user_id: uuid.UUID, name: str
+) -> tuple[ApiToken, str]:
+    """Вернуть запись и сам токен — показать его можно только сейчас."""
+    token = generate_token()
+    api_token = ApiToken(
+        workspace_id=workspace_id, created_by=user_id, name=name, token_hash=hash_token(token)
+    )
+    db.add(api_token)
+    await db.commit()
+    return api_token, token
+
+
+async def list_api_tokens(db: AsyncSession, workspace_id: uuid.UUID) -> list[ApiToken]:
+    rows = await db.execute(
+        select(ApiToken)
+        .where(ApiToken.workspace_id == workspace_id, ApiToken.revoked_at.is_(None))
+        .order_by(ApiToken.created_at.desc())
+    )
+    return list(rows.scalars().all())
+
+
+async def revoke_api_token(db: AsyncSession, workspace_id: uuid.UUID, token_id: uuid.UUID) -> bool:
+    api_token = await db.scalar(
+        select(ApiToken).where(ApiToken.id == token_id, ApiToken.workspace_id == workspace_id)
+    )
+    if api_token is None:
+        return False
+    api_token.revoked_at = datetime.now(UTC)
+    await db.commit()
+    return True

@@ -2,12 +2,13 @@ import uuid
 from typing import Annotated
 
 import structlog
-from fastapi import Cookie, Depends, HTTPException
+from fastapi import Cookie, Depends, Header, HTTPException
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
 from app.core.redis import get_redis
+from app.identity import service
 from app.identity.models import Membership, User
 from app.identity.sessions import get_session_user_id
 
@@ -18,7 +19,14 @@ async def get_current_user(
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],
     session: Annotated[str | None, Cookie()] = None,
+    authorization: Annotated[str | None, Header()] = None,
 ) -> User:
+    # программный доступ (коллектор, боты) — по токену; браузер — по куке сессии
+    if authorization and authorization.startswith("Bearer "):
+        user = await service.user_by_api_token(db, authorization.removeprefix("Bearer ").strip())
+        if user is None:
+            raise HTTPException(status_code=401, detail="Неверный токен")
+        return user
     if session is None:
         raise HTTPException(status_code=401, detail="Не авторизован")
     user_id = await get_session_user_id(redis, session)
