@@ -127,6 +127,14 @@ test('сумма, пришедшая уже со знаком, — явная о
   )
 })
 
+test('текст ошибки про знак не выдаёт саму сумму', () => {
+  // сообщения из ядра доходят до консоли, а суммам там не место: искать
+  // операцию нужно по идентификатору
+  const broken = baseOperation({ id: 'op-77', accountAmount: { value: '-4242.42', currency: { strCode: '643' } } })
+  expect(() => toOperations([broken])).toThrow(/op-77/)
+  expect(() => toOperations([broken])).not.toThrow(/4242\.42/)
+})
+
 test('нулевая сумма — явная ошибка, а не "-0" на проводе', () => {
   expect(() =>
     toOperations([baseOperation({ type: 'Debit', accountAmount: { value: '0', currency: { strCode: '643' } } })]),
