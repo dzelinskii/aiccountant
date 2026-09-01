@@ -1,0 +1,19 @@
+{
+  "rules": {
+    "no-restricted-globals": [
+      "error",
+      {
+        "name": "fetch",
+        "message": "Сетевые запросы идут только через AllowlistClient (src/http/) — иначе allowlist перестаёт быть проверяемой гарантией."
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": ["src/http/**"],
+      "rules": {
+        "no-restricted-globals": "off"
+      }
+    }
+  ]
+}

@@ -8,16 +8,29 @@ export function parseLossless(text: string): unknown {
   return JSON.parse(quoteNumbers(text))
 }
 
+// sticky-флаг: exec с lastIndex ищет совпадение строго с позиции i, не копируя
+// остаток текста — на счёте с тысячами операций текст.slice(i) на каждом
+// символе превращает разбор в квадратичный. Форма (0|[1-9]\d*), а не \d+,
+// заодно повторяет строгость JSON.parse: «01» числом не считается.
+const NUMBER = /-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?/y
+
 function quoteNumbers(text: string): string {
   let out = ''
   let i = 0
   let inString = false
+  // последний значимый (не форматирующий) символ уже собранного вывода;
+  // храним его явно вместо того, чтобы на каждом числе досканировать out
+  // до непробельного символа — это и была вторая причина квадратичности
+  let prev = ''
   while (i < text.length) {
     const ch = text[i]!
     if (inString) {
       out += ch
+      prev = ch
       if (ch === '\\') {
-        out += text[i + 1] ?? ''
+        const escaped = text[i + 1] ?? ''
+        out += escaped
+        if (escaped !== '') prev = escaped
         i += 2
         continue
       }
@@ -28,23 +41,33 @@ function quoteNumbers(text: string): string {
     if (ch === '"') {
       inString = true
       out += ch
+      prev = ch
       i += 1
       continue
     }
-    const num = /^-?\d+(\.\d+)?([eE][+-]?\d+)?/.exec(text.slice(i))
-    if (num && isValuePosition(out)) {
-      out += `"${num[0]}"`
-      i += num[0].length
+    NUMBER.lastIndex = i
+    const match = isValuePosition(prev) ? NUMBER.exec(text) : null
+    if (match) {
+      out += `"${match[0]}"`
+      prev = '"'
+      i += match[0].length
       continue
     }
     out += ch
+    if (!isWhitespace(ch)) prev = ch
     i += 1
   }
   return out
 }
 
-// число — значение, если перед ним двоеточие, запятая или открывающая скобка
-function isValuePosition(out: string): boolean {
-  const prev = out.replace(/\s+$/, '').slice(-1)
+function isWhitespace(ch: string): boolean {
+  return ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r'
+}
+
+// На валидном JSON эта проверка ни на что не влияет — число и так не может
+// оказаться не на своём месте. Она нужна для другого: без неё голый {1:2}
+// (число вместо строкового ключа) незаметно превратился бы в {"1":2} и прошёл
+// бы там, где обычный JSON.parse обязан отвергнуть вход.
+function isValuePosition(prev: string): boolean {
   return prev === ':' || prev === ',' || prev === '[' || prev === ''
 }

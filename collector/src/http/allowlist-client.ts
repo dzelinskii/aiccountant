@@ -9,10 +9,13 @@ interface Options {
   fetchImpl?: typeof fetch
 }
 
+const REQUEST_TIMEOUT_MS = 30_000
+
 /**
- * HTTP-клиент, который физически не способен на лишнее: только GET и только по
- * заранее перечисленным путям. Это не про доверие к коду, а про проверяемое
- * ограничение — «что коллектор может сделать» становится списком из пяти строк.
+ * HTTP-клиент, который физически не способен на лишнее: только GET, только по
+ * заранее перечисленным путям и без автоматического следования за редиректами.
+ * Это не про доверие к коду, а про проверяемое ограничение — «что коллектор
+ * может сделать» становится списком из пяти строк.
  */
 export class AllowlistClient {
   private readonly baseUrl: string
@@ -39,9 +42,35 @@ export class AllowlistClient {
     for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value)
     url.searchParams.set('sessionid', this.token)
 
-    const res = await this.fetchImpl(url, { method: 'GET' })
-    const text = await res.text()
+    const res = await this.request(url)
     if (!res.ok) throw new Error(`Банк ответил ${res.status}`)
-    return parseLossless(text)
+    const text = await res.text()
+    try {
+      return parseLossless(text)
+    } catch {
+      // тело ответа не пробрасываем: там операции и суммы, а не редкий повод
+      // для отладки. Частый источник таких сбоев — протухшая сессия, банк в
+      // этом случае вместо JSON отдаёт HTML-страницу логина
+      throw new Error(`Банк вернул не JSON (${text.length} байт)`)
+    }
+  }
+
+  // отдельная точка входа в сеть: fetchImpl — публичный параметр конструктора,
+  // и инструментированная или сторонняя реализация может положить URL
+  // (а в нём — токен в query) в текст собственной ошибки. Свою ошибку кладём
+  // поверх, не пробрасывая исходную as is
+  private async request(url: URL): Promise<Response> {
+    try {
+      return await this.fetchImpl(url, {
+        method: 'GET',
+        // без этого fetch по умолчанию молча следует за Location, в том числе
+        // на чужой origin — allowlist и проверка origin проверяются один раз,
+        // до запроса, и редирект их обходит
+        redirect: 'error',
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      })
+    } catch {
+      throw new Error('Запрос к банку не удался')
+    }
   }
 }
