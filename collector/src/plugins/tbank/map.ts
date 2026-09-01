@@ -86,8 +86,19 @@ function mapCurrency(strCode: string): string {
   return strCode === '643' ? 'RUB' : strCode
 }
 
+// Банк показывает операции по московскому времени (это видно и по его же
+// запросам — фронт передаёт timeZone=+03:00), а дашборд считает статистику по
+// календарному месяцу. Дата в UTC для ночной операции могла бы уехать на
+// предыдущие сутки, а на границе месяца — ещё и исказить месячную статистику
+const MOSCOW_DATE = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Europe/Moscow',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+})
+
 function formatDate(millis: number): string {
-  return new Date(millis).toISOString().slice(0, 10)
+  return MOSCOW_DATE.format(new Date(millis))
 }
 
 function toMillis(value: unknown): number | undefined {

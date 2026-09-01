@@ -48,6 +48,43 @@ test('дата берётся из operationTime, а не debitingTime', () => {
   expect(op1?.occurred_at).toBe('2026-07-06')
 })
 
+test('дата ночной операции считается по московскому времени, а не по UTC', () => {
+  // 2026-07-15T23:30:00Z — по UTC это ещё 15 июля, но по Москве (UTC+3)
+  // уже 2026-07-16T02:30:00. Наивный toISOString().slice(0,10) отдал бы
+  // '2026-07-15' — банк в своём приложении покажет '2026-07-16'
+  const raw = [
+    {
+      id: 'op-night',
+      status: 'OK',
+      type: 'Debit',
+      operationTime: { milliseconds: '1784158200000' },
+      accountAmount: { value: '100', currency: { strCode: '643' } },
+      description: 'Ночная операция',
+    },
+  ]
+  const [op] = toOperations(raw)
+  expect(op?.occurred_at).toBe('2026-07-16')
+})
+
+test('дата дневной операции совпадает и в UTC, и по Москве (контрольный случай)', () => {
+  // 2026-07-15T12:00:00Z = 2026-07-15T15:00:00 по Москве — обе зоны дают
+  // один и тот же календарный день, поэтому этот тест не тавтологичен
+  // предыдущему: он проверяет, что смещение применяется, а не «сдвигает
+  // всё подряд на день»
+  const raw = [
+    {
+      id: 'op-midday',
+      status: 'OK',
+      type: 'Debit',
+      operationTime: { milliseconds: '1784116800000' },
+      accountAmount: { value: '100', currency: { strCode: '643' } },
+      description: 'Дневная операция',
+    },
+  ]
+  const [op] = toOperations(raw)
+  expect(op?.occurred_at).toBe('2026-07-15')
+})
+
 test('external_id равен id операции банка', () => {
   const [op1, op2] = toOperations(operationsPayload())
   expect(op1?.external_id).toBe('op-1')
