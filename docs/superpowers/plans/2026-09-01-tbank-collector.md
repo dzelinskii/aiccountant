@@ -914,10 +914,37 @@ export class AllowlistClient {
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v)
     url.searchParams.set('sessionid', this.token)
 
-    const res = await this.fetchImpl(url, { method: 'GET' })
-    const text = await res.text()
-    if (!res.ok) throw new Error(`Банк ответил ${res.status}`)
-    return parseLossless(text)
+    // AbortSignal.timeout() держит таймер СЛАБОЙ ссылкой: созданный инлайн
+    // сигнал успевает умереть до чтения тела, и подвешенное тело зависает
+    // навсегда. Сохранить сигнал в переменной не спасает (V8 собирает по
+    // живости). Поэтому контроллер с таймером, снимаемым в finally
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+    let text: string
+    try {
+      // redirect: 'error' обязателен — иначе allowlist обходится: он проверяется
+      // ДО запроса, а ответ с Location уводит на любой origin вместе с токеном
+      const res = await this.fetchImpl(url, {
+        method: 'GET',
+        redirect: 'error',
+        signal: controller.signal,
+      })
+      if (!res.ok) throw new Error(`Банк ответил ${res.status}`)
+      text = await res.text()
+    } catch (e) {
+      if (e instanceof Error && e.message.startsWith('Банк ответил')) throw e
+      // сырую ошибку наружу не пускаем — в ней может быть URL с токеном
+      throw new Error('Не удалось получить ответ банка')
+    } finally {
+      clearTimeout(timer)
+    }
+    try {
+      return parseLossless(text)
+    } catch {
+      // текст ответа не пробрасываем: в нём описания операций и суммы, а на
+      // протухшей сессии банк возвращает HTML-страницу логина
+      throw new Error(`Банк вернул не JSON (${text.length} байт)`)
+    }
   }
 }
 ```
@@ -964,10 +991,16 @@ export function parseLossless(text: string): unknown {
   return JSON.parse(quoteNumbers(text))
 }
 
+// sticky-флаг: ищем ровно с позиции i, не нарезая строку. Строгость как у
+// JSON.parse — ведущие нули не принимаем, иначе битый ответ пройдёт молча
+const NUMBER = /-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?/y
+
 function quoteNumbers(text: string): string {
   let out = ''
   let i = 0
   let inString = false
+  // последний значимый символ вывода — по нему видно, что дальше идёт значение
+  let prev = ''
   while (i < text.length) {
     const ch = text[i]!
     if (inString) {
@@ -984,28 +1017,32 @@ function quoteNumbers(text: string): string {
     if (ch === '"') {
       inString = true
       out += ch
+      prev = '"'
       i += 1
       continue
     }
-    const rest = text.slice(i)
-    const num = /^-?\d+(\.\d+)?([eE][+-]?\d+)?/.exec(rest)
-    if (num && isValuePosition(out)) {
+    NUMBER.lastIndex = i
+    const num = NUMBER.exec(text)
+    // на валидном JSON цифра вне строки всегда начинает значение; проверка
+    // позиции нужна лишь чтобы мусор вроде {1:2} отвергался, как у JSON.parse
+    if (num && (prev === ':' || prev === ',' || prev === '[' || prev === '')) {
       out += `"${num[0]}"`
+      prev = '"'
       i += num[0].length
       continue
     }
     out += ch
+    if (ch !== ' ' && ch !== '\n' && ch !== '\t' && ch !== '\r') prev = ch
     i += 1
   }
   return out
 }
-
-// число — значение, если перед ним двоеточие, запятая или открывающая скобка
-function isValuePosition(out: string): boolean {
-  const prev = out.replace(/\s+$/, '').slice(-1)
-  return prev === ':' || prev === ',' || prev === '[' || prev === ''
-}
 ```
+
+**Осторожно, две ловушки, проверенные замерами и мутациями:**
+
+- Не пересканировать накопленный вывод ради определения позиции (`out.replace(/\s+$/,'')`) — разбор становится квадратичным: 12 000 операций разбираются **151 секунду** вместо долей. Помнить последний значимый символ в переменной `prev`.
+- Регекс со `y` (sticky) и `lastIndex`, а не `text.slice(i)` — нарезка строки на каждом числе тоже квадратична.
 
 - [ ] **Step 7: Прогнать и гейты**
 
