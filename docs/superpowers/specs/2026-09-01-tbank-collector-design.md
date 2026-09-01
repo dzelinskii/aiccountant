@@ -189,7 +189,11 @@ GET /mybank/api/operations/timeline/public/legacy/v1/operations_category_list_us
 Наш `ParsedOperation` — `occurred_at: date`, `amount: Decimal` (знаковая),
 `currency: str`, `description: str`. Правила:
 
-- `occurred_at` — дата из `operationTime` (совершение, не списание);
+- `occurred_at` — дата из `operationTime` (совершение, не списание), причём
+  вычисленная **в зоне Europe/Moscow**, а не в UTC: банк показывает операции по
+  Москве, и ночная операция в UTC уехала бы на предыдущий день, а на границе
+  месяца — ещё и в чужой месяц статистики расходов. Косвенное подтверждение —
+  фронт банка сам передаёт `timeZone=+03:00`;
 - `amount` — `accountAmount.value`, знак из `type`: `Debit` → отрицательная,
   `Credit` → положительная;
 - `currency` — `accountAmount.currency.strCode`;
