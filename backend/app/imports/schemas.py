@@ -1,5 +1,5 @@
 import uuid
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Literal
 
@@ -35,6 +35,16 @@ class ImportResultOut(BaseModel):
 class ImportStartedOut(BaseModel):
     import_id: uuid.UUID
     status: ImportStatus
+
+
+class ImportListItemOut(BaseModel):
+    import_id: uuid.UUID
+    account_id: uuid.UUID
+    parser: str | None
+    status: ImportStatus
+    file_name: str
+    created_at: datetime
+    operations_count: int
 
 
 class ImportStatusOut(BaseModel):

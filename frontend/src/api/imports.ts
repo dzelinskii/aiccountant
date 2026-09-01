@@ -29,6 +29,18 @@ export interface ImportStatus {
   preview: ImportPreview | null
 }
 
+// строка списка ожидающих подтверждения: file_name у импорта от коллектора
+// синтетический (файла не было) — см. sourceLabel в ImportPage
+export interface ImportListItem {
+  import_id: string
+  account_id: string
+  parser: string | null
+  status: ImportStatus['status']
+  file_name: string
+  created_at: string
+  operations_count: number
+}
+
 export interface ImportResult {
   import_id: string
   imported: number
@@ -54,6 +66,8 @@ export async function startImport(ws: string, accountId: string, file: File): Pr
   }
   return res.json() as Promise<ImportStarted>
 }
+
+export const getPendingImports = (ws: string) => api<ImportListItem[]>(`/api/imports?${q(ws)}`)
 
 export const getImportStatus = (ws: string, id: string) =>
   api<ImportStatus>(`/api/imports/${id}?${q(ws)}`)

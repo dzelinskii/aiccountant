@@ -20,6 +20,16 @@ async def get_import(
     return result
 
 
+async def list_pending(db: AsyncSession, workspace_id: uuid.UUID) -> list[Import]:
+    """Импорты, ждущие подтверждения: разбор закончен (ready), операции ещё не созданы."""
+    rows = await db.execute(
+        select(Import)
+        .where(Import.workspace_id == workspace_id, Import.status == "ready")
+        .order_by(Import.created_at.desc())
+    )
+    return list(rows.scalars().all())
+
+
 async def get_import_any_workspace(db: AsyncSession, import_id: uuid.UUID) -> Import | None:
     """Для фоновой задачи: workspace берём из самой записи, а не из запроса."""
     result: Import | None = await db.scalar(select(Import).where(Import.id == import_id))

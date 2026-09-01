@@ -14,6 +14,7 @@ from app.imports.models import Import
 from app.imports.parser import ParsedOperation, ParsedStatement, StatementParseError
 from app.imports.schemas import (
     BANK_EXTERNAL_ID_PREFIX,
+    ImportListItemOut,
     ImportOperationOut,
     ImportPreviewOut,
     ImportResultOut,
@@ -319,6 +320,36 @@ async def _build_preview(
         total_income=statement.total_income,
         total_expense=statement.total_expense,
     )
+
+
+def _operations_count(payload: dict[str, object] | None) -> int:
+    """Сколько операций в разборе. Для списка это справочное число: показать
+    «сколько ждёт» важнее, чем упасть на подпорченном payload — сам разбор
+    всё равно перечитывается при открытии импорта."""
+    if payload is None:
+        return 0
+    operations = payload.get("operations")
+    if not isinstance(operations, list):
+        return 0
+    return len(operations)
+
+
+async def list_pending_imports(
+    db: AsyncSession, workspace_id: uuid.UUID
+) -> list[ImportListItemOut]:
+    imports = await repository.list_pending(db, workspace_id)
+    return [
+        ImportListItemOut(
+            import_id=imp.id,
+            account_id=imp.account_id,
+            parser=imp.parser,
+            status=cast(ImportStatus, imp.status),
+            file_name=imp.file_name,
+            created_at=imp.created_at,
+            operations_count=_operations_count(imp.parsed_payload),
+        )
+        for imp in imports
+    ]
 
 
 async def get_import_status(

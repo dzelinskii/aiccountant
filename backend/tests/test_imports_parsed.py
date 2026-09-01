@@ -9,6 +9,7 @@ from app.imports.models import Import
 from app.imports.parser import StatementParseError
 
 ALICE = {"email": "alice@example.com", "password": "password123"}
+BOB = {"email": "bob@example.com", "password": "password123"}
 
 OPS = [
     {
@@ -58,6 +59,61 @@ async def test_parsed_import_is_ready_immediately(client: AsyncClient) -> None:
     assert body["status"] == "ready"
     assert body["parser"] == "tbank_collector"
     assert body["preview"]["new_count"] == 2
+
+
+async def test_collector_import_is_listed_as_pending(client: AsyncClient) -> None:
+    """Импорт от коллектора приходит без участия браузера — увидеть и подтвердить
+    его можно только через список ожидающих."""
+    ws, acc = await _ws_and_account(client)
+    started = await client.post(
+        "/api/imports/parsed",
+        params={"workspace_id": ws, "account_id": acc},
+        json={"parser": "tbank_collector", "operations": OPS},
+    )
+
+    pending = await client.get("/api/imports", params={"workspace_id": ws})
+    assert pending.status_code == 200
+    items = pending.json()
+    assert len(items) == 1
+    assert items[0]["import_id"] == started.json()["import_id"]
+    assert items[0]["account_id"] == acc
+    assert items[0]["status"] == "ready"
+    assert items[0]["parser"] == "tbank_collector"
+    assert items[0]["operations_count"] == 2
+
+
+async def test_committed_import_leaves_pending_list(client: AsyncClient) -> None:
+    ws, acc = await _ws_and_account(client)
+    started = await client.post(
+        "/api/imports/parsed",
+        params={"workspace_id": ws, "account_id": acc},
+        json={"parser": "tbank_collector", "operations": OPS},
+    )
+    await client.post(
+        f"/api/imports/{started.json()['import_id']}/commit", params={"workspace_id": ws}
+    )
+
+    pending = await client.get("/api/imports", params={"workspace_id": ws})
+    assert pending.json() == []  # подтверждённый импорт больше ничего не ждёт
+
+
+async def test_pending_imports_isolated_between_workspaces(client: AsyncClient) -> None:
+    ws_a, acc = await _ws_and_account(client)
+    await client.post(
+        "/api/imports/parsed",
+        params={"workspace_id": ws_a, "account_id": acc},
+        json={"parser": "tbank_collector", "operations": OPS},
+    )
+
+    client.cookies.clear()
+    await client.post("/api/auth/register", json=BOB)
+    me = await client.get("/api/me")
+    ws_b = str(me.json()["workspaces"][0]["id"])
+
+    assert (await client.get("/api/imports", params={"workspace_id": ws_b})).json() == []
+    # и чужой workspace не отдаётся, даже если запросить его напрямую
+    foreign = await client.get("/api/imports", params={"workspace_id": ws_a})
+    assert foreign.status_code == 403
 
 
 async def test_commit_uses_bank_external_id_for_dedup(client: AsyncClient) -> None:

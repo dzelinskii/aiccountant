@@ -12,6 +12,7 @@ from app.identity.models import User
 from app.imports import service
 from app.imports.parser import extract_lines
 from app.imports.schemas import (
+    ImportListItemOut,
     ImportResultOut,
     ImportStartedOut,
     ImportStatus,
@@ -93,6 +94,17 @@ async def create_parsed_import(
         db, workspace_id, account_id, user.id, payload.parser, payload.operations
     )
     return ImportStartedOut(import_id=imp.id, status=cast(ImportStatus, imp.status))
+
+
+@router.get("/imports")
+async def list_pending_imports(
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> list[ImportListItemOut]:
+    """Импорты, ждущие подтверждения. Без этого списка импорт от коллектора
+    (создаётся не из браузера) открыть в интерфейсе нечем."""
+    return await service.list_pending_imports(db, workspace_id)
 
 
 @router.get("/imports/{import_id}")
