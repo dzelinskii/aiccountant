@@ -18,6 +18,7 @@ from app.imports.schemas import (
     ImportResultOut,
     ImportStatus,
     ImportStatusOut,
+    ParsedOperationIn,
 )
 from app.ledger import service as ledger_service
 
@@ -48,6 +49,16 @@ def _external_ids(account_id: uuid.UUID, operations: list[ParsedOperation]) -> l
         raw = f"{account_id}|{base[0]}|{base[1]}|{base[2]}|{occurrence}"
         ids.append(hashlib.sha256(raw.encode("utf-8")).hexdigest())
     return ids
+
+
+def _payload_external_ids(
+    payload: dict[str, object], account_id: uuid.UUID, operations: list[ParsedOperation]
+) -> list[str]:
+    """Идентификаторы для дедупа: от банка, если он их дал, иначе наш хеш."""
+    stored = payload.get("external_ids")
+    if isinstance(stored, list) and len(stored) == len(operations):
+        return [str(x) for x in stored]
+    return _external_ids(account_id, operations)
 
 
 def _statement_to_payload(statement: ParsedStatement, warnings: list[str]) -> dict[str, object]:
@@ -147,6 +158,49 @@ async def start_import(
     return imp
 
 
+async def create_parsed_import(
+    db: AsyncSession,
+    workspace_id: uuid.UUID,
+    account_id: uuid.UUID,
+    user_id: uuid.UUID,
+    parser: str,
+    operations: list[ParsedOperationIn],
+) -> Import:
+    """Принять уже разобранные операции: разбирать нечего, сразу ready."""
+    statement = ParsedStatement(
+        operations=[
+            ParsedOperation(
+                occurred_at=op.occurred_at,
+                amount=op.amount,
+                currency=op.currency,
+                description=op.description,
+            )
+            for op in operations
+        ],
+        total_income=None,
+        total_expense=None,
+    )
+    # идентификаторы от банка кладём в payload сразу: дописывать в уже
+    # присвоенный JSONB нельзя — SQLAlchemy не отследит правку на месте
+    payload = _statement_to_payload(statement, [])
+    payload["external_ids"] = [op.external_id for op in operations]
+
+    imp = Import(
+        workspace_id=workspace_id,
+        account_id=account_id,
+        file_name=f"{parser}.json",
+        bank_profile=parser,
+        parser=parser,
+        status="ready",
+        stats={},
+        created_by=user_id,
+        parsed_payload=payload,
+    )
+    repository.add_import(db, imp)
+    await db.commit()
+    return imp
+
+
 async def run_parse(
     db: AsyncSession,
     import_id: uuid.UUID,
@@ -224,8 +278,9 @@ async def _build_preview(
     workspace_id: uuid.UUID,
     account_id: uuid.UUID,
     statement: ParsedStatement,
+    payload: dict[str, object],
 ) -> ImportPreviewOut:
-    ext_ids = _external_ids(account_id, statement.operations)
+    ext_ids = _payload_external_ids(payload, account_id, statement.operations)
     existing = await ledger_service.existing_external_ids(
         db, workspace_id, account_id, set(ext_ids)
     )
@@ -269,7 +324,7 @@ async def get_import_status(
         warnings_list = raw_warnings if isinstance(raw_warnings, list) else []
         warnings = [str(w) for w in warnings_list]
         statement = _payload_to_statement(payload)
-        preview = await _build_preview(db, workspace_id, imp.account_id, statement)
+        preview = await _build_preview(db, workspace_id, imp.account_id, statement, payload)
     return ImportStatusOut(
         import_id=imp.id,
         # значение — из закрытого набора, который сами же и пишем в run_parse/commit_from_import
@@ -300,7 +355,7 @@ async def commit_from_import(
     if imp.status != "ready" or imp.parsed_payload is None:
         raise ImportNotReadyError("импорт не готов к подтверждению")
     statement = _payload_to_statement(imp.parsed_payload)
-    ext_ids = _external_ids(imp.account_id, statement.operations)
+    ext_ids = _payload_external_ids(imp.parsed_payload, imp.account_id, statement.operations)
     existing = await ledger_service.existing_external_ids(
         db, workspace_id, imp.account_id, set(ext_ids)
     )
