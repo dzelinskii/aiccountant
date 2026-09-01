@@ -1,7 +1,7 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Response
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +15,7 @@ from app.identity.deps import (
     require_owner,
     require_session_user,
     require_workspace_member,
+    token_scope,
 )
 from app.identity.models import User
 from app.identity.schemas import (
@@ -90,10 +91,16 @@ async def logout(
 
 @router.get("/me")
 async def me(
+    request: Request,
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> MeOut:
     pairs = await service.list_workspaces(db, user.id)
+    scope = token_scope(request)
+    if scope is not None:
+        # токен ограничен своим workspace — не раскрываем остальные workspace
+        # владельца (иначе это перечисление чужих домохозяйств через токен)
+        pairs = [(workspace, role) for workspace, role in pairs if workspace.id == scope]
     return MeOut(
         id=user.id,
         email=user.email,

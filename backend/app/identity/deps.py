@@ -15,7 +15,10 @@ from app.identity.sessions import get_session_user_id
 SESSION_COOKIE = "session"
 
 
-def _token_scope(request: Request) -> uuid.UUID | None:
+def token_scope(request: Request) -> uuid.UUID | None:
+    """Workspace, для которого выдан токен текущего запроса; None — сессия из
+    браузера. Публичная: нужна не только зависимостям здесь (запрет действий),
+    но и роутеру — сузить выдачу /api/me до своего workspace."""
     return getattr(request.state, "token_workspace_id", None)
 
 
@@ -59,7 +62,7 @@ async def require_session_user(
 ) -> User:
     """Действия, расширяющие доступ, машинному токену запрещены: иначе утёкший
     токен превращается в постоянный доступ, который отзывом уже не убрать."""
-    if _token_scope(request) is not None:
+    if token_scope(request) is not None:
         raise HTTPException(status_code=403, detail="Действие доступно только из браузера")
     return user
 
@@ -83,7 +86,7 @@ async def require_workspace_member(
 ) -> User:
     # токен привязан к одному workspace — владелец нескольких workspace не
     # должен получать доступ ко всем через один утёкший токен
-    scope = _token_scope(request)
+    scope = token_scope(request)
     if scope is not None and scope != workspace_id:
         raise HTTPException(status_code=403, detail="Токен выдан для другого workspace")
     membership = await db.get(Membership, (user.id, workspace_id))

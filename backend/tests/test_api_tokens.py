@@ -92,6 +92,43 @@ async def test_token_does_not_open_foreign_workspace(client: AsyncClient) -> Non
     assert resp.status_code == 403
 
 
+async def test_me_by_token_shows_only_its_workspace(client: AsyncClient) -> None:
+    """Токен не должен раскрывать список остальных workspace владельца через
+    /api/me — это единственный эндпоинт на голом get_current_user, без
+    require_workspace_member, поэтому сужение делает сам обработчик."""
+    alice_ws = await _register(client, ALICE)
+    client.cookies.clear()
+    bob_ws = await _register(client, BOB)
+    await client.post(f"/api/workspaces/{bob_ws}/members", json={"email": ALICE["email"]})
+
+    client.cookies.clear()
+    await client.post("/api/auth/login", json=ALICE)
+    token = (
+        await client.post("/api/tokens", params={"workspace_id": alice_ws}, json={"name": "к"})
+    ).json()["token"]
+
+    client.cookies.clear()
+    resp = await client.get("/api/me", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    workspaces = resp.json()["workspaces"]
+    assert [w["id"] for w in workspaces] == [alice_ws]
+
+
+async def test_me_by_session_shows_all_workspaces(client: AsyncClient) -> None:
+    """Регрессия: для браузерной сессии /api/me по-прежнему видит все workspace."""
+    alice_ws = await _register(client, ALICE)
+    client.cookies.clear()
+    bob_ws = await _register(client, BOB)
+    await client.post(f"/api/workspaces/{bob_ws}/members", json={"email": ALICE["email"]})
+
+    client.cookies.clear()
+    await client.post("/api/auth/login", json=ALICE)
+    resp = await client.get("/api/me")
+    assert resp.status_code == 200
+    ids = {w["id"] for w in resp.json()["workspaces"]}
+    assert ids == {alice_ws, bob_ws}
+
+
 async def test_token_cannot_create_token(client: AsyncClient) -> None:
     """C2: утёкший токен не должен уметь выпускать себе замену — иначе отзыв
     исходного токена ничего не даёт."""
