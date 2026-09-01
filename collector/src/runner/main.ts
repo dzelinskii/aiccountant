@@ -61,7 +61,9 @@ async function collect(config: CollectorConfig, client: AllowlistClient): Promis
 function printAccountsHint(accounts: CollectedAccount[]): void {
   console.log('Счета в банке:')
   for (const account of accounts) {
-    console.log(`  ${account.id}  ${account.currency}  ${account.name}`)
+    // нераспознанную валюту пишем словами: подставить сюда пустое место или
+    // «RUB по умолчанию» значило бы выдать догадку за прочитанное значение
+    console.log(`  ${account.id}  ${account.currency ?? 'валюта не распознана'}  ${account.name}`)
   }
   console.log('')
   console.log('Задайте AICCOUNTANT_ACCOUNTS — соответствие счетов банка счетам приложения:')

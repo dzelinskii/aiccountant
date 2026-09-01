@@ -11,5 +11,6 @@ export interface CollectedAccount {
   id: string
   name: string
   type: string
-  currency: string
+  /** null — валюту счёта распознать не удалось; на сбор по другим счетам это не влияет. */
+  currency: string | null
 }

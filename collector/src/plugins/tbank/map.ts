@@ -56,27 +56,31 @@ function toOperation(item: unknown): CollectedOperation | null {
   return {
     occurred_at: formatDate(millis),
     amount: signedAmount(rawValue, type, context),
-    currency: resolveCurrency(currencyRecord, context),
+    currency: requireCurrency(currencyRecord, context),
     description: limitDescription(description && description.length > 0 ? description : (merchantName ?? '')),
     external_id: id,
   }
 }
 
+// Список счетов справочный: он нужен, чтобы человек нашёл идентификаторы и
+// настроил коллектор. Счетов в ЛК много и типы у них разные — валютный счёт
+// или счёт без блока currency вполне ожидаем. Роняй список такой счёт, и
+// собрать не выйдет ничего, включая рублёвые счета, которые разбираются
+// нормально, а подсказку с идентификаторами взять станет негде. Поэтому здесь
+// нераспознанная валюта — null, а строгость остаётся у операций, где неверная
+// валюта означает неверные деньги
 function toAccount(item: unknown): CollectedAccount {
   if (!isRecord(item)) {
     throw new Error('Счёт в ответе банка пришёл не объектом')
   }
   const id = getStr(item, 'id')
   if (!id) throw new Error('У счёта банка нет id')
-  const context = `Счёт ${id}`
-
-  const currencyRecord = getRecord(item, 'currency')
 
   return {
     id,
     name: getStr(item, 'name') ?? '',
     type: getStr(item, 'accountType') ?? '',
-    currency: resolveCurrency(currencyRecord, context),
+    currency: resolveCurrency(getRecord(item, 'currency')),
   }
 }
 
@@ -132,21 +136,43 @@ const KNOWN_NUMERIC_CURRENCIES: Record<string, string> = { '643': 'RUB' }
 // currency счёта (backend/app/imports/router.py), а счета заводятся
 // буквенными кодами ("RUB") — числовой код там не совпадёт ни с чем и уронит
 // 422 на весь запрос с сообщением про "несовпадение валюты счёта", хотя
-// причина на самом деле в формате кода. Явная ошибка здесь укажет на
-// настоящую причину сразу, а не после похода на бэкенд
-function resolveCurrency(currency: Record<string, unknown> | undefined, context: string): string {
-  const candidates = currency ? [getStr(currency, 'strCode'), getStr(currency, 'name')] : []
+// причина на самом деле в формате кода.
+//
+// null — валюту распознать не удалось: незнакомый числовой код, чужой формат
+// или вовсе нет блока currency
+function resolveCurrency(currency: Record<string, unknown> | undefined): string | null {
+  const candidates = currencyCandidates(currency)
   for (const candidate of candidates) {
-    if (candidate && ALPHA3_CURRENCY.test(candidate)) return candidate.toUpperCase()
+    if (ALPHA3_CURRENCY.test(candidate)) return candidate.toUpperCase()
   }
   for (const candidate of candidates) {
-    if (candidate && /^\d+$/.test(candidate)) {
-      const known = KNOWN_NUMERIC_CURRENCIES[candidate]
-      if (known) return known
-      throw new Error(`${context}: неизвестный числовой код валюты "${candidate}"`)
-    }
+    // проверка на цифры не только отсекает нечисловые коды: без неё в поиск по
+    // объекту-справочнику проходят имена из прототипа ("toString"), и валютой
+    // стало бы что угодно, кроме валюты
+    if (!/^\d+$/.test(candidate)) continue
+    const known = KNOWN_NUMERIC_CURRENCIES[candidate]
+    if (known) return known
   }
-  throw new Error(`${context}: не удалось распознать валюту`)
+  return null
+}
+
+function currencyCandidates(currency: Record<string, unknown> | undefined): string[] {
+  if (!currency) return []
+  const candidates = [getStr(currency, 'strCode'), getStr(currency, 'name')]
+  return candidates.filter((candidate): candidate is string => candidate !== undefined && candidate !== '')
+}
+
+// Для операции нераспознанная валюта — остановка: молча взятый не тот код
+// означает не те деньги в леджере, а поход на бэкенд с ним всё равно кончится
+// 422 на всю пачку, только с сообщением не про ту причину. Код валюты в
+// сообщении нужен — по нему сразу видно, незнакомая это валюта или незнакомый
+// формат кода; сумм и описаний в тексте по-прежнему нет
+function requireCurrency(currency: Record<string, unknown> | undefined, context: string): string {
+  const resolved = resolveCurrency(currency)
+  if (resolved !== null) return resolved
+  const seen = currencyCandidates(currency)
+  const codes = seen.length > 0 ? ` (банк прислал ${seen.map((code) => `"${code}"`).join(', ')})` : ''
+  throw new Error(`${context}: не удалось распознать валюту${codes}`)
 }
 
 // Банк показывает операции по московскому времени (это видно и по его же

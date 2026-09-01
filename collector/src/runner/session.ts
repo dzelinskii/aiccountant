@@ -4,7 +4,7 @@ import { chromium, type BrowserContext } from 'playwright'
 
 // Профиль держим внутри collector/ независимо от того, откуда запущена команда:
 // именно этот путь закрыт .gitignore, и «забыть доступ» должно удалять ровно его
-const PROFILE_DIR = fileURLToPath(new URL('../../profile', import.meta.url))
+export const PROFILE_DIR = fileURLToPath(new URL('../../profile', import.meta.url))
 const BANK_ORIGIN = 'https://www.tbank.ru'
 const LOGIN_URL = `${BANK_ORIGIN}/login/`
 const MYBANK_URL = `${BANK_ORIGIN}/mybank/`
@@ -33,9 +33,13 @@ export async function obtainSessionToken(options: ObtainOptions = {}): Promise<s
   return withContext(false, logIn)
 }
 
-/** «Забыть» доступ к банку — удалить профиль целиком. */
-export async function forgetSession(): Promise<void> {
-  await rm(PROFILE_DIR, { recursive: true, force: true })
+/**
+ * «Забыть» доступ к банку — удалить профиль целиком: другого места, где живёт
+ * кука сессии, нет. Отсутствующий профиль ошибкой не считается: забыть доступ
+ * должно получаться и до первого входа, и повторно.
+ */
+export async function forgetSession(profileDir: string = PROFILE_DIR): Promise<void> {
+  await rm(profileDir, { recursive: true, force: true })
 }
 
 // Контекст закрывается ровно один раз на любом пути: и чтение куки, и вход

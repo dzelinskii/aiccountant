@@ -185,6 +185,20 @@ test('незнакомый числовой код валюты — явная �
   ).toThrow(/валют/)
 })
 
+test('имя из прототипа в коде валюты не становится валютой', () => {
+  // справочник числовых кодов — обычный объект, и поиск по нему без проверки
+  // на цифры вернул бы функцию из прототипа вместо кода валюты
+  expect(() =>
+    toOperations([baseOperation({ accountAmount: { value: '100', currency: { strCode: 'toString' } } })]),
+  ).toThrow(/валют/)
+})
+
+test('в ошибке про валюту виден сам код — по нему понятно, в чём дело', () => {
+  expect(() =>
+    toOperations([baseOperation({ accountAmount: { value: '100', currency: { strCode: '840' } } })]),
+  ).toThrow(/840/)
+})
+
 test('буквенный код валюты в strCode принимается как есть', () => {
   const [op] = toOperations([baseOperation({ accountAmount: { value: '100', currency: { strCode: 'usd' } } })])
   expect(op?.currency).toBe('USD')
@@ -211,8 +225,28 @@ test('счёт без id — явная ошибка', () => {
   expect(() => toAccounts([{ name: 'Без id', accountType: 'Current', currency: { strCode: '643' } }])).toThrow(/id/)
 })
 
-test('счёт с незнакомым числовым кодом валюты — явная ошибка', () => {
+test('счёт с незнакомым числовым кодом валюты не роняет список счетов', () => {
+  // список счетов справочный: без него не узнать идентификаторы и не настроить
+  // коллектор. Одна нераспознанная валюта не должна лишать человека
+  // единственного способа настройки — рублёвые счета разбираются нормально
+  const accounts = toAccounts([
+    { id: 'acc-x', name: 'Валютный счёт', accountType: 'Current', currency: { strCode: '840' } },
+    { id: 'acc-1', name: 'Счёт для трат', accountType: 'Current', currency: { strCode: '643' } },
+  ])
+  expect(accounts).toEqual([
+    { id: 'acc-x', name: 'Валютный счёт', type: 'Current', currency: null },
+    { id: 'acc-1', name: 'Счёт для трат', type: 'Current', currency: 'RUB' },
+  ])
+})
+
+test('счёт без блока currency не роняет список счетов', () => {
+  const accounts = toAccounts([{ id: 'acc-y', name: 'Внешний счёт', accountType: 'ExternalAccount' }])
+  expect(accounts[0]?.currency).toBeNull()
+})
+
+test('нераспознанная валюта операции остаётся явной ошибкой', () => {
+  // у операций строгость сохраняется: неверная валюта — это неверные деньги
   expect(() =>
-    toAccounts([{ id: 'acc-x', name: 'Валютный счёт', accountType: 'Current', currency: { strCode: '840' } }]),
+    toOperations([baseOperation({ accountAmount: { value: '100', currency: {} } })]),
   ).toThrow(/валют/)
 })

@@ -6,7 +6,8 @@
     "test": "vitest run",
     "lint": "oxlint --deny-warnings",
     "build": "tsc --noEmit",
-    "collect": "tsx src/runner/main.ts"
+    "collect": "tsx src/runner/main.ts",
+    "forget": "tsx src/runner/forget.ts"
   },
   "devDependencies": {
     "@types/node": "^22",

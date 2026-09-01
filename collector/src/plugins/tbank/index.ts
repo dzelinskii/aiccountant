@@ -70,21 +70,39 @@ function assertOk(resultCode: string): void {
   throw new Error(`Банк вернул ошибку: ${resultCode}`)
 }
 
-// В разведке подтверждён факт полей millisLeft/accessLevel в session_status,
-// но не конкретные значения accessLevel для полного и урезанного доступа —
-// такие эндпоинты нередко отвечают resultCode "OK" и на протухшую сессию,
-// просто с пониженным уровнем доступа. Поэтому проверяем то, что можем
-// проверить без гадания: millisLeft > 0 и что accessLevel вообще присутствует.
-// Как только разведка подтвердит конкретные значения — сузить проверку
+// «Сессия истекла» и «ответ не той формы, что мы ожидали» — разные случаи, и
+// смешивать их нельзя: первый лечится повторным входом, второй не лечится им
+// никогда. Если на живой куке не найденный millisLeft объявить истёкшей
+// сессией, получится круг «достали живую куку → не нашли поле → окно входа →
+// человек ввёл код → тот же ответ → опять окно входа», и каждый его виток
+// врёт про причину. Поэтому непонятный ответ — обычная ошибка разбора.
+//
+// accessLevel не проверяем: его наличие ничего не говорит о живости сессии, а
+// конкретные значения для полного и урезанного доступа разведкой не сняты.
+// Когда они станут известны — здесь появится настоящая проверка уровня доступа.
 function assertSessionAlive(body: Record<string, unknown>): void {
-  const millisLeft = toFiniteNumber(body['millisLeft'])
-  if (millisLeft === undefined || millisLeft <= 0) {
+  const millisLeft = findMillisLeft(body)
+  if (millisLeft === undefined) {
+    throw new Error(
+      'Ответ session_status без числового millisLeft — устарел наш разбор ответа банка, повторный вход не поможет',
+    )
+  }
+  if (millisLeft <= 0) {
     throw new SessionExpiredError('Сессия Т-Банка истекла (millisLeft <= 0)')
   }
-  const accessLevel = body['accessLevel']
-  if (typeof accessLevel !== 'string' || accessLevel.length === 0) {
-    throw new SessionExpiredError('Сессия Т-Банка не даёт доступа (нет accessLevel)')
+}
+
+// Реального ответа session_status у нас нет: остальные эндпоинты этого API
+// кладут данные в payload, но плоский конверт тоже возможен. Проверяем оба
+// места, пока живой запрос не покажет, какое из них настоящее
+function findMillisLeft(body: Record<string, unknown>): number | undefined {
+  const payload = body['payload']
+  const places = isRecord(payload) ? [payload, body] : [body]
+  for (const place of places) {
+    const millisLeft = toFiniteNumber(place['millisLeft'])
+    if (millisLeft !== undefined) return millisLeft
   }
+  return undefined
 }
 
 function toFiniteNumber(value: unknown): number | undefined {

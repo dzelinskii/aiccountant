@@ -85,9 +85,20 @@ test('иной resultCode даёт обычную ошибку, а не SessionE
   await expect(checkSession(client)).rejects.not.toBeInstanceOf(SessionExpiredError)
 })
 
-test('checkSession успешно проходит при OK, живом millisLeft и заполненном accessLevel', async () => {
+test('checkSession принимает живую сессию, когда поля лежат на верхнем уровне', async () => {
   const fetchImpl = vi.fn(
     async () => jsonResponse('{"resultCode":"OK","millisLeft":3600000,"accessLevel":"FULL"}'),
+  )
+  const client = createTBankClient('token', { fetchImpl: fetchImpl as unknown as FetchImpl })
+
+  await expect(checkSession(client)).resolves.toBeUndefined()
+})
+
+test('checkSession принимает живую сессию, когда поля лежат в payload', async () => {
+  // остальные эндпоинты этого API кладут данные в payload; реального ответа
+  // session_status у нас нет, поэтому обе формы конверта равноправны
+  const fetchImpl = vi.fn(
+    async () => jsonResponse('{"resultCode":"OK","payload":{"millisLeft":3600000,"accessLevel":"FULL"}}'),
   )
   const client = createTBankClient('token', { fetchImpl: fetchImpl as unknown as FetchImpl })
 
@@ -105,11 +116,31 @@ test('checkSession бросает SessionExpiredError, если millisLeft <= 0 
   await expect(checkSession(client)).rejects.toBeInstanceOf(SessionExpiredError)
 })
 
-test('checkSession бросает SessionExpiredError, если нет accessLevel', async () => {
-  const fetchImpl = vi.fn(async () => jsonResponse('{"resultCode":"OK","millisLeft":3600000}'))
+test('checkSession видит истёкший millisLeft и в payload', async () => {
+  const fetchImpl = vi.fn(
+    async () => jsonResponse('{"resultCode":"OK","payload":{"millisLeft":-1,"accessLevel":"FULL"}}'),
+  )
   const client = createTBankClient('token', { fetchImpl: fetchImpl as unknown as FetchImpl })
 
   await expect(checkSession(client)).rejects.toBeInstanceOf(SessionExpiredError)
+})
+
+test('ответ session_status неожиданной формы — обычная ошибка, а не SessionExpiredError', async () => {
+  // главное свойство: не найденный millisLeft — это баг нашего разбора, а не
+  // истёкшая сессия. SessionExpiredError здесь означал бы бесконечный круг
+  // «живая кука → не нашли поле → окно входа → тот же ответ → окно входа»
+  const fetchImpl = vi.fn(async () => jsonResponse('{"resultCode":"OK","payload":{"status":"ACTIVE"}}'))
+  const client = createTBankClient('token', { fetchImpl: fetchImpl as unknown as FetchImpl })
+
+  await expect(checkSession(client)).rejects.toThrow(Error)
+  await expect(checkSession(client)).rejects.not.toBeInstanceOf(SessionExpiredError)
+})
+
+test('нечисловой millisLeft — обычная ошибка, а не SessionExpiredError', async () => {
+  const fetchImpl = vi.fn(async () => jsonResponse('{"resultCode":"OK","millisLeft":"скоро"}'))
+  const client = createTBankClient('token', { fetchImpl: fetchImpl as unknown as FetchImpl })
+
+  await expect(checkSession(client)).rejects.not.toBeInstanceOf(SessionExpiredError)
 })
 
 test('клиент отказывается ходить по неразрешённому пути — allowlist реально ограничивает', async () => {
