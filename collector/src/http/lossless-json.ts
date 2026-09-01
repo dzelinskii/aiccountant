@@ -25,12 +25,14 @@ function quoteNumbers(text: string): string {
   while (i < text.length) {
     const ch = text[i]!
     if (inString) {
+      // prev внутри строки не трогаем: он уже стоит на открывающей кавычке
+      // (выставлена ниже, при входе в строку) и остаётся верным до самого
+      // выхода — закрывающая кавычка тот же символ, а прочитать prev раньше,
+      // чем inString снова станет false, всё равно негде
       out += ch
-      prev = ch
       if (ch === '\\') {
         const escaped = text[i + 1] ?? ''
         out += escaped
-        if (escaped !== '') prev = escaped
         i += 2
         continue
       }

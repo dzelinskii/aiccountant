@@ -76,13 +76,46 @@ test('запрос запрещает автоследование за реди
   expect(init?.redirect).toBe('error')
 })
 
-test('запрос ограничен таймаутом', async () => {
+test('запрос сопровождается сигналом отмены', async () => {
   const fetchImpl = vi.fn<typeof fetch>(async () => new Response('{}', { status: 200 }))
   const client = clientWith(fetchImpl as unknown as typeof fetch)
   await client.getJson('/api/common/v1/session_status')
   const init = fetchImpl.mock.calls[0]?.[1]
   expect(init?.signal).toBeInstanceOf(AbortSignal)
 })
+
+test(
+  'таймаут прерывает зависшее тело ответа, а не только фазу заголовков',
+  async () => {
+    // заголовки пришли (fetchImpl уже зарезолвился), а тело — нет: банк
+    // "задумался" на середине выписки или мобильная сеть оборвалась.
+    // stream ничего не enqueue-ит и не закрывается сам по себе
+    let streamController: ReadableStreamDefaultController<Uint8Array> | undefined
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        streamController = controller
+      },
+    })
+    const fetchImpl = vi.fn((_url: string | URL, init?: RequestInit) => {
+      // так реальный fetch/undici рвёт именно тело ответа при срабатывании
+      // signal — это и проверяем: что клиент реально передаёт сигнал дальше
+      // и что он способен оборвать чтение, а не только факт его наличия
+      init?.signal?.addEventListener('abort', () => {
+        streamController?.error(new Error('aborted'))
+      })
+      return Promise.resolve(new Response(stream))
+    })
+    const client = new AllowlistClient({
+      baseUrl: 'https://bank.example',
+      allowedPaths: ALLOWED,
+      token: 'token',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      timeoutMs: 20,
+    })
+    await expect(client.getJson('/api/common/v1/session_status')).rejects.toThrow()
+  },
+  2000,
+)
 
 test('редирект на чужой хост не превращается в ответ — клиент падает, а не переходит', async () => {
   // симулируем самое опасное: банк отвечает 302 с Location на чужой origin.
@@ -141,6 +174,19 @@ test('ошибка самого fetchImpl не пробрасывается ка
   })
   await expect(client.getJson('/api/common/v1/session_status')).rejects.toSatisfy(
     (e: Error) => !e.message.includes(TOKEN),
+  )
+})
+
+test('сетевые сбои различимы по имени ошибки и коду причины, а не схлопнуты в одно сообщение', async () => {
+  // ни e.name, ни cause.code URL или токен не содержат — их можно безопасно
+  // показать, чтобы заблокированный редирект не выглядел как обрыв DNS
+  const dnsError = new TypeError('fetch failed', { cause: { code: 'ENOTFOUND' } })
+  const fetchImpl = vi.fn(async () => {
+    throw dnsError
+  })
+  const client = clientWith(fetchImpl as unknown as typeof fetch)
+  await expect(client.getJson('/api/common/v1/session_status')).rejects.toSatisfy(
+    (e: Error) => e.message.includes('TypeError') && e.message.includes('ENOTFOUND'),
   )
 })
 
