@@ -1659,6 +1659,175 @@ git commit -m "Коллектор: оболочка — вход, добыча �
 
 ---
 
+## Task 7: Список импортов и вход в них из UI
+
+**Files:**
+- Modify: `backend/app/imports/repository.py`, `service.py`, `schemas.py`, `router.py`
+- Test: `backend/tests/test_imports_parsed.py` (дополнить)
+- Modify: `frontend/src/api/imports.ts`, `frontend/src/pages/ImportPage.tsx`
+
+**Зачем.** Коллектор создаёт импорт со статусом `ready` — но открыть его в UI нечем: списка импортов нет, а страница помнит `import_id` только от собственной загрузки файла. Без этой задачи собранные операции невозможно подтвердить, то есть коллектор бесполезен.
+
+- [ ] **Step 1: Падающий тест списка**
+
+В `backend/tests/test_imports_parsed.py` добавить:
+
+```python
+async def test_pending_imports_are_listed(client: AsyncClient) -> None:
+    ws, acc = await _ws_and_account(client)
+    created = await client.post(
+        "/api/imports/parsed",
+        params={"workspace_id": ws, "account_id": acc},
+        json={"parser": "tbank_collector", "operations": OPS},
+    )
+    listed = await client.get("/api/imports", params={"workspace_id": ws})
+    assert listed.status_code == 200
+    items = listed.json()
+    assert [i["import_id"] for i in items] == [created.json()["import_id"]]
+    assert items[0]["status"] == "ready"
+    assert items[0]["parser"] == "tbank_collector"
+
+
+async def test_committed_import_leaves_pending_list(client: AsyncClient) -> None:
+    ws, acc = await _ws_and_account(client)
+    created = await client.post(
+        "/api/imports/parsed",
+        params={"workspace_id": ws, "account_id": acc},
+        json={"parser": "tbank_collector", "operations": OPS},
+    )
+    await client.post(
+        f"/api/imports/{created.json()['import_id']}/commit", params={"workspace_id": ws}
+    )
+    listed = await client.get("/api/imports", params={"workspace_id": ws})
+    assert listed.json() == []
+
+
+async def test_import_list_isolated_by_workspace(client: AsyncClient) -> None:
+    ws, acc = await _ws_and_account(client)
+    await client.post(
+        "/api/imports/parsed",
+        params={"workspace_id": ws, "account_id": acc},
+        json={"parser": "tbank_collector", "operations": OPS},
+    )
+    bob = {"email": "bob@example.com", "password": "password123"}
+    await client.post("/api/auth/register", json=bob)
+    me = await client.get("/api/me")
+    ws_bob = str(me.json()["workspaces"][0]["id"])
+    listed = await client.get("/api/imports", params={"workspace_id": ws_bob})
+    assert listed.json() == []
+```
+
+- [ ] **Step 2: Прогнать — падает** (`uv run pytest tests/test_imports_parsed.py -q`), эндпоинта нет.
+
+- [ ] **Step 3: Repository**
+
+В `backend/app/imports/repository.py`:
+
+```python
+async def list_pending(db: AsyncSession, workspace_id: uuid.UUID) -> list[Import]:
+    """Разобранные, но не подтверждённые импорты — их и надо показать человеку."""
+    rows = await db.execute(
+        select(Import)
+        .where(Import.workspace_id == workspace_id, Import.status == "ready")
+        .order_by(Import.created_at.desc())
+    )
+    return list(rows.scalars().all())
+```
+
+- [ ] **Step 4: Схема и сервис**
+
+В `backend/app/imports/schemas.py`:
+
+```python
+class ImportListItemOut(BaseModel):
+    import_id: uuid.UUID
+    account_id: uuid.UUID
+    parser: str | None
+    status: ImportStatus
+    file_name: str
+    created_at: datetime
+    operations_count: int
+```
+
+(нужен импорт `datetime`.)
+
+В `backend/app/imports/service.py`:
+
+```python
+async def list_pending_imports(
+    db: AsyncSession, workspace_id: uuid.UUID
+) -> list[ImportListItemOut]:
+    items: list[ImportListItemOut] = []
+    for imp in await repository.list_pending(db, workspace_id):
+        payload = imp.parsed_payload or {}
+        raw_ops = payload.get("operations")
+        items.append(
+            ImportListItemOut(
+                import_id=imp.id,
+                account_id=imp.account_id,
+                parser=imp.parser,
+                status=cast(ImportStatus, imp.status),
+                file_name=imp.file_name,
+                created_at=imp.created_at,
+                operations_count=len(raw_ops) if isinstance(raw_ops, list) else 0,
+            )
+        )
+    return items
+```
+
+- [ ] **Step 5: Эндпоинт**
+
+В `backend/app/imports/router.py`:
+
+```python
+@router.get("/imports")
+async def list_imports(
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> list[ImportListItemOut]:
+    return await service.list_pending_imports(db, workspace_id)
+```
+
+**Важно про порядок маршрутов:** объявить `GET /imports` рядом с остальными; статический путь не конфликтует с `GET /imports/{import_id}`, но если FastAPI начнёт матчить неверно — поставить статический выше.
+
+- [ ] **Step 6: Фронт — API**
+
+В `frontend/src/api/imports.ts` добавить:
+
+```typescript
+export interface ImportListItem {
+  import_id: string
+  account_id: string
+  parser: string | null
+  status: 'processing' | 'ready' | 'failed' | 'completed'
+  file_name: string
+  created_at: string
+  operations_count: number
+}
+
+export const getPendingImports = (ws: string) =>
+  api<ImportListItem[]>(`/api/imports?${q(ws)}`)
+```
+
+- [ ] **Step 7: Фронт — показать ожидающие импорты**
+
+В `frontend/src/pages/ImportPage.tsx` добавить запрос `getPendingImports` и блок над формой загрузки: если список непустой — карточка «Ожидают подтверждения» со строками (дата, чем разобрано, число операций) и кнопкой «Открыть», которая ставит `setImportId(item.import_id)` — дальше работает существующий поллинг и панель превью.
+
+Инвалидировать список после успешного коммита (добавить `['pending-imports', ws]` в `invalidate`).
+
+- [ ] **Step 8: Прогоны и коммит**
+
+Backend: `uv run ruff format . && uv run ruff check . && uv run mypy && uv run lint-imports && uv run pytest -q`.
+Frontend: `pnpm test && pnpm lint && pnpm build`.
+
+```bash
+git add backend/app/imports/ backend/tests/test_imports_parsed.py frontend/src/api/imports.ts frontend/src/pages/ImportPage.tsx
+git commit -m "Импорт: список ожидающих подтверждения и вход в них из UI"
+```
+
+---
+
 ## Финальная проверка
 
 - [ ] **Backend:** из `backend/` — `uv run ruff format --check . && uv run ruff check . && uv run mypy && uv run lint-imports && uv run pytest -q`. Всё зелёное, регрессий нет.
