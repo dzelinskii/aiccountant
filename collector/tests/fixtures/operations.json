@@ -1,0 +1,48 @@
+{
+  "resultCode": "OK",
+  "payload": [
+    {
+      "id": "op-1",
+      "status": "OK",
+      "type": "Debit",
+      "group": "PAY",
+      "isInner": false,
+      "account": "acc-1",
+      "operationTime": { "milliseconds": 1783296000000 },
+      "debitingTime": { "milliseconds": 1783382400000 },
+      "amount": { "value": 1150.5, "currency": { "code": 643, "name": "RUB", "strCode": "643" } },
+      "accountAmount": { "value": 1150.5, "currency": { "code": 643, "name": "RUB", "strCode": "643" } },
+      "description": "Кофейня",
+      "mcc": 5812,
+      "category": { "id": "cat-food", "name": "Кафе" },
+      "merchant": { "id": "m-1", "name": "Кофейня" }
+    },
+    {
+      "id": "op-2",
+      "status": "OK",
+      "type": "Credit",
+      "group": "INCOME",
+      "isInner": false,
+      "account": "acc-1",
+      "operationTime": { "milliseconds": 1783468800000 },
+      "debitingTime": { "milliseconds": 1783468800000 },
+      "amount": { "value": 5000, "currency": { "code": 643, "name": "RUB", "strCode": "643" } },
+      "accountAmount": { "value": 5000, "currency": { "code": 643, "name": "RUB", "strCode": "643" } },
+      "description": "Зарплата",
+      "category": { "id": "cat-salary", "name": "Зарплата" }
+    },
+    {
+      "id": "op-3",
+      "status": "FAILED",
+      "type": "Debit",
+      "group": "PAY",
+      "isInner": false,
+      "account": "acc-1",
+      "operationTime": { "milliseconds": 1783555200000 },
+      "debitingTime": { "milliseconds": 1783555200000 },
+      "amount": { "value": 99.99, "currency": { "code": 643, "name": "RUB", "strCode": "643" } },
+      "accountAmount": { "value": 99.99, "currency": { "code": 643, "name": "RUB", "strCode": "643" } },
+      "description": "Неуспешная операция"
+    }
+  ]
+}

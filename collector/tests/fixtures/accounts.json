@@ -1,0 +1,19 @@
+{
+  "resultCode": "OK",
+  "payload": [
+    {
+      "id": "acc-1",
+      "name": "Счёт для трат",
+      "accountType": "Current",
+      "currency": { "code": 643, "name": "RUB", "strCode": "643" },
+      "moneyAmount": { "value": 10000, "currency": { "code": 643, "name": "RUB", "strCode": "643" } }
+    },
+    {
+      "id": "acc-2",
+      "name": "Накопительный",
+      "accountType": "Saving",
+      "currency": { "code": 643, "name": "RUB", "strCode": "643" },
+      "moneyAmount": { "value": 500, "currency": { "code": 643, "name": "RUB", "strCode": "643" } }
+    }
+  ]
+}

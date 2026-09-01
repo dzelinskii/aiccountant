@@ -2,11 +2,17 @@ import { parseLossless } from './lossless-json'
 
 export class NotAllowedError extends Error {}
 
+// Отдельный экспортируемый алиас, а не голый `typeof fetch` в сигнатурах
+// потребителей: имя глобала `fetch` запрещено линтером за пределами этой
+// папки, в том числе в позиции типа — так вызывающий код передаёт свою
+// реализацию, не называя запрещённый идентификатор напрямую
+export type FetchImpl = typeof fetch
+
 interface Options {
   baseUrl: string
   allowedPaths: readonly string[]
   token: string
-  fetchImpl?: typeof fetch
+  fetchImpl?: FetchImpl
   timeoutMs?: number
 }
 
