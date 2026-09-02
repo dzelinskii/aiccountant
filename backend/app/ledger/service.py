@@ -4,6 +4,7 @@ from decimal import Decimal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.operation_kinds import OperationKind, kind_from_amount
 from app.ledger import repository
 from app.ledger.models import Account, Category, Transaction
 from app.ledger.schemas import (
@@ -154,7 +155,7 @@ async def post_transaction(
     note: str | None = None,
     external_id: str | None = None,
     import_id: uuid.UUID | None = None,
-    operation_kind: str = "unknown",
+    operation_kind: OperationKind = "unknown",
 ) -> Transaction:
     """Провести обычную операцию (расход/доход) без commit — для переиспользования
     ручным вводом, регуляркой и импортом выписок."""
@@ -221,8 +222,7 @@ async def create_transaction(
         source="manual",
         merchant=payload.merchant,
         note=payload.note,
-        # ручной ввод вида не спрашивает: о нём известно ровно то, что говорит знак
-        operation_kind="purchase" if payload.amount < 0 else "income",
+        operation_kind=kind_from_amount(payload.amount),
     )
     await db.commit()
     return transaction
@@ -306,6 +306,11 @@ async def update_transaction(
         transaction.suggested_category_id = None
     if payload.amount is not None:
         transaction.amount = payload.amount
+        if transaction.source == "manual":
+            # вид ручной операции выведен из знака суммы, поэтому при смене знака
+            # обязан пересчитаться. У остальных источников вид — факт от банка
+            # или правила, и правка суммы человеком его не затирает
+            transaction.operation_kind = kind_from_amount(payload.amount)
     if payload.occurred_at is not None:
         transaction.occurred_at = payload.occurred_at
     if payload.merchant is not None:

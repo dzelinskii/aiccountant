@@ -1,4 +1,5 @@
-from typing import Literal
+from decimal import Decimal
+from typing import Literal, get_args
 
 # Банконезависимый словарь видов операций. Коннектор каждого банка переводит
 # словарь своего банка в этот; бэкенд слов конкретного банка не знает.
@@ -12,17 +13,17 @@ OperationKind = Literal[
     "unknown",  # источник не сообщил вид
 ]
 
-OPERATION_KINDS: tuple[str, ...] = (
-    "purchase",
-    "transfer_person",
-    "transfer_self",
-    "cash",
-    "loan",
-    "income",
-    "unknown",
-)
+# Тот же словарь значениями — для проверок на входе и перечисления в UI.
+# Выводится из Literal, чтобы список не разъезжался с типом.
+OPERATION_KINDS: tuple[str, ...] = get_args(OperationKind)
 
 # Не экономические события: деньги лишь меняют место или форму. Из статистики
 # и категоризации исключаются. unknown сюда намеренно не входит — неизвестная
 # операция должна остаться видимой, а не пропасть молча.
 NON_SPENDING_KINDS: tuple[str, ...] = ("transfer_self", "cash")
+
+
+def kind_from_amount(amount: Decimal) -> OperationKind:
+    """Вид там, где источник знает только знак суммы: ручной ввод и регулярные
+    правила. Банк присылает вид сам, и через эту функцию не проходит."""
+    return "purchase" if amount < 0 else "income"

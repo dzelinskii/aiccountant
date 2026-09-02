@@ -92,6 +92,21 @@ async def test_migrations_add_import_async_columns(database_url: str) -> None:
     assert {"parser", "parsed_payload", "error", "raw_text"} <= columns
 
 
+async def test_migrations_add_operation_kind_columns(database_url: str) -> None:
+    engine = create_async_engine(database_url)
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'transactions' "
+                "AND column_name IN ('operation_kind', 'spending_override')"
+            )
+        )
+        columns = {name for (name,) in rows.all()}
+    await engine.dispose()
+    assert columns == {"operation_kind", "spending_override"}
+
+
 async def test_migrations_create_api_tokens(database_url: str) -> None:
     engine = create_async_engine(database_url)
     async with engine.connect() as conn:
