@@ -1,7 +1,7 @@
 import type { AllowlistClient } from '../http/allowlist-client'
 import { createTBankClient } from '../plugins/tbank/client'
 import { SessionExpiredError, checkSession, fetchAccounts, fetchOperations } from '../plugins/tbank/index'
-import type { CollectedAccount } from '../plugins/tbank/types'
+import type { CollectedAccount, CollectedOperation } from '../plugins/tbank/types'
 import { loadConfig, type CollectorConfig } from './config'
 import { pushOperations } from './push'
 import { obtainSessionToken } from './session'
@@ -52,7 +52,17 @@ async function collect(config: CollectorConfig, client: AllowlistClient): Promis
         ? `счёт ${appAccountId}: собрано ${operations.length}, импорт ${result.import_id}`
         : `счёт ${appAccountId}: операций за период нет`,
     )
+    reportUnknownKinds(appAccountId, operations)
   }
+}
+
+// Не ошибка, а повод дополнить перевод словаря в плагине: банк завёл группу,
+// которой мы не знаем. Молчать об этом нельзя — такие операции доедут до
+// приложения с видом unknown и тихо испортят картину по видам трат
+function reportUnknownKinds(appAccountId: string, operations: readonly CollectedOperation[]): void {
+  const count = operations.filter((operation) => operation.kind === 'unknown').length
+  if (count === 0) return
+  console.log(`счёт ${appAccountId}: вид операции не распознан у ${count} — банк прислал незнакомую группу`)
 }
 
 // Разовая подсказка человеку на его же машине: идентификаторы счетов банка

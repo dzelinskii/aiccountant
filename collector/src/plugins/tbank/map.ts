@@ -59,6 +59,7 @@ function toOperation(item: unknown): CollectedOperation | null {
     currency: requireCurrency(currencyRecord, context),
     description: limitDescription(description && description.length > 0 ? description : (merchantName ?? '')),
     external_id: id,
+    kind: resolveKind(item),
   }
 }
 
@@ -122,6 +123,31 @@ const MAX_DESCRIPTION_LENGTH = 1000 // ровно предел ParsedOperationIn
 
 function limitDescription(value: string): string {
   return value.length > MAX_DESCRIPTION_LENGTH ? value.slice(0, MAX_DESCRIPTION_LENGTH) : value
+}
+
+// Единственное место в системе, где живёт словарь Т-Банка. Приложение работает
+// своими терминами и про PAY/INTERNAL не знает: иначе знание об одном банке
+// протекло бы в ядро домена и каждый новый банк правился бы там же.
+const BANK_GROUP_TO_KIND: Record<string, string> = {
+  PAY: 'purchase',
+  TRANSFER: 'transfer_person',
+  INTERNAL: 'transfer_self',
+  CASH: 'cash',
+  LOANREPAY: 'loan',
+  INCOME: 'income',
+}
+
+// В отличие от суммы и валюты, незнакомая группа — не повод останавливаться:
+// банк вправе завести новое значение в любой момент, и терять из-за этого
+// операцию нельзя. unknown из статистики не исключается, поэтому такая операция
+// остаётся видимой, а расхождение словарей заметно по счётчику в выводе сбора
+function resolveKind(item: Record<string, unknown>): string {
+  const group = getStr(item, 'group')
+  if (group === undefined) return 'unknown'
+  // проверка на собственное свойство обязательна: справочник — обычный объект,
+  // и группа вроде "toString" достала бы из прототипа функцию вместо вида
+  if (!Object.hasOwn(BANK_GROUP_TO_KIND, group)) return 'unknown'
+  return BANK_GROUP_TO_KIND[group] ?? 'unknown'
 }
 
 const ALPHA3_CURRENCY = /^[A-Za-z]{3}$/

@@ -18,6 +18,7 @@ const OPERATIONS = [
     currency: 'RUB',
     description: 'Кофейня',
     external_id: 'op-1',
+    kind: 'purchase',
   },
 ]
 

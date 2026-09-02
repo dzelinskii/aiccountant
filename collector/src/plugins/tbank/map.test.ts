@@ -31,6 +31,7 @@ function baseOperation(overrides: Record<string, unknown> = {}): Record<string, 
     id: 'op-x',
     status: 'OK',
     type: 'Debit',
+    group: 'PAY',
     operationTime: { milliseconds: '1783296000000' },
     accountAmount: { value: '100', currency: { strCode: '643' } },
     description: 'Тестовая операция',
@@ -211,6 +212,57 @@ test('буквенный код валюты берётся из name, если 
   // важно: strCode здесь numeric и незнакомый (840), но name даёт буквенный код —
   // resolveCurrency обязан проверить оба поля, а не остановиться на первом
   expect(op?.currency).toBe('USD')
+})
+
+// Словарь банка целиком — таблицей: перечень видов приложения фиксирован, и
+// проверять его шестью почти одинаковыми тестами значило бы прятать перечень
+// в их заголовках
+const BANK_GROUPS: [string, string][] = [
+  ['PAY', 'purchase'],
+  ['TRANSFER', 'transfer_person'],
+  ['INTERNAL', 'transfer_self'],
+  ['CASH', 'cash'],
+  ['LOANREPAY', 'loan'],
+  ['INCOME', 'income'],
+]
+
+test.each(BANK_GROUPS)('группа банка %s даёт вид операции %s', (group, kind) => {
+  const [op] = toOperations([baseOperation({ group })])
+  expect(op?.kind).toBe(kind)
+})
+
+test('незнакомая группа даёт unknown и не роняет сбор', () => {
+  // банк вправе завести новое значение в любой момент, и это не повод потерять
+  // операцию: с неизвестным видом она останется видимой в приложении
+  const [op] = toOperations([baseOperation({ group: 'CRYPTO_STAKING' })])
+  expect(op?.kind).toBe('unknown')
+  expect(op?.external_id).toBe('op-x')
+})
+
+test('отсутствующая группа даёт unknown', () => {
+  const withoutGroup = baseOperation()
+  delete withoutGroup['group']
+  const [op] = toOperations([withoutGroup])
+  expect(op?.kind).toBe('unknown')
+})
+
+test('нестроковая группа даёт unknown, а не падение', () => {
+  const [op] = toOperations([baseOperation({ group: 643 })])
+  expect(op?.kind).toBe('unknown')
+})
+
+test('имя из прототипа в группе не становится видом операции', () => {
+  // справочник групп — обычный объект, и поиск по нему без проверки на
+  // собственное свойство вернул бы функцию из прототипа вместо вида
+  const [op] = toOperations([baseOperation({ group: 'toString' })])
+  expect(op?.kind).toBe('unknown')
+})
+
+test('вид операции берётся из группы банка по всей пачке', () => {
+  const [op1, op2, op4] = toOperations(operationsPayload())
+  expect(op1?.kind).toBe('purchase')
+  expect(op2?.kind).toBe('income')
+  expect(op4?.kind).toBe('transfer_person')
 })
 
 test('toAccounts приводит счета к нашей модели', () => {
