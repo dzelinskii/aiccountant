@@ -1,7 +1,10 @@
+import unicodedata
 import uuid
 from datetime import date
 from decimal import Decimal
+from typing import NamedTuple
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.operation_kinds import OperationKind, kind_from_amount
@@ -105,8 +108,29 @@ async def update_category(
     return category
 
 
+def category_matches_amount(kind: str, amount: Decimal) -> bool:
+    """Соответствует ли знак суммы направлению категории: расход записывается
+    отрицательной суммой, доход — положительной.
+
+    Правило живёт здесь в единственном экземпляре, потому что спрашивают его
+    из разных мест и с разными последствиями: ручной ввод и правка отвечают
+    отказом, а импорт молча пропускает категорию, чтобы одна строка не уронила
+    всю пачку. Две копии выражения разошлись бы, и импорт снова падал бы там,
+    где обязан прощать.
+    """
+    return (kind == "expense") == (amount < 0)
+
+
 class DuplicateRuleError(Exception):
     """Правило для такого описания уже есть."""
+
+
+class InvalidRuleTextError(Exception):
+    """Из описания не выходит ключ правила: пусто или длиннее колонки."""
+
+
+# длина колонки normalized_text; меряем по ключу, а не по присланному тексту
+RULE_TEXT_MAX_LENGTH = 300
 
 
 def normalize_description(text: str) -> str:
@@ -115,19 +139,30 @@ def normalize_description(text: str) -> str:
     Нормализация намеренно простая — регистр и лишние пробелы. Вычищать «шум»
     банковских описаний регулярками значит подгонять систему под один банк,
     а формат описания у каждого свой.
+
+    NFC — не подгонка, а приведение к одной форме записи: «й» одним кодпоинтом
+    и «й» из «и» с надстрочным знаком выглядят одинаково, и правило, введённое
+    руками, обязано совпасть с тем, что прислал банк. Иначе оно молча
+    не сработает — худший вид отказа.
     """
-    return " ".join(text.split()).lower()
+    return unicodedata.normalize("NFC", " ".join(text.split()).lower())
 
 
 async def create_description_rule(
     db: AsyncSession, workspace_id: uuid.UUID, text: str, category_id: uuid.UUID
 ) -> DescriptionRule:
+    # проверяем ключ, а не присланный текст: в базу уходит именно он, и его
+    # длина от исходной отличается — строка из одних пробелов даёт пустой ключ,
+    # а приведение к нижнему регистру бывает и удлиняет (İ → i + точка)
     normalized = normalize_description(text)
-    if await repository.find_description_rule(db, workspace_id, normalized) is not None:
-        raise DuplicateRuleError
-    # категория обязана жить в том же workspace — иначе межворкспейсная ссылка
+    if not normalized or len(normalized) > RULE_TEXT_MAX_LENGTH:
+        raise InvalidRuleTextError
+    # категория обязана жить в том же workspace — иначе межворкспейсная ссылка.
+    # Проверяем раньше дубля: иначе повтор описания скрыл бы вторую ошибку
     if await repository.get_category(db, workspace_id, category_id) is None:
         raise NotFoundError
+    if await repository.find_description_rule(db, workspace_id, normalized) is not None:
+        raise DuplicateRuleError
     rule = DescriptionRule(
         workspace_id=workspace_id,
         normalized_text=normalized,
@@ -135,7 +170,14 @@ async def create_description_rule(
         source="manual",
     )
     repository.add_description_rule(db, rule)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # два одновременных создания: проверка выше их не ловит (обе сессии
+        # видят пустоту), ловит уникальный индекс. Ответ должен быть тем же
+        # честным «уже есть», а не 500 со сломанной сессией
+        await db.rollback()
+        raise DuplicateRuleError from None
     return rule
 
 
@@ -148,17 +190,34 @@ async def list_description_rules(
 async def delete_description_rule(
     db: AsyncSession, workspace_id: uuid.UUID, rule_id: uuid.UUID
 ) -> None:
-    """Удалить правило. Отсутствие правила — не ошибка: результат тот же, и
-    повторное удаление не должно валиться."""
     rule = await repository.get_description_rule(db, workspace_id, rule_id)
     if rule is None:
-        return
+        raise NotFoundError
     await repository.delete_description_rule(db, rule)
     await db.commit()
 
 
-async def category_for_description(
-    db: AsyncSession, workspace_id: uuid.UUID, description: str | None, amount: Decimal
+class RuleTarget(NamedTuple):
+    """Куда ведёт правило: категория и её направление. Направление несём рядом,
+    чтобы проверить знак суммы, не ходя за категорией отдельным запросом."""
+
+    category_id: uuid.UUID
+    kind: str
+
+
+async def load_description_rules(
+    db: AsyncSession, workspace_id: uuid.UUID
+) -> dict[str, RuleTarget]:
+    """Все правила workspace одним запросом — их единицы, а операций в пачке
+    до десятков тысяч; запрос на строку превратил бы импорт в N+1."""
+    return {
+        text: RuleTarget(category_id, kind)
+        for text, category_id, kind in await repository.description_rule_targets(db, workspace_id)
+    }
+
+
+def category_for_description(
+    rules: dict[str, RuleTarget], description: str | None, amount: Decimal
 ) -> uuid.UUID | None:
     """Категория по правилу для описания операции, если правило есть.
 
@@ -168,15 +227,10 @@ async def category_for_description(
     """
     if not description:
         return None
-    rule = await repository.find_description_rule(
-        db, workspace_id, normalize_description(description)
-    )
-    if rule is None:
+    target = rules.get(normalize_description(description))
+    if target is None or not category_matches_amount(target.kind, amount):
         return None
-    category = await repository.get_category(db, workspace_id, rule.category_id)
-    if category is None or (category.kind == "expense") != (amount < 0):
-        return None
-    return rule.category_id
+    return target.category_id
 
 
 class SignMismatchError(Exception):
@@ -210,7 +264,7 @@ async def validate_posting(
         category = await repository.get_category(db, workspace_id, category_id)
         if category is None:
             raise NotFoundError
-        if (category.kind == "expense") != (amount < 0):
+        if not category_matches_amount(category.kind, amount):
             raise SignMismatchError
     return account
 
@@ -370,7 +424,7 @@ async def update_transaction(
         category = await repository.get_category(db, workspace_id, new_category_id)
         if category is None:
             raise NotFoundError
-        if (category.kind == "expense") != (new_amount < 0):
+        if not category_matches_amount(category.kind, new_amount):
             raise SignMismatchError
 
     transaction.category_id = new_category_id

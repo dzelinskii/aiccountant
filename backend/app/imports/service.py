@@ -427,6 +427,10 @@ async def commit_from_import(
         db, workspace_id, imp.account_id, set(ext_ids)
     )
 
+    # правила читаем разом до цикла: их единицы, а операций в пачке до десятков
+    # тысяч, и запрос на строку сделал бы синхронную ручку N+1
+    rules = await ledger_service.load_description_rules(db, workspace_id)
+
     seen: set[str] = set()
     imported = 0
     for op, eid in zip(statement.operations, ext_ids, strict=True):
@@ -437,9 +441,7 @@ async def commit_from_import(
         # человек выбирает категорию сам, подставлять за него нечего. Флаг
         # category_confirmed при этом не ставим — человек подтвердил правило,
         # а не эту конкретную операцию
-        rule_category_id = await ledger_service.category_for_description(
-            db, workspace_id, op.description, op.amount
-        )
+        rule_category_id = ledger_service.category_for_description(rules, op.description, op.amount)
         await ledger_service.post_transaction(
             db,
             workspace_id,

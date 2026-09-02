@@ -139,6 +139,8 @@ async def create_description_rule(
         rule = await service.create_description_rule(
             db, workspace_id, payload.text, payload.category_id
         )
+    except service.InvalidRuleTextError:
+        raise HTTPException(status_code=422, detail="Из описания не выходит ключ правила") from None
     except service.DuplicateRuleError:
         raise HTTPException(
             status_code=409, detail="Правило для такого описания уже есть"
@@ -155,7 +157,10 @@ async def delete_description_rule(
     _user: Annotated[User, Depends(require_workspace_member)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> None:
-    await service.delete_description_rule(db, workspace_id, rule_id)
+    try:
+        await service.delete_description_rule(db, workspace_id, rule_id)
+    except service.NotFoundError:
+        raise HTTPException(status_code=404, detail="Правило не найдено") from None
 
 
 def _transaction_out(t: Transaction) -> TransactionOut:

@@ -1,10 +1,11 @@
+import asyncio
 import uuid
 from decimal import Decimal
 from typing import Any
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.ledger import repository as ledger_repository
 from app.ledger import service as ledger_service
@@ -244,13 +245,42 @@ async def test_api_rejects_duplicate_rule(client: AsyncClient) -> None:
     assert again.status_code == 409
 
 
-async def test_api_does_not_show_rules_of_another_workspace(client: AsyncClient) -> None:
+async def test_api_rejects_all_rule_requests_for_foreign_workspace(client: AsyncClient) -> None:
+    """Проверка членства на всех трёх ручках. Не про фильтр в repository (это
+    соседние тесты), а про то, что чужой workspace_id вообще не пускают внутрь:
+    без этой зависимости правило можно было бы записать в чужой workspace
+    вообще без аутентификации — CSRF-мидлварь запрос без Origin пропускает."""
     ws_a, _ = await _register(client, ALICE)
+    cat_a = await _category_id(client, ws_a, "expense")
+    rule = (
+        await client.post(
+            "/api/description-rules",
+            params={"workspace_id": ws_a},
+            json={"text": "Анастасия С.", "category_id": cat_a},
+        )
+    ).json()
 
     client.cookies.clear()
     await _register(client, BOB)
-    foreign = await client.get("/api/description-rules", params={"workspace_id": ws_a})
-    assert foreign.status_code == 403
+
+    listed = await client.get("/api/description-rules", params={"workspace_id": ws_a})
+    assert listed.status_code == 403
+    created = await client.post(
+        "/api/description-rules",
+        params={"workspace_id": ws_a},
+        json={"text": "Кофейня", "category_id": cat_a},
+    )
+    assert created.status_code == 403
+    deleted = await client.delete(
+        f"/api/description-rules/{rule['id']}", params={"workspace_id": ws_a}
+    )
+    assert deleted.status_code == 403
+
+    # и ничего из этого не долетело до данных Алисы
+    client.cookies.clear()
+    await client.post("/api/auth/login", json=ALICE)
+    survived = await client.get("/api/description-rules", params={"workspace_id": ws_a})
+    assert [r["id"] for r in survived.json()] == [rule["id"]]
 
 
 async def test_api_lists_and_deletes_rule(client: AsyncClient) -> None:
@@ -278,6 +308,10 @@ async def test_api_lists_and_deletes_rule(client: AsyncClient) -> None:
     )
     assert deleted.status_code == 204
     assert (await client.get("/api/description-rules", params={"workspace_id": ws})).json() == []
+
+    # повторное удаление — уже нечего удалять
+    again = await client.delete(f"/api/description-rules/{rule['id']}", params={"workspace_id": ws})
+    assert again.status_code == 404
 
 
 async def test_api_lists_only_rules_of_own_workspace(client: AsyncClient) -> None:
@@ -323,12 +357,120 @@ async def test_api_does_not_delete_rule_of_another_workspace(client: AsyncClient
     resp = await client.delete(
         f"/api/description-rules/{foreign['id']}", params={"workspace_id": ws_b}
     )
-    assert resp.status_code == 204  # для Боба такого правила просто нет
+    assert resp.status_code == 404  # для Боба чужое правило неотличимо от несуществующего
 
     client.cookies.clear()
     await client.post("/api/auth/login", json=ALICE)
     survived = await client.get("/api/description-rules", params={"workspace_id": ws_a})
     assert [r["id"] for r in survived.json()] == [foreign["id"]]
+
+
+async def test_api_rejects_text_without_usable_key(client: AsyncClient) -> None:
+    """Ключ меряем после нормализации, а не по присланному тексту: из одних
+    пробелов выходит пустой ключ — он ловил бы любую операцию с описанием
+    из пробелов и занимал бы уникальную пару, блокируя нормальное правило."""
+    ws, _ = await _register(client, ALICE)
+    cat = await _category_id(client, ws, "expense")
+
+    blank = await client.post(
+        "/api/description-rules",
+        params={"workspace_id": ws},
+        json={"text": "   ", "category_id": cat},
+    )
+    assert blank.status_code == 422
+
+    # «İ» в нижнем регистре занимает два символа вместо одного — двести таких
+    # проходят max_length=300 сырым текстом, а в колонку varchar(300) не влезают
+    too_long = await client.post(
+        "/api/description-rules",
+        params={"workspace_id": ws},
+        json={"text": "İ" * 200, "category_id": cat},
+    )
+    assert too_long.status_code == 422
+
+    assert (await client.get("/api/description-rules", params={"workspace_id": ws})).json() == []
+
+
+async def test_concurrent_creation_answers_duplicate(
+    client: AsyncClient, database_url: str
+) -> None:
+    """Два клика по кнопке или два коллектора разом: предпроверка в обеих
+    сессиях видит пустоту. Уцелеть должно одно правило, а второй запрос обязан
+    получить честное «уже есть», а не 500 со сломанной сессией."""
+    ws, _ = await _register(client, ALICE)
+    cat = await _category_id(client, ws, "expense")
+
+    engine = create_async_engine(database_url)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as one, factory() as two:
+        results = await asyncio.gather(
+            *(
+                ledger_service.create_description_rule(
+                    session, uuid.UUID(ws), "Анастасия С.", uuid.UUID(cat)
+                )
+                for session in (one, two)
+            ),
+            return_exceptions=True,
+        )
+    await engine.dispose()
+
+    failures = [r for r in results if isinstance(r, BaseException)]
+    assert len(failures) == 1
+    assert isinstance(failures[0], ledger_service.DuplicateRuleError)
+
+
+async def test_duplicate_slipping_past_precheck_is_not_an_error(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Окно гонки в чистом виде: правило уже в базе, но предпроверка его
+    не увидела. Отвечает уникальный индекс — и ответ обязан быть тем же."""
+    ws, _ = await _register(client, ALICE)
+    cat = await _category_id(client, ws, "expense")
+    await _add_rule(db_session, ws, "Анастасия С.", cat)
+
+    async def blind(*args: object, **kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(ledger_repository, "find_description_rule", blind)
+    with pytest.raises(ledger_service.DuplicateRuleError):
+        await _add_rule(db_session, ws, "Анастасия С.", cat)
+
+
+async def test_rule_applies_to_every_operation_in_batch(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Правила читаются один раз до цикла по операциям, поэтому применяться они
+    обязаны ко всей пачке, а не только к её первой строке."""
+    ws, acc = await _register(client, ALICE)
+    cat = await _category_id(client, ws, "expense")
+    await _add_rule(db_session, ws, "Анастасия С.", cat)
+
+    started = await client.post(
+        "/api/imports/parsed",
+        params={"workspace_id": ws, "account_id": acc},
+        json={
+            "parser": "test_collector",
+            "operations": [
+                {
+                    "occurred_at": "2026-09-01",
+                    "amount": "-450.00",
+                    "currency": "RUB",
+                    "description": "Анастасия С.",
+                    "external_id": f"op-{n}",
+                    "kind": "transfer_person",
+                }
+                for n in range(3)
+            ],
+        },
+    )
+    assert started.status_code == 201
+    committed = await client.post(
+        f"/api/imports/{started.json()['import_id']}/commit", params={"workspace_id": ws}
+    )
+    assert committed.json()["imported"] == 3
+
+    listed = (await client.get("/api/transactions", params={"workspace_id": ws})).json()
+    assert [item["category_id"] for item in listed["items"]] == [cat] * 3
 
 
 async def test_api_rejects_rule_with_category_of_another_workspace(client: AsyncClient) -> None:

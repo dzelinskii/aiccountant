@@ -143,6 +143,27 @@ async def list_description_rules(
     return list(rows.scalars().all())
 
 
+async def description_rule_targets(
+    db: AsyncSession, workspace_id: uuid.UUID
+) -> list[tuple[str, uuid.UUID, str]]:
+    """Ключ правила, его категория и направление категории — для применения
+    правил к пачке операций без запроса на каждую строку.
+
+    Категорию присоединяем с тем же фильтром по workspace: правило и категория
+    чужого workspace связаны только друг с другом, и одна снятая проверка
+    не должна открывать вторую.
+    """
+    rows = await db.execute(
+        select(DescriptionRule.normalized_text, DescriptionRule.category_id, Category.kind)
+        .join(Category, Category.id == DescriptionRule.category_id)
+        .where(
+            DescriptionRule.workspace_id == workspace_id,
+            Category.workspace_id == workspace_id,
+        )
+    )
+    return [(text, category_id, kind) for text, category_id, kind in rows.all()]
+
+
 async def get_description_rule(
     db: AsyncSession, workspace_id: uuid.UUID, rule_id: uuid.UUID
 ) -> DescriptionRule | None:
