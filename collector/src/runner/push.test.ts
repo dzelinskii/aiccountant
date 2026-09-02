@@ -40,6 +40,9 @@ test('операции уходят с токеном в заголовке и �
   expect(String(url)).toContain('account_id=acc-app')
   expect(headers?.['Authorization']).toBe('Bearer secret-token')
   expect(String(init?.body)).toContain('"parser":"tbank_collector"')
+  // вид операции — часть договора с бэкендом: без него импорт молча вернётся
+  // к unknown, и переводы снова попадут в расходы
+  expect(String(init?.body)).toContain('"kind":"purchase"')
 })
 
 test('пустой список не отправляется', async () => {

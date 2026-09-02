@@ -91,7 +91,7 @@ class TransactionOut(BaseModel):
     spending_override: bool | None
     # решение правила по виду и переопределению: фронт его читает, а не считает
     # сам — иначе появилась бы вторая реализация правила
-    counts_as_spending: bool
+    counts_in_stats: bool
     category_confirmed: bool
     suggested_category_id: uuid.UUID | None
     category_confidence: Decimal | None
@@ -129,7 +129,7 @@ class RecentTransaction(BaseModel):
     merchant: str | None
     # то же правило, что и в расходах месяца: строку, которой в них нет, лента
     # обязана пометить — иначе прочерк в колонке категории нечем объяснить
-    counts_as_spending: bool
+    counts_in_stats: bool
 
 
 class DashboardOut(BaseModel):

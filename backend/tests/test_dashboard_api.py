@@ -57,7 +57,7 @@ async def test_dashboard_aggregates(client: AsyncClient) -> None:
     assert food_exp["category_name"] == "Еда"
 
     assert len(data["recent"]) == 2
-    assert data["recent"][0]["counts_as_spending"] is True
+    assert data["recent"][0]["counts_in_stats"] is True
 
 
 async def test_dashboard_excludes_transfers_from_expenses(client: AsyncClient) -> None:

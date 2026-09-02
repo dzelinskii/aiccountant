@@ -1,4 +1,4 @@
-import { Card, Grid, Group, Progress, Stack, Table, Text, Title } from '@mantine/core'
+import { Badge, Card, Grid, Group, Progress, Stack, Table, Text, Title } from '@mantine/core'
 import { useQuery } from '@tanstack/react-query'
 import { getDashboard } from '../api/ledger'
 import { formatMoney } from '../lib/money'
@@ -65,7 +65,12 @@ export function DashboardPage() {
                 <Table.Td>{t.occurred_at}</Table.Td>
                 <Table.Td>{t.account_name}</Table.Td>
                 <Table.Td>
-                  {t.counts_as_spending ? (t.category_name ?? '—') : 'Не в расходах'}
+                  <Group gap="xs">
+                    <Text size="sm">{t.category_name ?? '—'}</Text>
+                    {!t.counts_in_stats && (
+                      <Badge size="xs" variant="light" color="gray">Вне статистики</Badge>
+                    )}
+                  </Group>
                 </Table.Td>
                 <Table.Td ta="right">{formatMoney(t.amount, t.currency)}</Table.Td>
               </Table.Tr>

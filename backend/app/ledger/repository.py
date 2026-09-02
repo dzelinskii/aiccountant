@@ -2,44 +2,29 @@ import uuid
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import case, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
-from app.core.operation_kinds import OPERATION_KINDS, counts_as_spending
+from app.core.operation_kinds import IN_STATS_KINDS, counts_in_stats
 from app.ledger.models import Account, Category, Transaction
 
-# Виды, которые правило считает тратой, — не список из головы, а ответы самой
-# counts_as_spending: словарь видов конечен, поэтому его можно просто перебрать.
-SPENDING_KINDS: tuple[str, ...] = tuple(
-    kind for kind in OPERATION_KINDS if counts_as_spending(kind, None)
-)
 
-# Обе формы правила ниже подставляют transfer_self строкам перевода между своими
-# счетами: созданные до появления колонки вида несут unknown и без этого задним
-# числом вернулись бы в расходы.
-
-
-def counts_in_stats() -> ColumnElement[bool]:
+def counts_in_stats_sql() -> ColumnElement[bool]:
     """Правило участия операции в статистике и категоризации выражением SQL.
 
-    Само правило — counts_as_spending, здесь только перевод на язык запроса:
-    coalesce повторяет её приоритет решения человека, набор видов взят у неё же.
+    Само правило — counts_in_stats, здесь только перевод на язык запроса:
+    coalesce повторяет её приоритет решения человека, а набор видов тот же.
     """
-    kind = case(
-        (Transaction.transfer_group_id.is_not(None), "transfer_self"),
-        else_=Transaction.operation_kind,
+    return func.coalesce(
+        Transaction.spending_override, Transaction.operation_kind.in_(IN_STATS_KINDS)
     )
-    return func.coalesce(Transaction.spending_override, kind.in_(SPENDING_KINDS))
 
 
 def transaction_counts_in_stats(transaction: Transaction) -> bool:
     """То же правило для одной прочитанной строки: ответ API и цифры дашборда
     обязаны считаться одинаково."""
-    kind = (
-        "transfer_self" if transaction.transfer_group_id is not None else transaction.operation_kind
-    )
-    return counts_as_spending(kind, transaction.spending_override)
+    return counts_in_stats(transaction.operation_kind, transaction.spending_override)
 
 
 async def list_accounts_with_balance(
@@ -208,7 +193,7 @@ async def month_expenses_by_category(
         .where(
             Transaction.workspace_id == workspace_id,
             Transaction.amount < 0,
-            counts_in_stats(),
+            counts_in_stats_sql(),
             Transaction.occurred_at >= month_start,
             Transaction.occurred_at < next_month_start,
         )
@@ -242,7 +227,7 @@ async def list_uncategorized(db: AsyncSession, workspace_id: uuid.UUID) -> list[
             Transaction.workspace_id == workspace_id,
             Transaction.category_id.is_(None),
             Transaction.suggested_category_id.is_(None),
-            counts_in_stats(),
+            counts_in_stats_sql(),
             Transaction.category_confirmed.is_(False),
         )
     )

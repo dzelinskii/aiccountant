@@ -22,9 +22,15 @@ OPERATION_KINDS: tuple[str, ...] = get_args(OperationKind)
 # операция должна остаться видимой, а не пропасть молча.
 NON_SPENDING_KINDS: tuple[str, ...] = ("transfer_self", "cash")
 
+# Остальные виды — те, что в статистике участвуют. Набор задан белым списком и
+# один на обе формы правила: SQL-запрос спрашивает `kind IN`, проверка в Python —
+# `kind in`. Чёрный список в одной форме и белый в другой отвечали бы
+# противоположное про вид, которого нет в словаре.
+IN_STATS_KINDS: tuple[str, ...] = tuple(k for k in OPERATION_KINDS if k not in NON_SPENDING_KINDS)
 
-def counts_as_spending(operation_kind: str, spending_override: bool | None) -> bool:
-    """Участвует ли операция в расходной статистике и категоризации.
+
+def counts_in_stats(operation_kind: str, spending_override: bool | None) -> bool:
+    """Участвует ли операция в статистике и категоризации.
 
     Решение человека перекрывает вид операции в обе стороны; null означает, что
     решения не было и судит вид.
@@ -35,7 +41,7 @@ def counts_as_spending(operation_kind: str, spending_override: bool | None) -> b
     """
     if spending_override is not None:
         return spending_override
-    return operation_kind not in NON_SPENDING_KINDS
+    return operation_kind in IN_STATS_KINDS
 
 
 def kind_from_amount(amount: Decimal) -> OperationKind:

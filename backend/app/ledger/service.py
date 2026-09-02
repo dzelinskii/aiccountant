@@ -413,7 +413,7 @@ async def build_dashboard(db: AsyncSession, workspace_id: uuid.UUID) -> Dashboar
                 account_name=acc_name,
                 category_name=cat_name,
                 merchant=t.merchant,
-                counts_as_spending=repository.transaction_counts_in_stats(t),
+                counts_in_stats=repository.transaction_counts_in_stats(t),
             )
             for t, acc_name, cat_name in recent
         ],

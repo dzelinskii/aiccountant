@@ -379,7 +379,7 @@ async def test_override_returns_operation_to_expenses(client: AsyncClient) -> No
 
     item = await _set_override(client, ws, await _id_by_kind(client, ws, "transfer_self"), True)
     assert item["spending_override"] is True
-    assert item["counts_as_spending"] is True
+    assert item["counts_in_stats"] is True
     assert await _month_expenses(client, ws) == Decimal("5000.00")
 
 
@@ -390,7 +390,7 @@ async def test_override_removes_purchase_from_expenses(client: AsyncClient) -> N
     await _import_operations(client, ws, card, [_op("-100.00", "purchase", "op-buy")])
 
     item = await _set_override(client, ws, await _id_by_kind(client, ws, "purchase"), False)
-    assert item["counts_as_spending"] is False
+    assert item["counts_in_stats"] is False
     assert await _month_expenses(client, ws) == Decimal(0)
 
 
@@ -406,7 +406,7 @@ async def test_override_can_be_reset_to_rule(client: AsyncClient) -> None:
 
     item = await _set_override(client, ws, txn_id, None)
     assert item["spending_override"] is None
-    assert item["counts_as_spending"] is False
+    assert item["counts_in_stats"] is False
     assert await _month_expenses(client, ws) == Decimal(0)
 
 
@@ -421,27 +421,73 @@ async def test_override_does_not_touch_operation_kind(client: AsyncClient) -> No
     assert await _kinds(client, ws) == ["transfer_self"]
 
 
-async def test_counts_as_spending_agrees_with_month_expenses(client: AsyncClient) -> None:
-    """Поле в ответе и цифры статистики считаются одним правилом: суммируем то,
-    что ответ пометил тратой, и сверяем с расходами месяца."""
+async def test_override_survives_edit_of_other_fields(client: AsyncClient) -> None:
+    """Правка соседнего поля решение человека не трогает: поле, которого нет
+    в запросе, и поле со значением null — разные вещи."""
+    ws, card, _ = await _ws_and_accounts(client)
+    await _import_operations(client, ws, card, [_op("-100.00", "purchase", "op-buy")])
+    txn_id = await _id_by_kind(client, ws, "purchase")
+    await _set_override(client, ws, txn_id, False)
+
+    patched = await client.patch(
+        f"/api/transactions/{txn_id}",
+        params={"workspace_id": ws},
+        json={"note": "чек потерян"},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["spending_override"] is False
+    assert patched.json()["counts_in_stats"] is False
+    assert await _month_expenses(client, ws) == Decimal(0)
+
+
+async def test_transfer_row_rejects_override(client: AsyncClient) -> None:
+    """У парного перевода обе стороны — движение между своими счетами; включить
+    в расходы одну из них значило бы посчитать эти деньги дважды."""
+    ws, card, cash = await _ws_and_accounts(client)
+    rows = (
+        await client.post(
+            "/api/transactions/transfer",
+            params={"workspace_id": ws},
+            json={
+                "from_account_id": card,
+                "to_account_id": cash,
+                "from_amount": "1000.00",
+                "to_amount": "1000.00",
+                "occurred_at": date.today().isoformat(),
+            },
+        )
+    ).json()["items"]
+
+    resp = await client.patch(
+        f"/api/transactions/{rows[0]['id']}",
+        params={"workspace_id": ws},
+        json={"spending_override": True},
+    )
+    assert resp.status_code == 409
+    assert await _month_expenses(client, ws) == Decimal(0)
+
+
+async def test_counts_in_stats_agrees_with_month_expenses(client: AsyncClient) -> None:
+    """Поле в ответе и цифры статистики считаются одним правилом. Берём весь
+    словарь видов: расхождение форм правила на любом из них — расхождение
+    экрана с цифрами."""
     ws, card, _ = await _ws_and_accounts(client)
     await _import_operations(
         client,
         ws,
         card,
-        [
-            _op("-300.00", "purchase", "op-buy"),
-            _op("-1000.00", "transfer_self", "op-self"),
-            _op("-700.00", "cash", "op-cash"),
-        ],
+        [_op("-100.00", kind, f"op-{kind}") for kind in OPERATION_KINDS],
     )
     # человек спорит с умолчанием в обе стороны сразу
     await _set_override(client, ws, await _id_by_kind(client, ws, "transfer_self"), True)
     await _set_override(client, ws, await _id_by_kind(client, ws, "purchase"), False)
 
     items = (await client.get("/api/transactions", params={"workspace_id": ws})).json()["items"]
-    counted = sum((-Decimal(t["amount"]) for t in items if t["counts_as_spending"]), Decimal(0))
-    assert counted == Decimal("1000.00")
+    assert len(items) == len(OPERATION_KINDS)
+    counted = sum((-Decimal(t["amount"]) for t in items if t["counts_in_stats"]), Decimal(0))
+    # покупку человек убрал, перевод себе вернул; из умолчаний остались
+    # transfer_person, loan, income и unknown
+    assert counted == Decimal("500.00")
     assert counted == await _month_expenses(client, ws)
 
 
@@ -457,7 +503,7 @@ async def test_dashboard_feed_marks_imported_transfer(client: AsyncClient) -> No
     )
 
     recent = (await client.get("/api/dashboard", params={"workspace_id": ws})).json()["recent"]
-    assert {t["amount"]: t["counts_as_spending"] for t in recent} == {
+    assert {t["amount"]: t["counts_in_stats"] for t in recent} == {
         "-1000.0000": False,
         "-300.0000": True,
     }

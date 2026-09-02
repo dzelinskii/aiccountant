@@ -117,7 +117,7 @@ async def update_category(
 
 
 def _transaction_out(t: Transaction) -> TransactionOut:
-    # counts_as_spending в модели нет — это решение правила, подставляем отдельно
+    # counts_in_stats в модели нет — это решение правила, подставляем отдельно
     return TransactionOut(
         id=t.id,
         account_id=t.account_id,
@@ -130,7 +130,7 @@ def _transaction_out(t: Transaction) -> TransactionOut:
         transfer_group_id=t.transfer_group_id,
         operation_kind=t.operation_kind,
         spending_override=t.spending_override,
-        counts_as_spending=repository.transaction_counts_in_stats(t),
+        counts_in_stats=repository.transaction_counts_in_stats(t),
         category_confirmed=t.category_confirmed,
         suggested_category_id=t.suggested_category_id,
         category_confidence=t.category_confidence,

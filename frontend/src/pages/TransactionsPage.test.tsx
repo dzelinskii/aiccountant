@@ -28,7 +28,7 @@ vi.mock('../api/ledger', () => ({
 const base: Transaction = {
   id: 't1', account_id: 'a1', category_id: null, amount: '-1000.00', currency: 'RUB',
   occurred_at: '2026-09-01', merchant: null, note: null, transfer_group_id: null,
-  operation_kind: 'purchase', spending_override: null, counts_as_spending: true,
+  operation_kind: 'purchase', spending_override: null, counts_in_stats: true,
   category_confirmed: false, suggested_category_id: null, category_confidence: null,
 }
 
@@ -49,20 +49,41 @@ function renderPage(txn: Transaction) {
   )
 }
 
-test('перевод между своими счетами подписан и предлагает считать его тратой', async () => {
-  renderPage({ ...base, operation_kind: 'transfer_self', counts_as_spending: false })
+test('перевод между своими счетами подписан и его можно вернуть в статистику', async () => {
+  renderPage({ ...base, operation_kind: 'transfer_self', counts_in_stats: false })
 
   expect(await screen.findByText('Между счетами')).toBeDefined()
-  const button = await screen.findByRole('button', { name: 'Считать тратой' })
+  await userEvent.click(await screen.findByRole('button', { name: 'Учитывать в статистике' }))
 
-  await userEvent.click(button)
   expect(setSpendingOverride).toHaveBeenCalledWith('ws-1', 't1', true)
 })
 
-test('у обычной покупки кнопка выносит её из расходов', async () => {
+test('обычную покупку кнопка выносит из статистики', async () => {
   renderPage(base)
 
-  expect(await screen.findByRole('button', { name: 'Не считать тратой' })).toBeDefined()
+  await userEvent.click(await screen.findByRole('button', { name: 'Не учитывать в статистике' }))
+
+  expect(setSpendingOverride).toHaveBeenCalledWith('ws-1', 't1', false)
   // подписью помечают только виды, объясняющие строку; покупка её не получает
   expect(screen.queryByText('Между счетами')).toBeNull()
+})
+
+test('заданное решение можно сбросить обратно к правилу', async () => {
+  renderPage({ ...base, spending_override: false, counts_in_stats: false })
+
+  await userEvent.click(await screen.findByRole('button', { name: 'Сбросить решение' }))
+
+  expect(setSpendingOverride).toHaveBeenCalledWith('ws-1', 't1', null)
+})
+
+test('строке парного перевода переопределение не предлагается', async () => {
+  // бэкенд такую правку отклоняет — кнопки, которая всегда упирается в 409,
+  // на экране быть не должно
+  renderPage({
+    ...base, transfer_group_id: 'g1', operation_kind: 'transfer_self', counts_in_stats: false,
+  })
+
+  expect(await screen.findByRole('button', { name: 'Удалить' })).toBeDefined()
+  expect(screen.queryByRole('button', { name: 'Учитывать в статистике' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Сбросить решение' })).toBeNull()
 })

@@ -8,7 +8,7 @@ import { CategoryCell } from './CategoryCell'
 const base: Transaction = {
   id: 't1', account_id: 'a1', category_id: null, amount: '-100.00', currency: 'RUB',
   occurred_at: '2026-07-05', merchant: 'Пятёрочка', note: null, transfer_group_id: null,
-  operation_kind: 'purchase', spending_override: null, counts_as_spending: true,
+  operation_kind: 'purchase', spending_override: null, counts_in_stats: true,
   category_confirmed: false, suggested_category_id: null, category_confidence: null,
 }
 
@@ -25,14 +25,22 @@ function renderCell(t: Transaction) {
   )
 }
 
-test('операции вне расходов категорию не предлагает', () => {
+test('операции вне статистики подсказку категории не предлагает', () => {
   // односторонний перевод из импорта: своей группы у него нет, и по ней его
   // не опознать — решает правило бэкенда
   renderCell({
-    ...base, operation_kind: 'transfer_self', counts_as_spending: false, suggested_category_id: 'c1',
+    ...base, operation_kind: 'transfer_self', counts_in_stats: false, suggested_category_id: 'c1',
   })
-  expect(screen.getByText('Не в расходах')).toBeDefined()
+  expect(screen.getByText('Вне статистики')).toBeDefined()
   expect(screen.queryByLabelText('Подтвердить категорию')).toBeNull()
+})
+
+test('пометка вне статистики не прячет заданную категорию', () => {
+  renderCell({
+    ...base, category_id: 'c1', category_confirmed: true, counts_in_stats: false,
+  })
+  expect(screen.getByText('Еда')).toBeDefined()
+  expect(screen.getByText('Вне статистики')).toBeDefined()
 })
 
 test('показывает бейдж AI у авто-категории без подтверждения', () => {

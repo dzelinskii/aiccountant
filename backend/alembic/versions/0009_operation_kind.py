@@ -23,6 +23,13 @@ def upgrade() -> None:
         ),
     )
     op.add_column("transactions", sa.Column("spending_override", sa.Boolean(), nullable=True))
+    # кроме строк перевода между своими счетами: вид у них известен и без
+    # источника — по группе. Без этого они остались бы unknown, вернулись бы
+    # в расходы задним числом, и правилу пришлось бы знать про группу отдельно
+    op.execute(
+        "UPDATE transactions SET operation_kind = 'transfer_self' "
+        "WHERE transfer_group_id IS NOT NULL"
+    )
 
 
 def downgrade() -> None:
