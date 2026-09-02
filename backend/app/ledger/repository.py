@@ -143,8 +143,24 @@ async def list_description_rules(
     return list(rows.scalars().all())
 
 
+async def get_description_rule(
+    db: AsyncSession, workspace_id: uuid.UUID, rule_id: uuid.UUID
+) -> DescriptionRule | None:
+    rule: DescriptionRule | None = await db.scalar(
+        select(DescriptionRule).where(
+            DescriptionRule.id == rule_id,
+            DescriptionRule.workspace_id == workspace_id,
+        )
+    )
+    return rule
+
+
 def add_description_rule(db: AsyncSession, rule: DescriptionRule) -> None:
     db.add(rule)
+
+
+async def delete_description_rule(db: AsyncSession, rule: DescriptionRule) -> None:
+    await db.delete(rule)
 
 
 async def list_transactions(

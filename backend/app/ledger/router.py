@@ -19,6 +19,8 @@ from app.ledger.schemas import (
     CategoryOut,
     CategoryUpdate,
     DashboardOut,
+    DescriptionRuleCreate,
+    DescriptionRuleOut,
     TransactionCreate,
     TransactionList,
     TransactionOut,
@@ -114,6 +116,46 @@ async def update_category(
     except service.NotFoundError:
         raise HTTPException(status_code=404, detail="Категория не найдена") from None
     return CategoryOut.model_validate(category, from_attributes=True)
+
+
+@router.get("/description-rules")
+async def list_description_rules(
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> list[DescriptionRuleOut]:
+    rules = await service.list_description_rules(db, workspace_id)
+    return [DescriptionRuleOut.model_validate(r, from_attributes=True) for r in rules]
+
+
+@router.post("/description-rules", status_code=201)
+async def create_description_rule(
+    payload: DescriptionRuleCreate,
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> DescriptionRuleOut:
+    try:
+        rule = await service.create_description_rule(
+            db, workspace_id, payload.text, payload.category_id
+        )
+    except service.DuplicateRuleError:
+        raise HTTPException(
+            status_code=409, detail="Правило для такого описания уже есть"
+        ) from None
+    except service.NotFoundError:
+        raise HTTPException(status_code=404, detail="Категория не найдена") from None
+    return DescriptionRuleOut.model_validate(rule, from_attributes=True)
+
+
+@router.delete("/description-rules/{rule_id}", status_code=204)
+async def delete_description_rule(
+    rule_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> None:
+    await service.delete_description_rule(db, workspace_id, rule_id)
 
 
 def _transaction_out(t: Transaction) -> TransactionOut:

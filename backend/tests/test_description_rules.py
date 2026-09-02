@@ -208,8 +208,8 @@ async def test_duplicate_rule_is_rejected(client: AsyncClient, db_session: Async
         await _add_rule(db_session, ws, "анастасия с.", cat)
 
 
-# Ручки управления правилами появляются следующим шагом плана (Task 7). Договор
-# с ними описан здесь заранее, поэтому до него эти три теста красные.
+# Ручки управления правилами. Экрана для них пока нет — правил единицы, поэтому
+# договор проверяется только на уровне API.
 
 
 async def test_rule_created_through_api_applies_on_import(client: AsyncClient) -> None:
@@ -251,3 +251,95 @@ async def test_api_does_not_show_rules_of_another_workspace(client: AsyncClient)
     await _register(client, BOB)
     foreign = await client.get("/api/description-rules", params={"workspace_id": ws_a})
     assert foreign.status_code == 403
+
+
+async def test_api_lists_and_deletes_rule(client: AsyncClient) -> None:
+    """Список отдаёт нормализованный ключ — по нему правило и срабатывает,
+    поэтому человек должен видеть именно его, а не то, что он ввёл."""
+    ws, _ = await _register(client, ALICE)
+    cat = await _category_id(client, ws, "expense")
+    created = await client.post(
+        "/api/description-rules",
+        params={"workspace_id": ws},
+        json={"text": "  Анастасия   С.  ", "category_id": cat},
+    )
+    assert created.status_code == 201
+    rule = created.json()
+    assert rule["normalized_text"] == "анастасия с."
+    assert rule["category_id"] == cat
+    assert rule["source"] == "manual"
+
+    listed = await client.get("/api/description-rules", params={"workspace_id": ws})
+    assert listed.status_code == 200
+    assert [r["id"] for r in listed.json()] == [rule["id"]]
+
+    deleted = await client.delete(
+        f"/api/description-rules/{rule['id']}", params={"workspace_id": ws}
+    )
+    assert deleted.status_code == 204
+    assert (await client.get("/api/description-rules", params={"workspace_id": ws})).json() == []
+
+
+async def test_api_lists_only_rules_of_own_workspace(client: AsyncClient) -> None:
+    """Чужих правил не видно даже участнику своего workspace: проверка членства
+    пропускает свой workspace_id, а отсекает чужие строки фильтр в repository."""
+    ws_a, _ = await _register(client, ALICE)
+    cat_a = await _category_id(client, ws_a, "expense")
+    await client.post(
+        "/api/description-rules",
+        params={"workspace_id": ws_a},
+        json={"text": "Анастасия С.", "category_id": cat_a},
+    )
+
+    client.cookies.clear()
+    ws_b, _ = await _register(client, BOB)
+    cat_b = await _category_id(client, ws_b, "expense")
+    await client.post(
+        "/api/description-rules",
+        params={"workspace_id": ws_b},
+        json={"text": "Кофейня", "category_id": cat_b},
+    )
+
+    listed = await client.get("/api/description-rules", params={"workspace_id": ws_b})
+    assert listed.status_code == 200
+    assert [r["normalized_text"] for r in listed.json()] == ["кофейня"]
+
+
+async def test_api_does_not_delete_rule_of_another_workspace(client: AsyncClient) -> None:
+    """Чужой идентификатор со своим workspace_id проходит проверку членства —
+    удалить чужое правило обязан помешать фильтр в repository."""
+    ws_a, _ = await _register(client, ALICE)
+    cat_a = await _category_id(client, ws_a, "expense")
+    foreign = (
+        await client.post(
+            "/api/description-rules",
+            params={"workspace_id": ws_a},
+            json={"text": "Анастасия С.", "category_id": cat_a},
+        )
+    ).json()
+
+    client.cookies.clear()
+    ws_b, _ = await _register(client, BOB)
+    resp = await client.delete(
+        f"/api/description-rules/{foreign['id']}", params={"workspace_id": ws_b}
+    )
+    assert resp.status_code == 204  # для Боба такого правила просто нет
+
+    client.cookies.clear()
+    await client.post("/api/auth/login", json=ALICE)
+    survived = await client.get("/api/description-rules", params={"workspace_id": ws_a})
+    assert [r["id"] for r in survived.json()] == [foreign["id"]]
+
+
+async def test_api_rejects_rule_with_category_of_another_workspace(client: AsyncClient) -> None:
+    ws_a, _ = await _register(client, ALICE)
+    cat_a = await _category_id(client, ws_a, "expense")
+
+    client.cookies.clear()
+    ws_b, _ = await _register(client, BOB)
+    resp = await client.post(
+        "/api/description-rules",
+        params={"workspace_id": ws_b},
+        json={"text": "Анастасия С.", "category_id": cat_a},
+    )
+    assert resp.status_code == 404

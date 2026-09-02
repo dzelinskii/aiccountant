@@ -145,6 +145,18 @@ async def list_description_rules(
     return await repository.list_description_rules(db, workspace_id)
 
 
+async def delete_description_rule(
+    db: AsyncSession, workspace_id: uuid.UUID, rule_id: uuid.UUID
+) -> None:
+    """Удалить правило. Отсутствие правила — не ошибка: результат тот же, и
+    повторное удаление не должно валиться."""
+    rule = await repository.get_description_rule(db, workspace_id, rule_id)
+    if rule is None:
+        return
+    await repository.delete_description_rule(db, rule)
+    await db.commit()
+
+
 async def category_for_description(
     db: AsyncSession, workspace_id: uuid.UUID, description: str | None, amount: Decimal
 ) -> uuid.UUID | None:

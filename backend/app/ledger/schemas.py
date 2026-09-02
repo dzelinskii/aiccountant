@@ -48,6 +48,20 @@ class CategoryOut(BaseModel):
     kind: str
 
 
+class DescriptionRuleCreate(BaseModel):
+    text: str = Field(min_length=1, max_length=300)
+    category_id: uuid.UUID
+
+
+class DescriptionRuleOut(BaseModel):
+    # отдаём нормализованный текст, а не исходный: правило ищется именно по нему,
+    # и человек должен видеть тот ключ, который реально сработает
+    id: uuid.UUID
+    normalized_text: str
+    category_id: uuid.UUID
+    source: str
+
+
 class TransactionCreate(BaseModel):
     account_id: uuid.UUID
     category_id: uuid.UUID | None = None
