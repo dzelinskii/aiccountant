@@ -64,7 +64,9 @@ export function DashboardPage() {
               <Table.Tr key={t.id}>
                 <Table.Td>{t.occurred_at}</Table.Td>
                 <Table.Td>{t.account_name}</Table.Td>
-                <Table.Td>{t.is_transfer ? 'Перевод' : (t.category_name ?? '—')}</Table.Td>
+                <Table.Td>
+                  {t.counts_as_spending ? (t.category_name ?? '—') : 'Не в расходах'}
+                </Table.Td>
                 <Table.Td ta="right">{formatMoney(t.amount, t.currency)}</Table.Td>
               </Table.Tr>
             ))}

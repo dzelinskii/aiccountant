@@ -4,7 +4,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import {
   categorizeUncategorized, createTransaction, createTransfer, deleteTransaction, dismissSuggestion,
-  getAccounts, getCategories, getTransactions, updateTransaction, type Transaction,
+  getAccounts, getCategories, getTransactions, setSpendingOverride, updateTransaction,
+  type Transaction,
 } from '../api/ledger'
 import { formatMoney } from '../lib/money'
 import { useWorkspaceStore } from '../store/workspace'
@@ -13,6 +14,16 @@ import { TransactionForm, type TransactionFormValues } from './TransactionForm'
 import { TransferForm, type TransferFormValues } from './TransferForm'
 
 const PAGE_SIZE = 20
+
+// подписи для человека; сам словарь видов задаёт бэкенд. Обычные покупки и
+// поступления не подписываем — подпись нужна там, где вид объясняет строку
+const KIND_LABELS: Record<string, string> = {
+  transfer_person: 'Перевод',
+  transfer_self: 'Между счетами',
+  cash: 'Наличные',
+  loan: 'Кредит',
+  unknown: 'Вид неизвестен',
+}
 
 export function TransactionsPage() {
   const ws = useWorkspaceStore((s) => s.workspaceId)!
@@ -55,6 +66,11 @@ export function TransactionsPage() {
   })
   const deleteMut = useMutation({
     mutationFn: (id: string) => deleteTransaction(ws, id),
+    onSuccess: invalidate,
+  })
+  const overrideMut = useMutation({
+    mutationFn: ({ id, value }: { id: string; value: boolean }) =>
+      setSpendingOverride(ws, id, value),
     onSuccess: invalidate,
   })
   const confirmMut = useMutation({
@@ -128,8 +144,19 @@ export function TransactionsPage() {
                   onDismiss={(x) => dismissMut.mutate(x)}
                 />
               </Table.Td>
-              <Table.Td ta="right">{formatMoney(t.amount, t.currency)}</Table.Td>
+              <Table.Td ta="right">
+                {formatMoney(t.amount, t.currency)}
+                {KIND_LABELS[t.operation_kind] && (
+                  <Text size="xs" c="dimmed">{KIND_LABELS[t.operation_kind]}</Text>
+                )}
+              </Table.Td>
               <Table.Td>
+                <Button
+                  variant="subtle" size="xs"
+                  onClick={() => overrideMut.mutate({ id: t.id, value: !t.counts_as_spending })}
+                >
+                  {t.counts_as_spending ? 'Не считать тратой' : 'Считать тратой'}
+                </Button>
                 <Button variant="subtle" color="red" size="xs" onClick={() => deleteMut.mutate(t.id)}>
                   Удалить
                 </Button>

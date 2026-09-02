@@ -2,29 +2,44 @@ import uuid
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
-from app.core.operation_kinds import NON_SPENDING_KINDS
+from app.core.operation_kinds import OPERATION_KINDS, counts_as_spending
 from app.ledger.models import Account, Category, Transaction
+
+# Виды, которые правило считает тратой, — не список из головы, а ответы самой
+# counts_as_spending: словарь видов конечен, поэтому его можно просто перебрать.
+SPENDING_KINDS: tuple[str, ...] = tuple(
+    kind for kind in OPERATION_KINDS if counts_as_spending(kind, None)
+)
+
+# Обе формы правила ниже подставляют transfer_self строкам перевода между своими
+# счетами: созданные до появления колонки вида несут unknown и без этого задним
+# числом вернулись бы в расходы.
 
 
 def counts_in_stats() -> ColumnElement[bool]:
-    """Участвует ли операция в статистике и категоризации.
+    """Правило участия операции в статистике и категоризации выражением SQL.
 
-    Перекладывание денег между своими счетами и операции с наличными
-    экономическим событием не являются. Решение человека перекрывает правило
-    в обе стороны.
-
-    Правило намеренно живёт одним выражением: оно нужно и дашборду, и
-    категоризации, а две копии развели бы их цифры на первой же правке.
+    Само правило — counts_as_spending, здесь только перевод на язык запроса:
+    coalesce повторяет её приоритет решения человека, набор видов взят у неё же.
     """
-    by_kind = and_(
-        Transaction.transfer_group_id.is_(None),
-        Transaction.operation_kind.notin_(NON_SPENDING_KINDS),
+    kind = case(
+        (Transaction.transfer_group_id.is_not(None), "transfer_self"),
+        else_=Transaction.operation_kind,
     )
-    return func.coalesce(Transaction.spending_override, by_kind)
+    return func.coalesce(Transaction.spending_override, kind.in_(SPENDING_KINDS))
+
+
+def transaction_counts_in_stats(transaction: Transaction) -> bool:
+    """То же правило для одной прочитанной строки: ответ API и цифры дашборда
+    обязаны считаться одинаково."""
+    kind = (
+        "transfer_self" if transaction.transfer_group_id is not None else transaction.operation_kind
+    )
+    return counts_as_spending(kind, transaction.spending_override)
 
 
 async def list_accounts_with_balance(

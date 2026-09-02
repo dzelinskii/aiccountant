@@ -9,7 +9,9 @@ interface Props {
 }
 
 export function CategoryCell({ txn, categoryName, onConfirm, onDismiss }: Props) {
-  if (txn.transfer_group_id) return <Text>Перевод</Text>
+  // категорию выбирают только тем операциям, что попадают в расходы; решает это
+  // бэкенд — правило одно на статистику, ленту и эту ячейку
+  if (!txn.counts_as_spending) return <Text>Не в расходах</Text>
 
   // подсказка ниже порога — предложить подтвердить/отклонить
   if (txn.suggested_category_id && !txn.category_id) {

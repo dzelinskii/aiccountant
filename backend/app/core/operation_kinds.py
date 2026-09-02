@@ -23,6 +23,21 @@ OPERATION_KINDS: tuple[str, ...] = get_args(OperationKind)
 NON_SPENDING_KINDS: tuple[str, ...] = ("transfer_self", "cash")
 
 
+def counts_as_spending(operation_kind: str, spending_override: bool | None) -> bool:
+    """Участвует ли операция в расходной статистике и категоризации.
+
+    Решение человека перекрывает вид операции в обе стороны; null означает, что
+    решения не было и судит вид.
+
+    Здесь правило живёт целиком и в единственном экземпляре: и SQL-запросы
+    статистики, и ответ API отвечают на вопрос через эту функцию. Вторая
+    реализация развела бы цифры дашборда с тем, что человек видит в строке.
+    """
+    if spending_override is not None:
+        return spending_override
+    return operation_kind not in NON_SPENDING_KINDS
+
+
 def kind_from_amount(amount: Decimal) -> OperationKind:
     """Вид там, где источник знает только знак суммы: ручной ввод и регулярные
     правила. Банк присылает вид сам, и через эту функцию не проходит."""

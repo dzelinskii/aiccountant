@@ -317,6 +317,12 @@ async def update_transaction(
         transaction.merchant = payload.merchant
     if payload.note is not None:
         transaction.note = payload.note
+    # именно model_fields_set, а не "is not None": здесь null — осмысленное
+    # значение «сбросить решение, пусть снова решает правило по виду операции».
+    # Обычная проверка на None их не различает, и сбросить переопределение
+    # через API стало бы невозможно
+    if "spending_override" in payload.model_fields_set:
+        transaction.spending_override = payload.spending_override
     await db.commit()
     return transaction
 
@@ -407,7 +413,7 @@ async def build_dashboard(db: AsyncSession, workspace_id: uuid.UUID) -> Dashboar
                 account_name=acc_name,
                 category_name=cat_name,
                 merchant=t.merchant,
-                is_transfer=t.transfer_group_id is not None,
+                counts_as_spending=repository.transaction_counts_in_stats(t),
             )
             for t, acc_name, cat_name in recent
         ],

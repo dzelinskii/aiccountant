@@ -1,6 +1,7 @@
 import uuid
 from datetime import date
 from decimal import Decimal
+from typing import Any
 
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -348,6 +349,118 @@ async def test_loan_and_transfer_person_stay_in_month_expenses(client: AsyncClie
     # неотличима от unknown, и тест не заметил бы, что вид до строки не доехал
     assert await _kinds(client, ws) == ["loan", "transfer_person"]
     assert await _month_expenses(client, ws) == Decimal("5700.00")
+
+
+async def _id_by_kind(client: AsyncClient, ws: str, kind: str) -> str:
+    resp = await client.get("/api/transactions", params={"workspace_id": ws})
+    assert resp.status_code == 200
+    return str(next(t["id"] for t in resp.json()["items"] if t["operation_kind"] == kind))
+
+
+async def _set_override(
+    client: AsyncClient, ws: str, txn_id: str, value: bool | None
+) -> dict[str, Any]:
+    resp = await client.patch(
+        f"/api/transactions/{txn_id}",
+        params={"workspace_id": ws},
+        json={"spending_override": value},
+    )
+    assert resp.status_code == 200
+    item: dict[str, Any] = resp.json()
+    return item
+
+
+async def test_override_returns_operation_to_expenses(client: AsyncClient) -> None:
+    """Человек перевёл деньги себе на другой счёт, но по смыслу это трата —
+    его решение возвращает операцию в расходы."""
+    ws, card, _ = await _ws_and_accounts(client)
+    await _import_operations(client, ws, card, [_op("-5000.00", "transfer_self", "op-self")])
+    assert await _month_expenses(client, ws) == Decimal(0)
+
+    item = await _set_override(client, ws, await _id_by_kind(client, ws, "transfer_self"), True)
+    assert item["spending_override"] is True
+    assert item["counts_as_spending"] is True
+    assert await _month_expenses(client, ws) == Decimal("5000.00")
+
+
+async def test_override_removes_purchase_from_expenses(client: AsyncClient) -> None:
+    """Решение человека работает и в обратную сторону: покупку можно вынести
+    из расходов, не выдумывая ей ложный вид операции."""
+    ws, card, _ = await _ws_and_accounts(client)
+    await _import_operations(client, ws, card, [_op("-100.00", "purchase", "op-buy")])
+
+    item = await _set_override(client, ws, await _id_by_kind(client, ws, "purchase"), False)
+    assert item["counts_as_spending"] is False
+    assert await _month_expenses(client, ws) == Decimal(0)
+
+
+async def test_override_can_be_reset_to_rule(client: AsyncClient) -> None:
+    """Сброс решения в null возвращает операцию под правило по виду. Без этого
+    передумать через API нельзя: null неотличим от «поле не прислали»."""
+    ws, card, _ = await _ws_and_accounts(client)
+    await _import_operations(client, ws, card, [_op("-5000.00", "transfer_self", "op-self")])
+    txn_id = await _id_by_kind(client, ws, "transfer_self")
+
+    await _set_override(client, ws, txn_id, True)
+    assert await _month_expenses(client, ws) == Decimal("5000.00")
+
+    item = await _set_override(client, ws, txn_id, None)
+    assert item["spending_override"] is None
+    assert item["counts_as_spending"] is False
+    assert await _month_expenses(client, ws) == Decimal(0)
+
+
+async def test_override_does_not_touch_operation_kind(client: AsyncClient) -> None:
+    """Решение человека и вид операции — разные поля: факт от источника
+    переопределением не затирается."""
+    ws, card, _ = await _ws_and_accounts(client)
+    await _import_operations(client, ws, card, [_op("-5000.00", "transfer_self", "op-self")])
+
+    item = await _set_override(client, ws, await _id_by_kind(client, ws, "transfer_self"), True)
+    assert item["operation_kind"] == "transfer_self"
+    assert await _kinds(client, ws) == ["transfer_self"]
+
+
+async def test_counts_as_spending_agrees_with_month_expenses(client: AsyncClient) -> None:
+    """Поле в ответе и цифры статистики считаются одним правилом: суммируем то,
+    что ответ пометил тратой, и сверяем с расходами месяца."""
+    ws, card, _ = await _ws_and_accounts(client)
+    await _import_operations(
+        client,
+        ws,
+        card,
+        [
+            _op("-300.00", "purchase", "op-buy"),
+            _op("-1000.00", "transfer_self", "op-self"),
+            _op("-700.00", "cash", "op-cash"),
+        ],
+    )
+    # человек спорит с умолчанием в обе стороны сразу
+    await _set_override(client, ws, await _id_by_kind(client, ws, "transfer_self"), True)
+    await _set_override(client, ws, await _id_by_kind(client, ws, "purchase"), False)
+
+    items = (await client.get("/api/transactions", params={"workspace_id": ws})).json()["items"]
+    counted = sum((-Decimal(t["amount"]) for t in items if t["counts_as_spending"]), Decimal(0))
+    assert counted == Decimal("1000.00")
+    assert counted == await _month_expenses(client, ws)
+
+
+async def test_dashboard_feed_marks_imported_transfer(client: AsyncClient) -> None:
+    """Односторонний перевод из импорта в ленте помечен: категории у него не
+    будет никогда, и прочерк без объяснения противоречил бы цифрам расходов."""
+    ws, card, _ = await _ws_and_accounts(client)
+    await _import_operations(
+        client,
+        ws,
+        card,
+        [_op("-1000.00", "transfer_self", "op-self"), _op("-300.00", "purchase", "op-buy")],
+    )
+
+    recent = (await client.get("/api/dashboard", params={"workspace_id": ws})).json()["recent"]
+    assert {t["amount"]: t["counts_as_spending"] for t in recent} == {
+        "-1000.0000": False,
+        "-300.0000": True,
+    }
 
 
 async def test_transfer_self_not_offered_for_categorization(

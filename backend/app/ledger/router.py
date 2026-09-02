@@ -9,8 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_db
 from app.identity.deps import require_workspace_member
 from app.identity.models import User
-from app.ledger import service
-from app.ledger.models import Account
+from app.ledger import repository, service
+from app.ledger.models import Account, Transaction
 from app.ledger.schemas import (
     AccountCreate,
     AccountOut,
@@ -116,8 +116,25 @@ async def update_category(
     return CategoryOut.model_validate(category, from_attributes=True)
 
 
-def _transaction_out(t: object) -> TransactionOut:
-    return TransactionOut.model_validate(t, from_attributes=True)
+def _transaction_out(t: Transaction) -> TransactionOut:
+    # counts_as_spending в модели нет — это решение правила, подставляем отдельно
+    return TransactionOut(
+        id=t.id,
+        account_id=t.account_id,
+        category_id=t.category_id,
+        amount=t.amount,
+        currency=t.currency,
+        occurred_at=t.occurred_at,
+        merchant=t.merchant,
+        note=t.note,
+        transfer_group_id=t.transfer_group_id,
+        operation_kind=t.operation_kind,
+        spending_override=t.spending_override,
+        counts_as_spending=repository.transaction_counts_in_stats(t),
+        category_confirmed=t.category_confirmed,
+        suggested_category_id=t.suggested_category_id,
+        category_confidence=t.category_confidence,
+    )
 
 
 @router.get("/transactions")

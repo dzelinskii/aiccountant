@@ -63,6 +63,9 @@ class TransactionUpdate(BaseModel):
     occurred_at: date | None = None
     merchant: str | None = Field(default=None, max_length=300)
     note: str | None = Field(default=None, max_length=1000)
+    # null здесь — не «поле не прислали», а «сбросить решение человека»;
+    # различает их update_transaction по model_fields_set
+    spending_override: bool | None = None
 
 
 class TransferCreate(BaseModel):
@@ -86,6 +89,9 @@ class TransactionOut(BaseModel):
     transfer_group_id: uuid.UUID | None
     operation_kind: str
     spending_override: bool | None
+    # решение правила по виду и переопределению: фронт его читает, а не считает
+    # сам — иначе появилась бы вторая реализация правила
+    counts_as_spending: bool
     category_confirmed: bool
     suggested_category_id: uuid.UUID | None
     category_confidence: Decimal | None
@@ -121,7 +127,9 @@ class RecentTransaction(BaseModel):
     account_name: str
     category_name: str | None
     merchant: str | None
-    is_transfer: bool
+    # то же правило, что и в расходах месяца: строку, которой в них нет, лента
+    # обязана пометить — иначе прочерк в колонке категории нечем объяснить
+    counts_as_spending: bool
 
 
 class DashboardOut(BaseModel):
