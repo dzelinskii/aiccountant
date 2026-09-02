@@ -2,10 +2,29 @@ import uuid
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
+from app.core.operation_kinds import NON_SPENDING_KINDS
 from app.ledger.models import Account, Category, Transaction
+
+
+def counts_in_stats() -> ColumnElement[bool]:
+    """Участвует ли операция в статистике и категоризации.
+
+    Перекладывание денег между своими счетами и операции с наличными
+    экономическим событием не являются. Решение человека перекрывает правило
+    в обе стороны.
+
+    Правило намеренно живёт одним выражением: до этого оно было продублировано
+    в двух запросах, и любая правка разводила дашборд с категоризацией.
+    """
+    by_kind = and_(
+        Transaction.transfer_group_id.is_(None),
+        Transaction.operation_kind.notin_(NON_SPENDING_KINDS),
+    )
+    return func.coalesce(Transaction.spending_override, by_kind)
 
 
 async def list_accounts_with_balance(
@@ -174,7 +193,7 @@ async def month_expenses_by_category(
         .where(
             Transaction.workspace_id == workspace_id,
             Transaction.amount < 0,
-            Transaction.transfer_group_id.is_(None),
+            counts_in_stats(),
             Transaction.occurred_at >= month_start,
             Transaction.occurred_at < next_month_start,
         )
@@ -200,15 +219,15 @@ async def recent_transactions(
 
 async def list_uncategorized(db: AsyncSession, workspace_id: uuid.UUID) -> list[Transaction]:
     """Операции без категории, без активной подсказки и без принятого человеком
-    решения; переводы не трогаем. Отклонённая подсказка помечается как
-    подтверждённое решение (см. dismiss_suggestion) — поэтому такие строки
-    сюда не попадают и не предлагаются повторно."""
+    решения; не участвующие в статистике не трогаем. Отклонённая подсказка
+    помечается как подтверждённое решение (см. dismiss_suggestion) — поэтому
+    такие строки сюда не попадают и не предлагаются повторно."""
     rows = await db.execute(
         select(Transaction).where(
             Transaction.workspace_id == workspace_id,
             Transaction.category_id.is_(None),
             Transaction.suggested_category_id.is_(None),
-            Transaction.transfer_group_id.is_(None),
+            counts_in_stats(),
             Transaction.category_confirmed.is_(False),
         )
     )

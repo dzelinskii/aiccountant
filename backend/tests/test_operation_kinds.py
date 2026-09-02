@@ -6,6 +6,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.operation_kinds import NON_SPENDING_KINDS, OPERATION_KINDS
+from app.ledger import repository as ledger_repository
 from app.ledger import service as ledger_service
 from app.recurring import service as recurring_service
 
@@ -252,3 +253,103 @@ async def test_imported_kind_survives_amount_edit(
     )
     assert patched.status_code == 200
     assert patched.json()["operation_kind"] == "transfer_person"
+
+
+def _op(amount: str, kind: str, external_id: str) -> dict[str, str]:
+    """Операция для импорта. Дата — сегодняшняя: расходы месяца на дашборде
+    считаются от текущего месяца."""
+    return {
+        "occurred_at": date.today().isoformat(),
+        "amount": amount,
+        "currency": "RUB",
+        "description": "Операция",
+        "external_id": external_id,
+        "kind": kind,
+    }
+
+
+async def _import_operations(
+    client: AsyncClient, ws: str, account_id: str, operations: list[dict[str, str]]
+) -> None:
+    """Создать операции заданных видов. Импорт — единственный источник, который
+    вид сообщает: ручной ввод выводит его из знака суммы, так что через него
+    ни перевод человеку, ни погашение кредита не задать."""
+    started = await client.post(
+        "/api/imports/parsed",
+        params={"workspace_id": ws, "account_id": account_id},
+        json={"parser": "tbank_collector", "operations": operations},
+    )
+    assert started.status_code == 201
+    committed = await client.post(
+        f"/api/imports/{started.json()['import_id']}/commit", params={"workspace_id": ws}
+    )
+    assert committed.status_code == 200
+    assert committed.json()["imported"] == len(operations)
+
+
+async def _month_expenses(client: AsyncClient, ws: str) -> Decimal:
+    resp = await client.get("/api/dashboard", params={"workspace_id": ws})
+    assert resp.status_code == 200
+    return sum((Decimal(bucket["total"]) for bucket in resp.json()["month_expenses"]), Decimal(0))
+
+
+async def test_transfer_self_out_of_month_expenses(client: AsyncClient) -> None:
+    """Движение между своими счетами деньги не тратит — в расходах месяца
+    остаётся только покупка рядом."""
+    ws, card, _ = await _ws_and_accounts(client)
+    await _import_operations(
+        client,
+        ws,
+        card,
+        [_op("-1000.00", "transfer_self", "op-self"), _op("-300.00", "purchase", "op-buy")],
+    )
+    assert await _month_expenses(client, ws) == Decimal("300.00")
+
+
+async def test_cash_out_of_month_expenses(client: AsyncClient) -> None:
+    """Снятие наличных меняет форму денег, а не тратит их."""
+    ws, card, _ = await _ws_and_accounts(client)
+    await _import_operations(
+        client,
+        ws,
+        card,
+        [_op("-2000.00", "cash", "op-cash"), _op("-300.00", "purchase", "op-buy")],
+    )
+    assert await _month_expenses(client, ws) == Decimal("300.00")
+
+
+async def test_unknown_stays_in_month_expenses(client: AsyncClient) -> None:
+    """Вид неизвестен — операция всё равно видна в расходах: молча исчезать
+    из статистики она не должна."""
+    ws, card, _ = await _ws_and_accounts(client)
+    await _import_operations(client, ws, card, [_op("-300.00", "unknown", "op-unknown")])
+    assert await _month_expenses(client, ws) == Decimal("300.00")
+
+
+async def test_loan_and_transfer_person_stay_in_month_expenses(client: AsyncClient) -> None:
+    """Погашение кредита и перевод человеку уносят деньги из домохозяйства —
+    это расход, а не перекладывание между своими счетами."""
+    ws, card, _ = await _ws_and_accounts(client)
+    await _import_operations(
+        client,
+        ws,
+        card,
+        [_op("-5000.00", "loan", "op-loan"), _op("-700.00", "transfer_person", "op-person")],
+    )
+    assert await _month_expenses(client, ws) == Decimal("5700.00")
+
+
+async def test_transfer_self_not_offered_for_categorization(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Категоризации нечего делать с перекладыванием денег между своими счетами:
+    правило участия в статистике одно и на дашборде, и здесь."""
+    ws, card, _ = await _ws_and_accounts(client)
+    await _import_operations(
+        client,
+        ws,
+        card,
+        [_op("-1000.00", "transfer_self", "op-self"), _op("-300.00", "purchase", "op-buy")],
+    )
+    rows = await ledger_repository.list_uncategorized(db_session, uuid.UUID(ws))
+    assert [t.operation_kind for t in rows] == ["purchase"]
