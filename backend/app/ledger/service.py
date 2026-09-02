@@ -154,6 +154,7 @@ async def post_transaction(
     note: str | None = None,
     external_id: str | None = None,
     import_id: uuid.UUID | None = None,
+    operation_kind: str = "unknown",
 ) -> Transaction:
     """Провести обычную операцию (расход/доход) без commit — для переиспользования
     ручным вводом, регуляркой и импортом выписок."""
@@ -174,6 +175,7 @@ async def post_transaction(
         created_by=user_id,
         external_id=external_id,
         import_id=import_id,
+        operation_kind=operation_kind,
     )
     repository.add_transaction(db, transaction)
     await db.flush()
@@ -219,6 +221,8 @@ async def create_transaction(
         source="manual",
         merchant=payload.merchant,
         note=payload.note,
+        # ручной ввод вида не спрашивает: о нём известно ровно то, что говорит знак
+        operation_kind="purchase" if payload.amount < 0 else "income",
     )
     await db.commit()
     return transaction
@@ -245,6 +249,7 @@ async def create_transfer(
         note=payload.note,
         source="manual",
         transfer_group_id=group_id,
+        operation_kind="transfer_self",
         created_by=user_id,
     )
     inflow = Transaction(
@@ -257,6 +262,7 @@ async def create_transfer(
         note=payload.note,
         source="manual",
         transfer_group_id=group_id,
+        operation_kind="transfer_self",
         created_by=user_id,
     )
     repository.add_transaction(db, outflow)

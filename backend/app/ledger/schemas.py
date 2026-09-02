@@ -84,6 +84,8 @@ class TransactionOut(BaseModel):
     merchant: str | None
     note: str | None
     transfer_group_id: uuid.UUID | None
+    operation_kind: str
+    spending_override: bool | None
     category_confirmed: bool
     suggested_category_id: uuid.UUID | None
     category_confidence: Decimal | None

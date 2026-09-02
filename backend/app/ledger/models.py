@@ -49,6 +49,14 @@ class Transaction(Base):
     source: Mapped[str] = mapped_column(String(20), default="manual")
     # общий id для двух строк перевода; null у обычных операций
     transfer_group_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    # вид операции в нашем словаре (app/core/operation_kinds.py) — факт от
+    # источника, не меняется человеком
+    operation_kind: Mapped[str] = mapped_column(
+        String(20), default="unknown", server_default=text("'unknown'")
+    )
+    # решение человека «считать тратой»; null — решает правило по виду операции.
+    # Держим отдельно от вида, чтобы смена правил не затирала ручные правки
+    spending_override: Mapped[bool | None] = mapped_column(nullable=True)
     # дедуп импорта: хеш операции; мягкая ссылка на запись imports (без FK,
     # чтобы ledger не зависел от модуля imports)
     external_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
