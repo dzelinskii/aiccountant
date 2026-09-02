@@ -2,6 +2,7 @@
   "name": "aiccountant-collector",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@11.9.0",
   "scripts": {
     "test": "vitest run",
     "lint": "oxlint --deny-warnings",
