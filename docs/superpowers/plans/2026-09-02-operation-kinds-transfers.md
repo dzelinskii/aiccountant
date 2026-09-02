@@ -821,8 +821,6 @@ Run: `cd backend && uv run pytest tests/test_operation_kinds.py -q`
 В `backend/app/ledger/schemas.py` в `TransactionUpdate` добавить:
 
 ```python
-    # null в запросе неотличим от «поле не прислали», поэтому сброс к правилу
-    # по умолчанию делается отдельным значением, а не null
     spending_override: bool | None = None
 ```
 
@@ -832,8 +830,35 @@ Run: `cd backend && uv run pytest tests/test_operation_kinds.py -q`
 полями:
 
 ```python
-    if payload.spending_override is not None:
+    # именно model_fields_set, а не "is not None": здесь null — осмысленное
+    # значение «сбросить решение, пусть снова решает правило по виду операции».
+    # Обычная проверка на None их не различает, и сбросить переопределение
+    # через API стало бы невозможно
+    if "spending_override" in payload.model_fields_set:
         transaction.spending_override = payload.spending_override
+```
+
+Тестом закрыть и сброс:
+
+```python
+async def test_override_can_be_reset_to_rule(client: AsyncClient) -> None:
+    ws, acc = await _ws_and_account(client)
+    await _post_kind(client, ws, acc, "transfer_self", "-5000.00")
+    txn_id = await _first_transaction_id(client, ws)
+
+    await client.patch(
+        f"/api/transactions/{txn_id}",
+        params={"workspace_id": ws},
+        json={"spending_override": True},
+    )
+    assert await _month_expenses_total(client, ws) == Decimal("5000.00")
+
+    await client.patch(
+        f"/api/transactions/{txn_id}",
+        params={"workspace_id": ws},
+        json={"spending_override": None},
+    )
+    assert await _month_expenses_total(client, ws) == Decimal(0)
 ```
 
 - [ ] **Шаг 5: Прогнать**
@@ -848,6 +873,9 @@ Run: `cd backend && uv run pytest tests/test_operation_kinds.py -q`
 ```typescript
   operation_kind: string
   spending_override: boolean | null
+  // считает бэкенд тем же правилом, что и статистика: повторять его здесь нельзя,
+  // иначе появится вторая реализация и разойдётся с первой
+  counts_as_spending: boolean
 ```
 
 И функцию правки (рядом с существующими вызовами API операций):
@@ -877,12 +905,21 @@ const KIND_LABELS: Record<string, string> = {
   loan: 'Кредит',
   unknown: 'Вид неизвестен',
 }
-
-function countsAsSpending(t: Transaction): boolean {
-  if (t.spending_override !== null) return t.spending_override
-  return t.operation_kind !== 'transfer_self' && t.operation_kind !== 'cash'
-}
 ```
+
+**Правило «считается ли тратой» на фронте не повторяем.** Повторив его здесь, мы
+получили бы вторую реализацию того самого правила, от дублирования которого
+избавляется Task 2, — и разошлись бы с бэкендом при первой же правке. Вместо
+этого бэкенд отдаёт уже посчитанное значение: в `TransactionOut` (шаг 3 этой
+задачи) добавить поле
+
+```python
+    counts_as_spending: bool
+```
+
+и заполнять его в месте сборки ответа тем же правилом, что и запросы статистики —
+через общую функцию, чтобы источник остался один. Фронт просто читает
+`t.counts_as_spending`.
 
 В строку таблицы, в ячейку с суммой, добавить пометку под суммой:
 
@@ -901,9 +938,9 @@ function countsAsSpending(t: Transaction): boolean {
                 <Button
                   variant="subtle"
                   size="xs"
-                  onClick={() => overrideMut.mutate({ id: t.id, value: !countsAsSpending(t) })}
+                  onClick={() => overrideMut.mutate({ id: t.id, value: !t.counts_as_spending })}
                 >
-                  {countsAsSpending(t) ? 'Не считать тратой' : 'Считать тратой'}
+                  {t.counts_as_spending ? 'Не считать тратой' : 'Считать тратой'}
                 </Button>
 ```
 
