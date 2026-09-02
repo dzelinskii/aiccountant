@@ -213,6 +213,52 @@ async def test_amounts_survive_round_trip(client: AsyncClient) -> None:
     assert status.json()["preview"]["operations"][0]["amount"] == "-1234.5678"
 
 
+async def _commit(client: AsyncClient, ws: str, acc: str, operations: list[dict[str, str]]) -> None:
+    started = await client.post(
+        "/api/imports/parsed",
+        params={"workspace_id": ws, "account_id": acc},
+        json={"parser": "tbank_collector", "operations": operations},
+    )
+    assert started.status_code == 201
+    committed = await client.post(
+        f"/api/imports/{started.json()['import_id']}/commit", params={"workspace_id": ws}
+    )
+    assert committed.json()["imported"] == len(operations)
+
+
+async def test_kind_reaches_transaction(client: AsyncClient) -> None:
+    """Вид — факт от банка, и он должен пережить путь до транзакции: разбор
+    лежит в JSONB между созданием импорта и подтверждением, и вид, не попавший
+    в payload, потерялся бы там молча."""
+    ws, acc = await _ws_and_account(client)
+    await _commit(client, ws, acc, [{**OPS[0], "kind": "transfer_self"}])
+
+    txns = (await client.get("/api/transactions", params={"workspace_id": ws})).json()
+    assert [t["operation_kind"] for t in txns["items"]] == ["transfer_self"]
+
+
+async def test_operation_without_kind_is_unknown(client: AsyncClient) -> None:
+    """Поле необязательное: выписка из PDF классификации не даёт вовсе, да и
+    коллектор старой версии его не шлёт — такой запрос валиден, вид unknown."""
+    ws, acc = await _ws_and_account(client)
+    await _commit(client, ws, acc, [OPS[0]])
+
+    txns = (await client.get("/api/transactions", params={"workspace_id": ws})).json()
+    assert [t["operation_kind"] for t in txns["items"]] == ["unknown"]
+
+
+async def test_bank_own_kind_word_rejected(client: AsyncClient) -> None:
+    """PAY — слово Т-Банка, а не наше: переводить свой словарь в общий обязан
+    коннектор, и граница API это проверяет, а не принимает на веру."""
+    ws, acc = await _ws_and_account(client)
+    resp = await client.post(
+        "/api/imports/parsed",
+        params={"workspace_id": ws, "account_id": acc},
+        json={"parser": "tbank_collector", "operations": [{**OPS[0], "kind": "PAY"}]},
+    )
+    assert resp.status_code == 422
+
+
 async def test_empty_operations_rejected(client: AsyncClient) -> None:
     ws, acc = await _ws_and_account(client)
     resp = await client.post(

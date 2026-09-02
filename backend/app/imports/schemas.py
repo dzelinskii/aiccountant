@@ -6,6 +6,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.core.money import MoneyStr
+from app.core.operation_kinds import OperationKind
 
 ImportStatus = Literal["processing", "ready", "failed", "completed"]
 
@@ -84,6 +85,9 @@ class ParsedOperationIn(BaseModel):
     # идентификатор операции у банка — на нём держится дедуп; префикс bank:
     # добавляем сами при сохранении, длину здесь ограничиваем с запасом под него
     external_id: str = Field(min_length=1, max_length=64 - len(BANK_EXTERNAL_ID_PREFIX))
+    # вид операции в нашем словаре; словарь конкретного банка переводит коннектор.
+    # unknown по умолчанию — источники без классификации (PDF-выписка) валидны
+    kind: OperationKind = "unknown"
 
     @field_validator("amount", mode="before")
     @classmethod

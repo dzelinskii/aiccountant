@@ -8,6 +8,7 @@ from typing import cast
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.operation_kinds import OPERATION_KINDS, OperationKind
 from app.imports import repository
 from app.imports.llm_parser import StatementTooLargeError
 from app.imports.models import Import
@@ -77,6 +78,7 @@ def _statement_to_payload(statement: ParsedStatement, warnings: list[str]) -> di
                 "amount": str(op.amount),
                 "currency": op.currency,
                 "description": op.description,
+                "kind": op.kind,
             }
             for op in statement.operations
         ],
@@ -95,6 +97,20 @@ def _finite_decimal(raw: object) -> Decimal:
     return value
 
 
+def _known_kind(raw: str) -> OperationKind:
+    """Вид из сохранённого разбора — на входе он проверен схемой, но лежит в JSONB,
+    где оказаться может что угодно. Незнакомое слово не роняет весь импорт из-за
+    одной строки: операция приезжает как unknown — так она остаётся видимой в
+    статистике, тогда как догадка в пользу transfer_self унесла бы её оттуда.
+    Молча это не проходит: факт уходит в лог."""
+    if raw in OPERATION_KINDS:
+        # cast, а не проверка типом: mypy не сужает str по вхождению в tuple[str, ...],
+        # хотя именно это вхождение и есть определение OperationKind
+        return cast(OperationKind, raw)
+    logger.warning("import_unknown_operation_kind", kind=raw[:20])
+    return "unknown"
+
+
 def _payload_to_statement(payload: dict[str, object]) -> ParsedStatement:
     # это наш собственный payload (не ввод пользователя): пустой/нетипизированный
     # "operations" или битый элемент внутри — порча данных, а не законный случай
@@ -110,6 +126,8 @@ def _payload_to_statement(payload: dict[str, object]) -> ParsedStatement:
                 amount=_finite_decimal(op["amount"]),
                 currency=str(op["currency"]),
                 description="" if op.get("description") is None else str(op["description"]),
+                # у импортов, созданных до появления вида, ключа нет — это не порча
+                kind=str(op.get("kind", "unknown")),
             )
             for op in raw_ops
         ]
@@ -181,6 +199,7 @@ async def create_parsed_import(
                 amount=op.amount,
                 currency=op.currency,
                 description=op.description,
+                kind=op.kind,
             )
             for op in operations
         ],
@@ -419,6 +438,7 @@ async def commit_from_import(
             merchant=op.description[:300] or None,
             external_id=eid,
             import_id=imp.id,
+            operation_kind=_known_kind(op.kind),
         )
         imported += 1
 
