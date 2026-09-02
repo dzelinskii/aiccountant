@@ -4,6 +4,7 @@ import uuid
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
+from structlog.testing import capture_logs
 
 from app.imports import service
 from app.imports.models import Import
@@ -257,6 +258,87 @@ async def test_bank_own_kind_word_rejected(client: AsyncClient) -> None:
         json={"parser": "tbank_collector", "operations": [{**OPS[0], "kind": "PAY"}]},
     )
     assert resp.status_code == 422
+
+
+async def _rewrite_payload_kinds(
+    db_session: AsyncSession, import_id: str, kinds: list[str | None]
+) -> None:
+    """Подменить вид в сохранённом разборе — так к подтверждению приезжает payload,
+    которого текущий код не пишет: с чужим словом (порча данных) или вовсе без
+    ключа kind (импорт, созданный до его появления). None — убрать ключ."""
+    imp = await db_session.get(Import, uuid.UUID(import_id))
+    assert imp is not None
+    assert isinstance(imp.parsed_payload, dict)
+    payload = dict(imp.parsed_payload)
+    raw_ops = payload["operations"]
+    assert isinstance(raw_ops, list)
+    operations: list[dict[str, object]] = []
+    for raw_op, kind in zip(raw_ops, kinds, strict=True):
+        op = dict(raw_op)
+        op.pop("kind")
+        if kind is not None:
+            op["kind"] = kind
+        operations.append(op)
+    payload["operations"] = operations
+    imp.parsed_payload = payload
+    await db_session.commit()
+
+
+async def test_unknown_kind_in_payload_becomes_unknown(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Слово не из словаря могло попасть в JSONB только порчей данных. Ронять из-за
+    одной строки весь импорт хуже, чем принять её: операция приезжает как unknown —
+    в статистике она видна, а не пропала, как случилось бы при догадке в пользу
+    transfer_self. Молча это не проходит: импорт с мусором виден в логе. Строка
+    со знакомым видом рядом при этом доезжает как есть."""
+    ws, acc = await _ws_and_account(client)
+    started = await client.post(
+        "/api/imports/parsed",
+        params={"workspace_id": ws, "account_id": acc},
+        json={"parser": "tbank_collector", "operations": OPS},
+    )
+    import_id = started.json()["import_id"]
+    await _rewrite_payload_kinds(db_session, import_id, ["PAY", "income"])
+
+    with capture_logs() as logs:
+        committed = await client.post(
+            f"/api/imports/{import_id}/commit", params={"workspace_id": ws}
+        )
+    assert committed.json()["imported"] == 2
+
+    txns = (await client.get("/api/transactions", params={"workspace_id": ws})).json()
+    assert {t["merchant"]: t["operation_kind"] for t in txns["items"]} == {
+        "Кофейня": "unknown",
+        "Зарплата": "income",
+    }
+    # по логу должно быть видно, какой импорт принёс мусор; самого значения там
+    # нет намеренно — оно может оказаться куском данных выписки
+    assert [e["import_id"] for e in logs if e["event"] == "import_unknown_operation_kind"] == [
+        import_id
+    ]
+
+
+async def test_payload_without_kind_key_still_commits(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Разбор импортов, созданных до появления вида, лежит в JSONB без ключа kind:
+    подтверждать их нужно по-прежнему, операции получают unknown."""
+    ws, acc = await _ws_and_account(client)
+    started = await client.post(
+        "/api/imports/parsed",
+        params={"workspace_id": ws, "account_id": acc},
+        json={"parser": "tbank_collector", "operations": OPS},
+    )
+    import_id = started.json()["import_id"]
+    await _rewrite_payload_kinds(db_session, import_id, [None, None])
+
+    committed = await client.post(f"/api/imports/{import_id}/commit", params={"workspace_id": ws})
+    assert committed.status_code == 200
+    assert committed.json()["imported"] == 2
+
+    txns = (await client.get("/api/transactions", params={"workspace_id": ws})).json()
+    assert [t["operation_kind"] for t in txns["items"]] == ["unknown", "unknown"]
 
 
 async def test_empty_operations_rejected(client: AsyncClient) -> None:

@@ -287,6 +287,13 @@ async def _import_operations(
     assert committed.json()["imported"] == len(operations)
 
 
+async def _kinds(client: AsyncClient, ws: str) -> list[str]:
+    """Виды всех операций workspace, по алфавиту: порядок строк одной даты не задан."""
+    resp = await client.get("/api/transactions", params={"workspace_id": ws})
+    assert resp.status_code == 200
+    return sorted(t["operation_kind"] for t in resp.json()["items"])
+
+
 async def _month_expenses(client: AsyncClient, ws: str) -> Decimal:
     resp = await client.get("/api/dashboard", params={"workspace_id": ws})
     assert resp.status_code == 200
@@ -323,6 +330,7 @@ async def test_unknown_stays_in_month_expenses(client: AsyncClient) -> None:
     из статистики она не должна."""
     ws, card, _ = await _ws_and_accounts(client)
     await _import_operations(client, ws, card, [_op("-300.00", "unknown", "op-unknown")])
+    assert await _kinds(client, ws) == ["unknown"]
     assert await _month_expenses(client, ws) == Decimal("300.00")
 
 
@@ -336,6 +344,9 @@ async def test_loan_and_transfer_person_stay_in_month_expenses(client: AsyncClie
         card,
         [_op("-5000.00", "loan", "op-loan"), _op("-700.00", "transfer_person", "op-person")],
     )
+    # сами виды проверяем отдельно: по одной сумме расходов такая операция
+    # неотличима от unknown, и тест не заметил бы, что вид до строки не доехал
+    assert await _kinds(client, ws) == ["loan", "transfer_person"]
     assert await _month_expenses(client, ws) == Decimal("5700.00")
 
 

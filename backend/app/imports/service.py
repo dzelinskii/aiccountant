@@ -97,17 +97,24 @@ def _finite_decimal(raw: object) -> Decimal:
     return value
 
 
-def _known_kind(raw: str) -> OperationKind:
+def _known_kind(raw: str, import_id: uuid.UUID) -> OperationKind:
     """Вид из сохранённого разбора — на входе он проверен схемой, но лежит в JSONB,
     где оказаться может что угодно. Незнакомое слово не роняет весь импорт из-за
     одной строки: операция приезжает как unknown — так она остаётся видимой в
     статистике, тогда как догадка в пользу transfer_self унесла бы её оттуда.
-    Молча это не проходит: факт уходит в лог."""
+    Молча это не проходит: импорт с мусором виден в логе. Само значение туда не
+    пишем — по построению это может оказаться куском данных выписки.
+
+    Сужение живёт здесь, а не в _payload_to_statement, где payload превращается
+    в ParsedOperation: там любая порча роняет весь разбор (и это верно для суммы
+    или даты, без которых операции нет), а виду нужна именно деградация. Поэтому
+    ParsedOperation.kind типизирован как str, а словарём он становится на входе
+    в ledger — единственном месте, где вид что-то решает."""
     if raw in OPERATION_KINDS:
         # cast, а не проверка типом: mypy не сужает str по вхождению в tuple[str, ...],
         # хотя именно это вхождение и есть определение OperationKind
         return cast(OperationKind, raw)
-    logger.warning("import_unknown_operation_kind", kind=raw[:20])
+    logger.warning("import_unknown_operation_kind", import_id=str(import_id))
     return "unknown"
 
 
@@ -438,7 +445,7 @@ async def commit_from_import(
             merchant=op.description[:300] or None,
             external_id=eid,
             import_id=imp.id,
-            operation_kind=_known_kind(op.kind),
+            operation_kind=_known_kind(op.kind, imp.id),
         )
         imported += 1
 
