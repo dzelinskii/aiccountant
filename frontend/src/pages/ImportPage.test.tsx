@@ -4,7 +4,7 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, expect, test, vi } from 'vitest'
 import type { ImportStatus } from '../api/imports'
-import { getImportStatus, startImport } from '../api/imports'
+import { getImportStatus, getPendingImports, startImport } from '../api/imports'
 import { useWorkspaceStore } from '../store/workspace'
 import { ImportPage } from './ImportPage'
 
@@ -22,11 +22,13 @@ vi.mock('../api/ledger', () => ({
 
 const mockedStartImport = vi.mocked(startImport)
 const mockedGetImportStatus = vi.mocked(getImportStatus)
+const mockedGetPendingImports = vi.mocked(getPendingImports)
 
 beforeEach(() => {
   useWorkspaceStore.getState().setWorkspaceId('ws-1')
   vi.clearAllMocks()
   mockedStartImport.mockResolvedValue({ import_id: 'imp-1' })
+  mockedGetPendingImports.mockResolvedValue([])
 })
 
 function renderPage() {
@@ -86,6 +88,47 @@ test(
   },
   10000,
 )
+
+test('импорт от коллектора открывается из списка ожидающих', async () => {
+  mockedGetPendingImports.mockResolvedValue([
+    {
+      import_id: 'imp-collector',
+      account_id: 'acc-1',
+      parser: 'tbank_collector',
+      status: 'ready',
+      file_name: 'tbank_collector.json',
+      created_at: '2026-07-05T10:00:00Z',
+      operations_count: 3,
+    },
+  ])
+  mockedGetImportStatus.mockResolvedValue({
+    import_id: 'imp-collector',
+    status: 'ready',
+    parser: 'tbank_collector',
+    error: null,
+    warnings: [],
+    preview: {
+      operations: [
+        { occurred_at: '2026-07-05', amount: '-1150.0000', currency: 'RUB', description: 'Кофейня', is_duplicate: false },
+      ],
+      new_count: 1,
+      duplicate_count: 0,
+      total_income: null,
+      total_expense: null,
+    },
+  })
+  const user = userEvent.setup()
+  renderPage()
+
+  // файла у такого импорта не было — синтетическое имя не выдаём за имя файла
+  expect(await screen.findByText(/Т-Банк, автосбор/)).toBeDefined()
+  expect(screen.queryByText(/tbank_collector\.json/)).toBeNull()
+
+  await user.click(screen.getByRole('button', { name: 'Открыть' }))
+
+  expect(await screen.findByText(/Новых:/)).toBeDefined()
+  expect(mockedGetImportStatus).toHaveBeenCalledWith('ws-1', 'imp-collector')
+})
 
 test('сбой первого запроса статуса не оставляет вечный спиннер', async () => {
   mockedGetImportStatus.mockRejectedValueOnce(new Error('network error'))

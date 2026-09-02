@@ -2,10 +2,25 @@ import { Alert, Button, Card, FileInput, Group, Loader, Select, Stack, Text, Tit
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { ApiError } from '../api/client'
-import { commitImport, getImportStatus, startImport } from '../api/imports'
+import type { ImportListItem } from '../api/imports'
+import { commitImport, getImportStatus, getPendingImports, startImport } from '../api/imports'
 import { getAccounts } from '../api/ledger'
 import { useWorkspaceStore } from '../store/workspace'
 import { ImportPreviewPanel } from './ImportPreviewPanel'
+
+// у импорта от коллектора файла не было: file_name — синтетическая строка вида
+// "<парсер>.json", выдавать её за имя файла нельзя, показываем источник
+const COLLECTOR_SOURCES: Record<string, string> = {
+  tbank_collector: 'Т-Банк, автосбор',
+}
+
+function sourceLabel(item: ImportListItem): string {
+  if (item.parser === null) return item.file_name
+  const collector = COLLECTOR_SOURCES[item.parser]
+  if (collector !== undefined) return collector
+  // коллектор, ещё не описанный выше: имя файла у него всё равно ненастоящее
+  return item.parser.endsWith('_collector') ? 'Автосбор из банка' : item.file_name
+}
 
 export function ImportPage() {
   const ws = useWorkspaceStore((s) => s.workspaceId)!
@@ -15,6 +30,11 @@ export function ImportPage() {
   const [importId, setImportId] = useState<string | null>(null)
 
   const { data: accounts } = useQuery({ queryKey: ['accounts', ws], queryFn: () => getAccounts(ws) })
+  // импорты от коллектора приходят мимо браузера — без этого списка их не открыть
+  const { data: pending } = useQuery({
+    queryKey: ['pending-imports', ws],
+    queryFn: () => getPendingImports(ws),
+  })
 
   // объявлен раньше startMut, потому что его reset() нужен в onMutate ниже
   const commitMut = useMutation({
@@ -26,6 +46,8 @@ export function ImportPage() {
       // статус станет completed (preview: null) — панель уйдёт вместе со старой кнопкой,
       // а подтверждение об импорте живёт уровнем выше, в самой странице
       await queryClient.invalidateQueries({ queryKey: ['import-status', ws, importId] })
+      // импорт стал completed — из списка ожидающих он должен уйти
+      await queryClient.invalidateQueries({ queryKey: ['pending-imports', ws] })
     },
   })
 
@@ -60,9 +82,36 @@ export function ImportPage() {
     commitMut.reset()
   }
 
+  // открываем чужой (не загруженный в этой вкладке) импорт: дальше отработают
+  // тот же поллинг статуса и та же панель превью
+  const openPending = (item: ImportListItem) => {
+    reset()
+    setImportId(item.import_id)
+  }
+
   return (
     <Stack>
       <Title order={2}>Импорт выписки</Title>
+
+      {pending && pending.length > 0 && (
+        <Card withBorder>
+          <Title order={4} mb="sm">Ожидают подтверждения</Title>
+          <Stack gap="xs">
+            {pending.map((item) => (
+              <Group key={item.import_id} justify="space-between">
+                <Text>
+                  {new Date(item.created_at).toLocaleDateString('ru-RU')} — {sourceLabel(item)},
+                  операций: {item.operations_count}
+                </Text>
+                <Button variant="light" onClick={() => openPending(item)}>
+                  Открыть
+                </Button>
+              </Group>
+            ))}
+          </Stack>
+        </Card>
+      )}
+
       <Card withBorder>
         <Stack>
           <Select

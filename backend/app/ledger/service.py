@@ -190,6 +190,15 @@ async def account_exists(db: AsyncSession, workspace_id: uuid.UUID, account_id: 
     return await repository.get_account(db, workspace_id, account_id) is not None
 
 
+async def get_account_currency(
+    db: AsyncSession, workspace_id: uuid.UUID, account_id: uuid.UUID
+) -> str | None:
+    """Валюта счёта или None, если счёт не найден (в своём workspace) — там, где,
+    кроме факта существования, нужна ещё и валюта, чтобы не ходить в БД дважды."""
+    account = await repository.get_account(db, workspace_id, account_id)
+    return account.currency if account is not None else None
+
+
 def enqueue_categorization(workspace_id: uuid.UUID) -> None:
     """Публичная точка постановки категоризации в очередь — её зовут роутер и
     модуль imports; так границы соблюдены (imports ходит только в ledger.service)."""

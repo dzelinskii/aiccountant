@@ -1,7 +1,7 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Response
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,9 +9,26 @@ from app.core.db import get_db
 from app.core.redis import get_redis
 from app.core.settings import get_settings
 from app.identity import service, sessions
-from app.identity.deps import SESSION_COOKIE, get_current_user, require_owner
+from app.identity.deps import (
+    SESSION_COOKIE,
+    get_current_user,
+    require_owner,
+    require_session_user,
+    require_workspace_member,
+    token_scope,
+)
 from app.identity.models import User
-from app.identity.schemas import LoginIn, MemberIn, MeOut, RegisterIn, UserOut, WorkspaceOut
+from app.identity.schemas import (
+    ApiTokenCreate,
+    ApiTokenCreated,
+    ApiTokenOut,
+    LoginIn,
+    MemberIn,
+    MeOut,
+    RegisterIn,
+    UserOut,
+    WorkspaceOut,
+)
 from app.ledger import service as ledger_service
 
 router = APIRouter(prefix="/api")
@@ -74,10 +91,16 @@ async def logout(
 
 @router.get("/me")
 async def me(
+    request: Request,
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> MeOut:
     pairs = await service.list_workspaces(db, user.id)
+    scope = token_scope(request)
+    if scope is not None:
+        # токен ограничен своим workspace — не раскрываем остальные workspace
+        # владельца (иначе это перечисление чужих домохозяйств через токен)
+        pairs = [(workspace, role) for workspace, role in pairs if workspace.id == scope]
     return MeOut(
         id=user.id,
         email=user.email,
@@ -104,3 +127,44 @@ async def add_member(
     except service.AlreadyMemberError:
         raise HTTPException(status_code=409, detail="Уже участник") from None
     return {"user_id": str(membership.user_id), "role": membership.role}
+
+
+@router.post("/tokens", status_code=201)
+async def create_token(
+    payload: ApiTokenCreate,
+    workspace_id: uuid.UUID,
+    user: Annotated[User, Depends(require_workspace_member)],
+    _session: Annotated[User, Depends(require_session_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> ApiTokenCreated:
+    api_token, token = await service.create_api_token(db, workspace_id, user.id, payload.name)
+    return ApiTokenCreated(
+        id=api_token.id,
+        name=api_token.name,
+        created_at=api_token.created_at,
+        last_used_at=api_token.last_used_at,
+        token=token,
+    )
+
+
+@router.get("/tokens")
+async def list_tokens(
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+    _session: Annotated[User, Depends(require_session_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> list[ApiTokenOut]:
+    rows = await service.list_api_tokens(db, workspace_id)
+    return [ApiTokenOut.model_validate(t, from_attributes=True) for t in rows]
+
+
+@router.delete("/tokens/{token_id}", status_code=204)
+async def revoke_token(
+    token_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+    _session: Annotated[User, Depends(require_session_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> None:
+    if not await service.revoke_api_token(db, workspace_id, token_id):
+        raise HTTPException(status_code=404, detail="Токен не найден")

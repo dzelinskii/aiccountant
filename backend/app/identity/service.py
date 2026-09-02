@@ -1,13 +1,19 @@
 import uuid
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import hash_password, verify_password
-from app.identity.models import Membership, User, Workspace
+from app.identity.models import ApiToken, Membership, User, Workspace
+from app.identity.tokens import generate_token, hash_token
 
 DEFAULT_WORKSPACE_NAME = "Домохозяйство"
+
+# с какой точностью обновлять last_used_at: точная метка не нужна, а обновление
+# на каждый запрос коллектора сериализовало бы параллельные запросы на блокировке строки
+LAST_USED_PRECISION = timedelta(minutes=5)
 
 
 class EmailTakenError(Exception):
@@ -78,3 +84,67 @@ async def invite_member(db: AsyncSession, workspace_id: uuid.UUID, email: str) -
         await db.rollback()
         raise AlreadyMemberError from exc
     return membership
+
+
+async def user_by_api_token(db: AsyncSession, token: str) -> tuple[User, uuid.UUID] | None:
+    """Владелец действующего токена и workspace, для которого токен выдан.
+    Область действия возвращаем наружу: токен не должен открывать другие
+    workspace владельца — он лежит в конфиге рядом со скрейпером.
+
+    Побочный эффект: если last_used_at пуст или устарел (см. LAST_USED_PRECISION),
+    обновляет его и коммитит — но только тогда, а не на каждый вызов.
+    """
+    api_token = await db.scalar(
+        select(ApiToken).where(
+            ApiToken.token_hash == hash_token(token), ApiToken.revoked_at.is_(None)
+        )
+    )
+    if api_token is None:
+        return None
+    user = await db.get(User, api_token.created_by)
+    if user is None:
+        return None
+    now = datetime.now(UTC)
+    if api_token.last_used_at is None or now - api_token.last_used_at > LAST_USED_PRECISION:
+        api_token.last_used_at = now
+        await db.commit()
+    return user, api_token.workspace_id
+
+
+async def create_api_token(
+    db: AsyncSession, workspace_id: uuid.UUID, user_id: uuid.UUID, name: str
+) -> tuple[ApiToken, str]:
+    """Вернуть запись и сам токен — показать его можно только сейчас."""
+    token = generate_token()
+    api_token = ApiToken(
+        workspace_id=workspace_id, created_by=user_id, name=name, token_hash=hash_token(token)
+    )
+    db.add(api_token)
+    await db.commit()
+    return api_token, token
+
+
+async def list_api_tokens(db: AsyncSession, workspace_id: uuid.UUID) -> list[ApiToken]:
+    rows = await db.execute(
+        select(ApiToken)
+        .where(ApiToken.workspace_id == workspace_id, ApiToken.revoked_at.is_(None))
+        .order_by(ApiToken.created_at.desc())
+    )
+    return list(rows.scalars().all())
+
+
+async def revoke_api_token(db: AsyncSession, workspace_id: uuid.UUID, token_id: uuid.UUID) -> bool:
+    # revoked_at.is_(None) — повторный отзыв не должен затирать исходное время
+    # отзыва; мягкое удаление затевалось ради истории, второй DELETE даёт 404
+    api_token = await db.scalar(
+        select(ApiToken).where(
+            ApiToken.id == token_id,
+            ApiToken.workspace_id == workspace_id,
+            ApiToken.revoked_at.is_(None),
+        )
+    )
+    if api_token is None:
+        return False
+    api_token.revoked_at = datetime.now(UTC)
+    await db.commit()
+    return True

@@ -13,11 +13,14 @@ from app.imports.llm_parser import StatementTooLargeError
 from app.imports.models import Import
 from app.imports.parser import ParsedOperation, ParsedStatement, StatementParseError
 from app.imports.schemas import (
+    BANK_EXTERNAL_ID_PREFIX,
+    ImportListItemOut,
     ImportOperationOut,
     ImportPreviewOut,
     ImportResultOut,
     ImportStatus,
     ImportStatusOut,
+    ParsedOperationIn,
 )
 from app.ledger import service as ledger_service
 
@@ -48,6 +51,21 @@ def _external_ids(account_id: uuid.UUID, operations: list[ParsedOperation]) -> l
         raw = f"{account_id}|{base[0]}|{base[1]}|{base[2]}|{occurrence}"
         ids.append(hashlib.sha256(raw.encode("utf-8")).hexdigest())
     return ids
+
+
+def _payload_external_ids(
+    payload: dict[str, object], account_id: uuid.UUID, operations: list[ParsedOperation]
+) -> list[str]:
+    """Идентификаторы для дедупа: от банка, если он их дал, иначе наш хеш.
+    Список пишем сами (create_parsed_import); если ключ есть, но битый — это
+    порча данных, а не законный случай, и должна падать так же, как остальная
+    порча parsed_payload в _payload_to_statement, а не тихо откатываться на хеш."""
+    stored = payload.get("external_ids")
+    if stored is None:
+        return _external_ids(account_id, operations)
+    if not isinstance(stored, list) or len(stored) != len(operations):
+        raise StatementParseError("повреждён сохранённый разбор выписки")
+    return [str(x) for x in stored]
 
 
 def _statement_to_payload(statement: ParsedStatement, warnings: list[str]) -> dict[str, object]:
@@ -147,6 +165,51 @@ async def start_import(
     return imp
 
 
+async def create_parsed_import(
+    db: AsyncSession,
+    workspace_id: uuid.UUID,
+    account_id: uuid.UUID,
+    user_id: uuid.UUID,
+    parser: str,
+    operations: list[ParsedOperationIn],
+) -> Import:
+    """Принять уже разобранные операции: разбирать нечего, сразу ready."""
+    statement = ParsedStatement(
+        operations=[
+            ParsedOperation(
+                occurred_at=op.occurred_at,
+                amount=op.amount,
+                currency=op.currency,
+                description=op.description,
+            )
+            for op in operations
+        ],
+        total_income=None,
+        total_expense=None,
+    )
+    # идентификаторы от банка кладём в payload сразу: дописывать в уже
+    # присвоенный JSONB нельзя — SQLAlchemy не отследит правку на месте.
+    # Префикс отделяет их пространство от наших sha256-хешей (см. BANK_EXTERNAL_ID_PREFIX)
+    payload = _statement_to_payload(statement, [])
+    payload["external_ids"] = [BANK_EXTERNAL_ID_PREFIX + op.external_id for op in operations]
+
+    imp = Import(
+        workspace_id=workspace_id,
+        account_id=account_id,
+        file_name=f"{parser}.json",
+        bank_profile=parser,
+        parser=parser,
+        status="ready",
+        stats={},
+        created_by=user_id,
+        parsed_payload=payload,
+    )
+    repository.add_import(db, imp)
+    await db.commit()
+    logger.info("parsed_import_created", import_id=str(imp.id), operations=len(operations))
+    return imp
+
+
 async def run_parse(
     db: AsyncSession,
     import_id: uuid.UUID,
@@ -223,9 +286,13 @@ async def _build_preview(
     db: AsyncSession,
     workspace_id: uuid.UUID,
     account_id: uuid.UUID,
-    statement: ParsedStatement,
+    payload: dict[str, object],
 ) -> ImportPreviewOut:
-    ext_ids = _external_ids(account_id, statement.operations)
+    # statement выводим из того же payload, что и id для дедупа — раньше их
+    # передавали отдельными параметрами, и вызывающий код мог по ошибке
+    # рассинхронизировать пару (statement из одного payload, id из другого)
+    statement = _payload_to_statement(payload)
+    ext_ids = _payload_external_ids(payload, account_id, statement.operations)
     existing = await ledger_service.existing_external_ids(
         db, workspace_id, account_id, set(ext_ids)
     )
@@ -255,6 +322,36 @@ async def _build_preview(
     )
 
 
+def _operations_count(payload: dict[str, object] | None) -> int:
+    """Сколько операций в разборе. Для списка это справочное число: показать
+    «сколько ждёт» важнее, чем упасть на подпорченном payload — сам разбор
+    всё равно перечитывается при открытии импорта."""
+    if payload is None:
+        return 0
+    operations = payload.get("operations")
+    if not isinstance(operations, list):
+        return 0
+    return len(operations)
+
+
+async def list_pending_imports(
+    db: AsyncSession, workspace_id: uuid.UUID
+) -> list[ImportListItemOut]:
+    imports = await repository.list_pending(db, workspace_id)
+    return [
+        ImportListItemOut(
+            import_id=imp.id,
+            account_id=imp.account_id,
+            parser=imp.parser,
+            status=cast(ImportStatus, imp.status),
+            file_name=imp.file_name,
+            created_at=imp.created_at,
+            operations_count=_operations_count(imp.parsed_payload),
+        )
+        for imp in imports
+    ]
+
+
 async def get_import_status(
     db: AsyncSession, workspace_id: uuid.UUID, import_id: uuid.UUID
 ) -> ImportStatusOut | None:
@@ -268,8 +365,7 @@ async def get_import_status(
         raw_warnings = payload.get("warnings")
         warnings_list = raw_warnings if isinstance(raw_warnings, list) else []
         warnings = [str(w) for w in warnings_list]
-        statement = _payload_to_statement(payload)
-        preview = await _build_preview(db, workspace_id, imp.account_id, statement)
+        preview = await _build_preview(db, workspace_id, imp.account_id, payload)
     return ImportStatusOut(
         import_id=imp.id,
         # значение — из закрытого набора, который сами же и пишем в run_parse/commit_from_import
@@ -300,7 +396,7 @@ async def commit_from_import(
     if imp.status != "ready" or imp.parsed_payload is None:
         raise ImportNotReadyError("импорт не готов к подтверждению")
     statement = _payload_to_statement(imp.parsed_payload)
-    ext_ids = _external_ids(imp.account_id, statement.operations)
+    ext_ids = _payload_external_ids(imp.parsed_payload, imp.account_id, statement.operations)
     existing = await ledger_service.existing_external_ids(
         db, workspace_id, imp.account_id, set(ext_ids)
     )

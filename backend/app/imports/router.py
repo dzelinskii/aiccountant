@@ -11,7 +11,14 @@ from app.identity.deps import require_workspace_member
 from app.identity.models import User
 from app.imports import service
 from app.imports.parser import extract_lines
-from app.imports.schemas import ImportResultOut, ImportStartedOut, ImportStatus, ImportStatusOut
+from app.imports.schemas import (
+    ImportListItemOut,
+    ImportResultOut,
+    ImportStartedOut,
+    ImportStatus,
+    ImportStatusOut,
+    ParsedImportIn,
+)
 from app.imports.tasks import enqueue_parse
 from app.ledger import service as ledger_service
 
@@ -65,6 +72,39 @@ async def start_import(
         )
         raise HTTPException(status_code=503, detail="Сервис разбора недоступен") from None
     return ImportStartedOut(import_id=imp.id, status=cast(ImportStatus, imp.status))
+
+
+@router.post("/imports/parsed", status_code=201)
+async def create_parsed_import(
+    payload: ParsedImportIn,
+    workspace_id: uuid.UUID,
+    account_id: uuid.UUID,
+    user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> ImportStartedOut:
+    currency = await ledger_service.get_account_currency(db, workspace_id, account_id)
+    if currency is None:
+        raise HTTPException(status_code=404, detail="Счёт не найден")
+    if any(op.currency.upper() != currency.upper() for op in payload.operations):
+        # регистр не нормализуем нигде на пути счёта (AccountCreate его не приводит),
+        # поэтому сравниваем без учёта регистра — иначе счёт "rub" вводит в заблуждение
+        # отказом коллектору, который прислал "RUB", хотя валюта та же самая
+        raise HTTPException(status_code=422, detail="Валюта операции не совпадает с валютой счёта")
+    imp = await service.create_parsed_import(
+        db, workspace_id, account_id, user.id, payload.parser, payload.operations
+    )
+    return ImportStartedOut(import_id=imp.id, status=cast(ImportStatus, imp.status))
+
+
+@router.get("/imports")
+async def list_pending_imports(
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> list[ImportListItemOut]:
+    """Импорты, ждущие подтверждения. Без этого списка импорт от коллектора
+    (создаётся не из браузера) открыть в интерфейсе нечем."""
+    return await service.list_pending_imports(db, workspace_id)
 
 
 @router.get("/imports/{import_id}")
