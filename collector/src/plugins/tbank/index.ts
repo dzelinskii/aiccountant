@@ -62,10 +62,16 @@ function parseEnvelope(data: unknown): Envelope {
   return { resultCode, body: data }
 }
 
+// Оба кода означают одно для нас: предъявленный токен банк сессией не считает.
+// SESSION_IS_ABSENT приходит на токен, который ещё (или уже) не авторизован,
+// AUTHENTICATION_FAILED — когда токена нет вовсе. Лечится и то и другое только
+// повторным входом, поэтому не путаем их с ошибками разбора ответа
+const SESSION_RESULT_CODES = ['AUTHENTICATION_FAILED', 'SESSION_IS_ABSENT']
+
 function assertOk(resultCode: string): void {
   if (resultCode === 'OK') return
-  if (resultCode === 'AUTHENTICATION_FAILED') {
-    throw new SessionExpiredError('Сессия Т-Банка истекла, нужен повторный вход')
+  if (SESSION_RESULT_CODES.includes(resultCode)) {
+    throw new SessionExpiredError(`Сессия Т-Банка недействительна (${resultCode}), нужен повторный вход`)
   }
   throw new Error(`Банк вернул ошибку: ${resultCode}`)
 }

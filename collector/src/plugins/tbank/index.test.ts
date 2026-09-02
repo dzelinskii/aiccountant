@@ -78,6 +78,15 @@ test('AUTHENTICATION_FAILED превращается в SessionExpiredError', as
   await expect(checkSession(client)).rejects.toBeInstanceOf(SessionExpiredError)
 })
 
+test('SESSION_IS_ABSENT превращается в SessionExpiredError', async () => {
+  // именно этот код банк отдаёт на живом прогоне, когда токен уже прочитан,
+  // но сессией ещё не стал: лечится повторным входом, а не падением
+  const fetchImpl = vi.fn(async () => jsonResponse('{"resultCode":"SESSION_IS_ABSENT"}'))
+  const client = createTBankClient('token', { fetchImpl: fetchImpl as unknown as FetchImpl })
+
+  await expect(checkSession(client)).rejects.toBeInstanceOf(SessionExpiredError)
+})
+
 test('иной resultCode даёт обычную ошибку, а не SessionExpiredError', async () => {
   const fetchImpl = vi.fn(async () => jsonResponse('{"resultCode":"UNKNOWN_ERROR"}'))
   const client = createTBankClient('token', { fetchImpl: fetchImpl as unknown as FetchImpl })
