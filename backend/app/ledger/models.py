@@ -2,7 +2,17 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Date, DateTime, ForeignKey, Index, Numeric, String, func, text
+from sqlalchemy import (
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    Numeric,
+    String,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -82,4 +92,32 @@ class Transaction(Base):
             unique=True,
             postgresql_where=text("external_id IS NOT NULL"),
         ),
+    )
+
+
+class DescriptionRule(Base):
+    """Правило «описание операции → категория».
+
+    Одна таблица и для белого списка контрагентов (задаёт человек), и для будущих
+    правил, выученных из подтверждений: по сути это одно и то же — точное
+    совпадение описания даёт категорию, — а различает их происхождение колонка
+    source. Две таблицы означали бы два одинаковых поиска по одному ключу.
+    """
+
+    __tablename__ = "description_rules"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspaces.id"))
+    # ключ поиска: описание, пропущенное через normalize_description
+    normalized_text: Mapped[str] = mapped_column(String(300))
+    # правило без категории бессмысленно: удалили категорию — удалилось правило
+    category_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("categories.id", ondelete="CASCADE"))
+    # manual — задал человек, learned — выучено из подтверждений категорий
+    source: Mapped[str] = mapped_column(String(20), default="manual")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        # одно описание — одна категория: иначе поиск по ключу отвечал бы
+        # по-разному в зависимости от порядка строк
+        UniqueConstraint("workspace_id", "normalized_text", name="uq_description_rules_text"),
     )

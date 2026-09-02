@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.core.operation_kinds import IN_STATS_KINDS, counts_in_stats
-from app.ledger.models import Account, Category, Transaction
+from app.ledger.models import Account, Category, DescriptionRule, Transaction
 
 
 def counts_in_stats_sql() -> ColumnElement[bool]:
@@ -118,6 +118,33 @@ def add_category(db: AsyncSession, category: Category) -> None:
 def seed_default_categories(db: AsyncSession, workspace_id: uuid.UUID) -> None:
     for name, kind in DEFAULT_CATEGORIES:
         db.add(Category(workspace_id=workspace_id, name=name, kind=kind))
+
+
+async def find_description_rule(
+    db: AsyncSession, workspace_id: uuid.UUID, normalized_text: str
+) -> DescriptionRule | None:
+    rule: DescriptionRule | None = await db.scalar(
+        select(DescriptionRule).where(
+            DescriptionRule.workspace_id == workspace_id,
+            DescriptionRule.normalized_text == normalized_text,
+        )
+    )
+    return rule
+
+
+async def list_description_rules(
+    db: AsyncSession, workspace_id: uuid.UUID
+) -> list[DescriptionRule]:
+    rows = await db.execute(
+        select(DescriptionRule)
+        .where(DescriptionRule.workspace_id == workspace_id)
+        .order_by(DescriptionRule.created_at.desc())
+    )
+    return list(rows.scalars().all())
+
+
+def add_description_rule(db: AsyncSession, rule: DescriptionRule) -> None:
+    db.add(rule)
 
 
 async def list_transactions(

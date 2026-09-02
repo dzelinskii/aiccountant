@@ -433,12 +433,19 @@ async def commit_from_import(
         if eid in existing or eid in seen:
             continue
         seen.add(eid)
+        # правило «описание → категория» применяем только здесь: при ручном вводе
+        # человек выбирает категорию сам, подставлять за него нечего. Флаг
+        # category_confirmed при этом не ставим — человек подтвердил правило,
+        # а не эту конкретную операцию
+        rule_category_id = await ledger_service.category_for_description(
+            db, workspace_id, op.description, op.amount
+        )
         await ledger_service.post_transaction(
             db,
             workspace_id,
             user_id,
             account_id=imp.account_id,
-            category_id=None,
+            category_id=rule_category_id,
             amount=op.amount,
             occurred_at=op.occurred_at,
             source="import",

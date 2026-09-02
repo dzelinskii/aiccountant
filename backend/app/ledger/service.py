@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.operation_kinds import OperationKind, kind_from_amount
 from app.ledger import repository
-from app.ledger.models import Account, Category, Transaction
+from app.ledger.models import Account, Category, DescriptionRule, Transaction
 from app.ledger.schemas import (
     AccountCreate,
     AccountUpdate,
@@ -103,6 +103,68 @@ async def update_category(
         category.parent_id = payload.parent_id
     await db.commit()
     return category
+
+
+class DuplicateRuleError(Exception):
+    """Правило для такого описания уже есть."""
+
+
+def normalize_description(text: str) -> str:
+    """Ключ правила «описание → категория».
+
+    Нормализация намеренно простая — регистр и лишние пробелы. Вычищать «шум»
+    банковских описаний регулярками значит подгонять систему под один банк,
+    а формат описания у каждого свой.
+    """
+    return " ".join(text.split()).lower()
+
+
+async def create_description_rule(
+    db: AsyncSession, workspace_id: uuid.UUID, text: str, category_id: uuid.UUID
+) -> DescriptionRule:
+    normalized = normalize_description(text)
+    if await repository.find_description_rule(db, workspace_id, normalized) is not None:
+        raise DuplicateRuleError
+    # категория обязана жить в том же workspace — иначе межворкспейсная ссылка
+    if await repository.get_category(db, workspace_id, category_id) is None:
+        raise NotFoundError
+    rule = DescriptionRule(
+        workspace_id=workspace_id,
+        normalized_text=normalized,
+        category_id=category_id,
+        source="manual",
+    )
+    repository.add_description_rule(db, rule)
+    await db.commit()
+    return rule
+
+
+async def list_description_rules(
+    db: AsyncSession, workspace_id: uuid.UUID
+) -> list[DescriptionRule]:
+    return await repository.list_description_rules(db, workspace_id)
+
+
+async def category_for_description(
+    db: AsyncSession, workspace_id: uuid.UUID, description: str | None, amount: Decimal
+) -> uuid.UUID | None:
+    """Категория по правилу для описания операции, если правило есть.
+
+    Знак суммы проверяем здесь: инвариант «расход → категория расходов» иначе
+    уронил бы весь импорт из-за одной строки, а такая строка — обычное дело
+    (тому же человеку и переводят, и он переводит в ответ).
+    """
+    if not description:
+        return None
+    rule = await repository.find_description_rule(
+        db, workspace_id, normalize_description(description)
+    )
+    if rule is None:
+        return None
+    category = await repository.get_category(db, workspace_id, rule.category_id)
+    if category is None or (category.kind == "expense") != (amount < 0):
+        return None
+    return rule.category_id
 
 
 class SignMismatchError(Exception):
