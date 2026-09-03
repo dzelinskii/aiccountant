@@ -82,7 +82,47 @@ function toAccount(item: unknown): CollectedAccount {
     name: getStr(item, 'name') ?? '',
     type: getStr(item, 'accountType') ?? '',
     currency: resolveCurrency(getRecord(item, 'currency')),
+    balance: resolveBalance(item),
+    cardMasks: resolveCardMasks(item),
   }
+}
+
+// Остаток — та же строка, что и суммы операций: через число деньги не проходят.
+// Нет блока или значение не строкой — null, а не остановка: остаток дополняет
+// сбор, и терять из-за него операции счёта несоразмерно
+function resolveBalance(item: Record<string, unknown>): string | null {
+  const moneyAmount = getRecord(item, 'moneyAmount')
+  if (!moneyAmount) return null
+  return toAmountString(moneyAmount['value']) ?? null
+}
+
+const MASK_LENGTH = 4
+// Проверяем известное «нерабочее» значение, а не равенство «Активна»: заведи
+// банк новый статус, и обратная проверка молча спрятала бы рабочую карту
+const BLOCKED_CARD_STATUS = 'Заблокирована'
+
+// Метка нужна, чтобы человек узнал свой счёт в приложении, поэтому первой идёт
+// основная карта — та, которой платят. Номер банк отдаёт уже замаскированным;
+// последние символы из него берём потому, что больше для узнавания не нужно
+function resolveCardMasks(item: Record<string, unknown>): string[] {
+  const cards = item['cards']
+  if (!Array.isArray(cards)) return []
+  const usable = cards.filter(isRecord).filter((card) => getStr(card, 'status') !== BLOCKED_CARD_STATUS)
+  const ordered = [...usable.filter(isPrimaryCard), ...usable.filter((card) => !isPrimaryCard(card))]
+
+  const masks: string[] = []
+  for (const card of ordered) {
+    const number = getStr(card, 'number')
+    // карта без номера метки не даёт: пустая метка не пройдёт проверку бэкенда
+    // и уронит 422 на весь импорт вместе с операциями
+    if (!number) continue
+    masks.push(number.slice(-MASK_LENGTH))
+  }
+  return masks
+}
+
+function isPrimaryCard(card: Record<string, unknown>): boolean {
+  return card['primary'] === true
 }
 
 // Бэкенд (ParsedOperationIn._amount_not_zero, backend/app/imports/schemas.py)

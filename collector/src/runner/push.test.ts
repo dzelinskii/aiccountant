@@ -1,5 +1,6 @@
 import { expect, test, vi } from 'vitest'
 import type { FetchImpl } from '../http/allowlist-client'
+import type { CollectedAccount } from '../plugins/tbank/types'
 import type { CollectorConfig } from './config'
 import { pushOperations } from './push'
 
@@ -22,8 +23,22 @@ const OPERATIONS = [
   },
 ]
 
+const ACCOUNT: CollectedAccount = {
+  id: 'acc-bank',
+  name: 'Счёт для трат',
+  type: 'Current',
+  currency: 'RUB',
+  balance: '10000.50',
+  cardMasks: ['1234'],
+}
+
 function jsonResponse(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), { status })
+}
+
+function sentBody(fetchImpl: ReturnType<typeof vi.fn<FetchImpl>>): Record<string, unknown> {
+  const [, init] = fetchImpl.mock.calls[0] ?? []
+  return JSON.parse(String(init?.body)) as Record<string, unknown>
 }
 
 test('операции уходят с токеном в заголовке и параметрами запроса', async () => {
@@ -31,7 +46,7 @@ test('операции уходят с токеном в заголовке и �
     jsonResponse({ import_id: 'imp-1', status: 'ready' }, 201),
   )
 
-  const result = await pushOperations(CONFIG, 'acc-app', OPERATIONS, fetchImpl)
+  const result = await pushOperations(CONFIG, 'acc-app', OPERATIONS, undefined, fetchImpl)
 
   expect(result?.import_id).toBe('imp-1')
   const [url, init] = fetchImpl.mock.calls[0] ?? []
@@ -45,10 +60,31 @@ test('операции уходят с токеном в заголовке и �
   expect(String(init?.body)).toContain('"kind":"purchase"')
 })
 
+test('остаток и метки карт уходят блоком про счёт', async () => {
+  const fetchImpl = vi.fn<FetchImpl>(async () => jsonResponse({ import_id: 'imp-1', status: 'ready' }, 201))
+
+  await pushOperations(CONFIG, 'acc-app', OPERATIONS, ACCOUNT, fetchImpl)
+
+  // имена полей — как в договоре API: card_masks, а не cardMasks
+  expect(sentBody(fetchImpl)['account']).toEqual({ balance: '10000.50', card_masks: ['1234'] })
+})
+
+test('без остатка блок про счёт не отправляется', async () => {
+  // блок без остатка бэкенд отвергает целиком, а вместе с ним и все операции:
+  // молчать про остаток дешевле, чем потерять сбор
+  const fetchImpl = vi.fn<FetchImpl>(async () => jsonResponse({ import_id: 'imp-1', status: 'ready' }, 201))
+
+  await pushOperations(CONFIG, 'acc-app', OPERATIONS, { ...ACCOUNT, balance: null }, fetchImpl)
+
+  const body = sentBody(fetchImpl)
+  expect(body['account']).toBeUndefined()
+  expect(body['operations']).toHaveLength(1)
+})
+
 test('пустой список не отправляется', async () => {
   const fetchImpl = vi.fn<FetchImpl>()
 
-  const result = await pushOperations(CONFIG, 'acc-app', [], fetchImpl)
+  const result = await pushOperations(CONFIG, 'acc-app', [], undefined, fetchImpl)
 
   expect(result).toBeNull()
   expect(fetchImpl).not.toHaveBeenCalled()
@@ -57,7 +93,7 @@ test('пустой список не отправляется', async () => {
 test('ошибка приложения не проглатывается', async () => {
   const fetchImpl = vi.fn<FetchImpl>(async () => jsonResponse({ detail: 'Счёт не найден' }, 404))
 
-  await expect(pushOperations(CONFIG, 'acc-app', OPERATIONS, fetchImpl)).rejects.toThrow(
+  await expect(pushOperations(CONFIG, 'acc-app', OPERATIONS, undefined, fetchImpl)).rejects.toThrow(
     /404.*Счёт не найден/,
   )
 })
@@ -87,7 +123,7 @@ test('в текст ошибки 422 не попадают суммы, опис�
     ),
   )
 
-  const error = await pushOperations(CONFIG, 'acc-app', OPERATIONS, fetchImpl).catch(
+  const error = await pushOperations(CONFIG, 'acc-app', OPERATIONS, undefined, fetchImpl).catch(
     (e: unknown) => e,
   )
   const text = String(error)
@@ -103,13 +139,13 @@ test('в текст ошибки 422 не попадают суммы, опис�
 test('непонятное тело ответа даёт только код статуса', async () => {
   const fetchImpl = vi.fn<FetchImpl>(async () => new Response('<html>502</html>', { status: 502 }))
 
-  await expect(pushOperations(CONFIG, 'acc-app', OPERATIONS, fetchImpl)).rejects.toThrow(/502/)
+  await expect(pushOperations(CONFIG, 'acc-app', OPERATIONS, undefined, fetchImpl)).rejects.toThrow(/502/)
 })
 
 test('неожиданный успешный ответ не выдаётся за импорт', async () => {
   const fetchImpl = vi.fn<FetchImpl>(async () => jsonResponse({ ok: true }, 201))
 
-  await expect(pushOperations(CONFIG, 'acc-app', OPERATIONS, fetchImpl)).rejects.toThrow(
+  await expect(pushOperations(CONFIG, 'acc-app', OPERATIONS, undefined, fetchImpl)).rejects.toThrow(
     /неожиданный ответ/,
   )
 })

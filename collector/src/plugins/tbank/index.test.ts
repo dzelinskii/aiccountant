@@ -21,8 +21,15 @@ test('fetchAccounts приводит счета к нашей модели', asy
   const accounts = await fetchAccounts(client)
 
   expect(accounts).toEqual([
-    { id: 'acc-1', name: 'Счёт для трат', type: 'Current', currency: 'RUB' },
-    { id: 'acc-2', name: 'Накопительный', type: 'Saving', currency: 'RUB' },
+    {
+      id: 'acc-1',
+      name: 'Счёт для трат',
+      type: 'Current',
+      currency: 'RUB',
+      balance: '10000.50',
+      cardMasks: ['1234'],
+    },
+    { id: 'acc-2', name: 'Накопительный', type: 'Saving', currency: 'RUB', balance: '500', cardMasks: [] },
   ])
 })
 
