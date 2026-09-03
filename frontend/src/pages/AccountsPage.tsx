@@ -79,7 +79,9 @@ export function AccountsPage() {
                 <Text fw={500}>{a.name}</Text>
                 {a.is_archived && <Badge color="gray">в архиве</Badge>}
               </Group>
-              <Text c="dimmed" size="sm">{accountLabel(a)}</Text>
+              {accountLabel(a) && (
+                <Text c="dimmed" size="sm">{accountLabel(a)}</Text>
+              )}
             </div>
             <Group>
               <div>

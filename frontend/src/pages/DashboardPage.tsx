@@ -28,7 +28,9 @@ export function DashboardPage() {
             <Card withBorder>
               <Group gap="xs">
                 <Text c="dimmed" size="sm">{a.name}</Text>
-                <Text c="dimmed" size="sm">{accountLabel(a)}</Text>
+                {accountLabel(a) && (
+                  <Text c="dimmed" size="sm">{accountLabel(a)}</Text>
+                )}
               </Group>
               <Text fw={700} size="lg">{formatMoney(a.balance, a.currency)}</Text>
               {a.reported_at && (
