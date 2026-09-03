@@ -78,6 +78,8 @@ async def update_account(
         account, balance = await service.update_account(db, workspace_id, account_id, payload)
     except service.NotFoundError:
         raise HTTPException(status_code=404, detail="Счёт не найден") from None
+    except service.ReportedBalanceError:
+        raise HTTPException(status_code=409, detail="Остаток счёта приходит от источника") from None
     return _account_out(account, balance)
 
 

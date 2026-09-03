@@ -15,6 +15,7 @@ from app.imports.parser import StatementParseError
 from app.ledger.balance import adjustment_for, visible_balance
 
 ALICE = {"email": "alice@example.com", "password": "password123"}
+BOB = {"email": "bob@example.com", "password": "password123"}
 
 
 def test_reported_balance_wins() -> None:
@@ -316,3 +317,84 @@ async def test_float_balance_rejected(client: AsyncClient) -> None:
         headers={"Content-Type": "application/json"},
     )
     assert resp.status_code == 422
+
+
+async def _spend(client: AsyncClient, ws: str, account_id: str, amount: str) -> None:
+    resp = await client.post(
+        "/api/transactions",
+        params={"workspace_id": ws},
+        json={"account_id": account_id, "amount": amount, "occurred_at": "2026-09-01"},
+    )
+    assert resp.status_code == 201
+
+
+async def _set_balance(client: AsyncClient, ws: str, account_id: str, balance: str) -> Response:
+    return await client.patch(
+        f"/api/accounts/{account_id}", params={"workspace_id": ws}, json={"balance": balance}
+    )
+
+
+async def test_manual_balance_becomes_visible(client: AsyncClient) -> None:
+    """Счёт без источника человек ведёт сам: пересчитал кошелёк — поставил
+    число, и счёт показывает именно его, а не сумму известных нам операций."""
+    ws, account_id = await _ws_and_account(client)
+    await _spend(client, ws, account_id, "-200.00")
+
+    resp = await _set_balance(client, ws, account_id, "4900.00")
+
+    assert resp.status_code == 200
+    assert Decimal(resp.json()["balance"]) == Decimal("4900.00")
+    assert Decimal((await _account(client, ws))["balance"]) == Decimal("4900.00")
+
+
+async def test_manual_balance_follows_later_operation(client: AsyncClient) -> None:
+    """Человек задаёт текущий остаток, а не «начальное значение»: храним разницу
+    с суммой операций, поэтому следующий расход уводит остаток вниз. Сохрани мы
+    заданное число как есть — оно застыло бы и разошлось с кошельком."""
+    ws, account_id = await _ws_and_account(client)
+    await _spend(client, ws, account_id, "-200.00")
+    await _set_balance(client, ws, account_id, "4900.00")
+
+    await _spend(client, ws, account_id, "-100.00")
+
+    assert Decimal((await _account(client, ws))["balance"]) == Decimal("4800.00")
+
+
+async def test_manual_balance_rejected_when_source_reports(client: AsyncClient) -> None:
+    """Счёт с источником руками не правится: следующий сбор всё равно перезапишет
+    правку, и принять её значит пообещать то, чего мы не сделаем."""
+    ws, account_id = await _ws_and_account(client)
+    started = await _start_import(client, ws, account_id, {"balance": "12345.67"})
+    await _commit(client, ws, started.json()["import_id"])
+
+    resp = await _set_balance(client, ws, account_id, "4900.00")
+
+    assert resp.status_code == 409
+    assert Decimal((await _account(client, ws))["balance"]) == Decimal("12345.67")
+
+
+async def test_manual_balance_on_foreign_account_is_404(client: AsyncClient) -> None:
+    """Чужой счёт не виден из своего workspace, и правка остатка — не исключение."""
+    _, account_id = await _ws_and_account(client)
+    client.cookies.clear()
+    await client.post("/api/auth/register", json=BOB)
+    ws_bob = str((await client.get("/api/me")).json()["workspaces"][0]["id"])
+
+    assert (await _set_balance(client, ws_bob, account_id, "4900.00")).status_code == 404
+
+
+async def test_manual_balance_leaves_other_fields(client: AsyncClient) -> None:
+    """Остаток правится той же ручкой, что имя и архивность, — и не задевает их:
+    отсутствие поля в теле означает «не трогать», а не «сбросить»."""
+    ws, account_id = await _ws_and_account(client)
+    await client.patch(
+        f"/api/accounts/{account_id}",
+        params={"workspace_id": ws},
+        json={"name": "Наличные", "is_archived": True},
+    )
+
+    resp = await _set_balance(client, ws, account_id, "4900.00")
+
+    assert resp.status_code == 200
+    assert resp.json()["name"] == "Наличные"
+    assert resp.json()["is_archived"] is True

@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.operation_kinds import OperationKind, kind_from_amount
 from app.ledger import repository
-from app.ledger.balance import visible_balance
+from app.ledger.balance import adjustment_for, visible_balance
 from app.ledger.models import Account, Category, DescriptionRule, Transaction
 from app.ledger.schemas import (
     AccountCreate,
@@ -29,6 +29,10 @@ from app.ledger.tasks import enqueue_categorize
 
 class NotFoundError(Exception):
     pass
+
+
+class ReportedBalanceError(Exception):
+    """У счёта есть остаток от источника — править его руками нельзя."""
 
 
 def _visible_balance(account: Account, operations_sum: Decimal) -> Decimal:
@@ -65,6 +69,13 @@ async def update_account(
         account.name = payload.name
     if payload.is_archived is not None:
         account.is_archived = payload.is_archived
+    if payload.balance is not None:
+        if account.reported_balance is not None:
+            # следующий сбор всё равно перезапишет правку: принять её значит
+            # пообещать то, чего мы не сделаем
+            raise ReportedBalanceError
+        operations_sum = await repository.account_operations_sum(db, workspace_id, account_id)
+        account.balance_adjustment = adjustment_for(payload.balance, operations_sum)
     await db.commit()
     operations_sum = await repository.account_operations_sum(db, workspace_id, account_id)
     return account, _visible_balance(account, operations_sum)
