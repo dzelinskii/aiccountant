@@ -13,6 +13,7 @@ from sqlalchemy import (
     func,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -27,6 +28,17 @@ class Account(Base):
     type: Mapped[str] = mapped_column(String(20))
     currency: Mapped[str] = mapped_column(String(3), default="RUB")
     is_archived: Mapped[bool] = mapped_column(default=False)
+    # остаток, сообщённый источником (коллектором банка), и момент, на который
+    # он верен. Пусто — источника у счёта нет, счёт ведётся руками
+    reported_balance: Mapped[Decimal | None] = mapped_column(Numeric(20, 4), nullable=True)
+    reported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # поправка к сумме операций для счетов без источника: человек задаёт текущий
+    # остаток, разницу храним здесь. В интерфейс это понятие не выносится
+    balance_adjustment: Mapped[Decimal] = mapped_column(
+        Numeric(20, 4), default=Decimal(0), server_default=text("0")
+    )
+    # последние четыре цифры карт счёта; пусто у счетов без карт
+    card_masks: Mapped[list[str]] = mapped_column(JSONB, default=list, server_default=text("'[]'"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
