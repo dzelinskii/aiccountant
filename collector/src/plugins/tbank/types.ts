@@ -15,4 +15,8 @@ export interface CollectedAccount {
   type: string
   /** null — валюту счёта распознать не удалось; на сбор по другим счетам это не влияет. */
   currency: string | null
+  /** Остаток строкой, как отдал банк; null — банк остатка не сообщил. */
+  balance: string | null
+  /** Последние четыре символа номеров карт счёта; пусто, если карт нет. */
+  cardMasks: string[]
 }

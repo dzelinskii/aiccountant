@@ -1,5 +1,5 @@
 import type { FetchImpl } from '../http/allowlist-client'
-import type { CollectedOperation } from '../plugins/tbank/types'
+import type { CollectedAccount, CollectedOperation } from '../plugins/tbank/types'
 import type { CollectorConfig } from './config'
 
 export interface PushResult {
@@ -24,6 +24,7 @@ export async function pushOperations(
   config: CollectorConfig,
   accountId: string,
   operations: readonly CollectedOperation[],
+  account: CollectedAccount | undefined,
   fetchImpl: FetchImpl = fetch,
 ): Promise<PushResult | null> {
   if (operations.length === 0) return null
@@ -38,10 +39,23 @@ export async function pushOperations(
       'Content-Type': 'application/json',
       Authorization: `Bearer ${config.apiToken}`,
     },
-    body: JSON.stringify({ parser: 'tbank_collector', operations }),
+    body: JSON.stringify(requestBody(operations, account)),
   })
   if (!res.ok) throw new Error(`Приложение ответило ${res.status}${await describeFailure(res)}`)
   return parseResult(await res.json())
+}
+
+/**
+ * Блок про счёт необязателен: без него приложение оставит остаток и метки
+ * прежними. Остаток в блоке обязателен, поэтому без него блок не отправляем
+ * вовсе — иначе бэкенд отверг бы запрос целиком, вместе с операциями.
+ * Имена полей здесь как в договоре API (`card_masks`), а не как внутри
+ * коллектора.
+ */
+function requestBody(operations: readonly CollectedOperation[], account: CollectedAccount | undefined): object {
+  const body = { parser: 'tbank_collector', operations }
+  if (!account || account.balance === null) return body
+  return { ...body, account: { balance: account.balance, card_masks: account.cardMasks } }
 }
 
 function parseResult(data: unknown): PushResult {

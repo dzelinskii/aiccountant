@@ -6,7 +6,10 @@ import type { Account, Category } from '../api/ledger'
 import { TransactionForm } from './TransactionForm'
 
 const accounts: Account[] = [
-  { id: 'a1', name: 'Карта', type: 'card', currency: 'RUB', is_archived: false, balance: '0.0000' },
+  {
+    id: 'a1', name: 'Карта', type: 'card', currency: 'RUB', is_archived: false,
+    balance: '0.0000', reported_at: null, card_masks: [],
+  },
 ]
 const categories: Category[] = [{ id: 'c1', parent_id: null, name: 'Еда', kind: 'expense' }]
 

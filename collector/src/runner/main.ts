@@ -18,7 +18,7 @@ async function main(): Promise<void> {
     return
   }
   assertAccountsExist(config.accountMap, accounts)
-  await collect(config, client)
+  await collect(config, client, accounts)
   console.log('Готово. Подтвердите импорт в приложении.')
 }
 
@@ -41,11 +41,14 @@ async function connectToBank(): Promise<AllowlistClient> {
   return renewed
 }
 
-async function collect(config: CollectorConfig, client: AllowlistClient): Promise<void> {
+// Остаток и карты берём из списка счетов, полученного выше: банк отдал их одним
+// ответом вместе с идентификаторами, ходить за ними второй раз незачем
+async function collect(config: CollectorConfig, client: AllowlistClient, accounts: CollectedAccount[]): Promise<void> {
   const since = Date.now() - config.days * DAY_MS
   for (const [bankAccountId, appAccountId] of Object.entries(config.accountMap)) {
     const operations = await fetchOperations(client, bankAccountId, since)
-    const result = await pushOperations(config, appAccountId, operations)
+    const account = accounts.find((item) => item.id === bankAccountId)
+    const result = await pushOperations(config, appAccountId, operations, account)
     // в консоль только идентификаторы и счётчики: ни сумм, ни описаний
     console.log(
       result

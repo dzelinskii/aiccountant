@@ -1,17 +1,12 @@
-import { Badge, Button, Card, Group, Modal, Select, Stack, Switch, Text, TextInput, Title } from '@mantine/core'
+import { Alert, Badge, Button, Card, Group, Modal, Select, Stack, Switch, Text, TextInput, Title } from '@mantine/core'
 import { useForm } from '@mantine/form'
 import { useDisclosure } from '@mantine/hooks'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { createAccount, getAccounts, updateAccount, type Account } from '../api/ledger'
+import { ACCOUNT_TYPES, accountLabel, formatMoment } from '../lib/account'
 import { formatMoney } from '../lib/money'
 import { useWorkspaceStore } from '../store/workspace'
-
-const TYPES = [
-  { value: 'card', label: 'Карта' },
-  { value: 'cash', label: 'Наличные' },
-  { value: 'savings', label: 'Накопления' },
-]
 
 export function AccountsPage() {
   const ws = useWorkspaceStore((s) => s.workspaceId)!
@@ -22,7 +17,7 @@ export function AccountsPage() {
   const { data: accounts } = useQuery({ queryKey: ['accounts', ws], queryFn: () => getAccounts(ws) })
 
   const form = useForm({
-    initialValues: { name: '', type: 'card', currency: 'RUB' },
+    initialValues: { name: '', type: 'card', currency: 'RUB', balance: '' },
     validate: { name: (v) => (v.trim() ? null : 'Введите название') },
   })
 
@@ -35,8 +30,8 @@ export function AccountsPage() {
     },
   })
   const updateMut = useMutation({
-    mutationFn: (v: { id: string; name?: string; is_archived?: boolean }) =>
-      updateAccount(ws, v.id, { name: v.name, is_archived: v.is_archived }),
+    mutationFn: (v: { id: string; name?: string; is_archived?: boolean; balance?: string }) =>
+      updateAccount(ws, v.id, { name: v.name, is_archived: v.is_archived, balance: v.balance }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['accounts', ws] })
       close()
@@ -46,13 +41,27 @@ export function AccountsPage() {
 
   const openCreate = () => {
     setEditing(null)
-    form.setValues({ name: '', type: 'card', currency: 'RUB' })
+    updateMut.reset()
+    form.setValues({ name: '', type: 'card', currency: 'RUB', balance: '' })
     open()
   }
   const openEdit = (a: Account) => {
     setEditing(a)
-    form.setValues({ name: a.name, type: a.type, currency: a.currency })
+    updateMut.reset()
+    form.setValues({ name: a.name, type: a.type, currency: a.currency, balance: '' })
     open()
+  }
+
+  const submit = (v: { name: string; type: string; currency: string; balance: string }) => {
+    if (!editing) {
+      createMut.mutate({ name: v.name, type: v.type, currency: v.currency })
+      return
+    }
+    // по-русски разделитель — запятая, а бэкенд ждёт точку: осмысленный ввод не
+    // должен упираться в 422. Пустое поле — «не трогать»: правку остатка человек
+    // делает не каждый раз, когда переименовывает счёт
+    const balance = v.balance.trim().replace(',', '.')
+    updateMut.mutate({ id: editing.id, name: v.name, balance: balance || undefined })
   }
 
   return (
@@ -70,10 +79,19 @@ export function AccountsPage() {
                 <Text fw={500}>{a.name}</Text>
                 {a.is_archived && <Badge color="gray">в архиве</Badge>}
               </Group>
-              <Text c="dimmed" size="sm">{TYPES.find((t) => t.value === a.type)?.label}</Text>
+              {accountLabel(a) && (
+                <Text c="dimmed" size="sm">{accountLabel(a)}</Text>
+              )}
             </div>
             <Group>
-              <Text fw={700}>{formatMoney(a.balance, a.currency)}</Text>
+              <div>
+                <Text fw={700} ta="right">{formatMoney(a.balance, a.currency)}</Text>
+                {a.reported_at && (
+                  <Text c="dimmed" size="xs" ta="right">
+                    остаток на {formatMoment(a.reported_at)}
+                  </Text>
+                )}
+              </div>
               <Button variant="light" size="xs" onClick={() => openEdit(a)}>Изменить</Button>
             </Group>
           </Group>
@@ -81,16 +99,20 @@ export function AccountsPage() {
       ))}
 
       <Modal opened={opened} onClose={close} title={editing ? 'Счёт' : 'Новый счёт'}>
-        <form
-          onSubmit={form.onSubmit((v) =>
-            editing
-              ? updateMut.mutate({ id: editing.id, name: v.name })
-              : createMut.mutate(v),
-          )}
-        >
+        <form onSubmit={form.onSubmit(submit)}>
           <TextInput label="Название" {...form.getInputProps('name')} />
-          <Select label="Тип" data={TYPES} mt="sm" disabled={!!editing} {...form.getInputProps('type')} />
+          <Select label="Тип" data={ACCOUNT_TYPES} mt="sm" disabled={!!editing} {...form.getInputProps('type')} />
           <TextInput label="Валюта" mt="sm" disabled={!!editing} {...form.getInputProps('currency')} />
+          {/* остаток от источника перезапишет следующий сбор — править его бессмысленно */}
+          {editing && editing.reported_at === null && (
+            <TextInput
+              label="Остаток"
+              mt="sm"
+              placeholder="например 4900.00"
+              description={`Сейчас ${formatMoney(editing.balance, editing.currency)}`}
+              {...form.getInputProps('balance')}
+            />
+          )}
           {editing && (
             <Switch
               label="В архиве"
@@ -100,6 +122,9 @@ export function AccountsPage() {
                 updateMut.mutate({ id: editing.id, is_archived: e.currentTarget.checked })
               }
             />
+          )}
+          {updateMut.isError && (
+            <Alert color="red" mt="md">{updateMut.error.message}</Alert>
           )}
           <Button type="submit" mt="lg" fullWidth loading={createMut.isPending || updateMut.isPending}>
             Сохранить

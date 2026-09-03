@@ -39,6 +39,19 @@ function baseOperation(overrides: Record<string, unknown> = {}): Record<string, 
   }
 }
 
+// Синтетический счёт той же формы, что и в фикстуре: тест меняет ровно то поле,
+// про которое он написан
+function baseAccount(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: 'acc-x',
+    name: 'Счёт для трат',
+    accountType: 'Current',
+    currency: { code: '643', name: 'RUB', strCode: '643' },
+    moneyAmount: { value: '1000.50', currency: { strCode: '643' } },
+    ...overrides,
+  }
+}
+
 test('расход (Debit) даёт отрицательную сумму', () => {
   const [op1] = toOperations(operationsPayload())
   expect(op1?.amount).toBe('-1150.5')
@@ -268,8 +281,15 @@ test('вид операции берётся из группы банка по �
 test('toAccounts приводит счета к нашей модели', () => {
   const accounts = toAccounts(accountsPayload())
   expect(accounts).toEqual([
-    { id: 'acc-1', name: 'Счёт для трат', type: 'Current', currency: 'RUB' },
-    { id: 'acc-2', name: 'Накопительный', type: 'Saving', currency: 'RUB' },
+    {
+      id: 'acc-1',
+      name: 'Счёт для трат',
+      type: 'Current',
+      currency: 'RUB',
+      balance: '10000.50',
+      cardMasks: ['1234'],
+    },
+    { id: 'acc-2', name: 'Накопительный', type: 'Saving', currency: 'RUB', balance: '500', cardMasks: [] },
   ])
 })
 
@@ -286,14 +306,96 @@ test('счёт с незнакомым числовым кодом валюты 
     { id: 'acc-1', name: 'Счёт для трат', accountType: 'Current', currency: { strCode: '643' } },
   ])
   expect(accounts).toEqual([
-    { id: 'acc-x', name: 'Валютный счёт', type: 'Current', currency: null },
-    { id: 'acc-1', name: 'Счёт для трат', type: 'Current', currency: 'RUB' },
+    { id: 'acc-x', name: 'Валютный счёт', type: 'Current', currency: null, balance: null, cardMasks: [] },
+    { id: 'acc-1', name: 'Счёт для трат', type: 'Current', currency: 'RUB', balance: null, cardMasks: [] },
   ])
 })
 
 test('счёт без блока currency не роняет список счетов', () => {
   const accounts = toAccounts([{ id: 'acc-y', name: 'Внешний счёт', accountType: 'ExternalAccount' }])
   expect(accounts[0]?.currency).toBeNull()
+})
+
+test('остаток счёта берётся из moneyAmount строкой и не проходит через число', () => {
+  // через JS number это значение вернулось бы как 12345678901234.568 —
+  // деньги на всём пути остаются строкой, как и суммы операций
+  const [account] = toAccounts([
+    baseAccount({ moneyAmount: { value: '12345678901234.5678', currency: { strCode: '643' } } }),
+  ])
+  expect(account?.balance).toBe('12345678901234.5678')
+  expect(typeof account?.balance).toBe('string')
+})
+
+test('счёт без moneyAmount даёт остаток null, а не падение', () => {
+  // остаток — приятное дополнение к сбору; потерять из-за него все операции
+  // счёта было бы несоразмерной платой
+  const withoutAmount = baseAccount()
+  delete withoutAmount['moneyAmount']
+  const [account] = toAccounts([withoutAmount])
+  expect(account?.balance).toBeNull()
+  expect(account?.id).toBe('acc-x')
+})
+
+test('метка карты — последние четыре символа номера из cards[].value', () => {
+  const [account] = toAccounts([baseAccount({ cards: [{ value: '5536••••••••1234', status: 'Активна' }] })])
+  expect(account?.cardMasks).toEqual(['1234'])
+})
+
+test('заблокированная карта в метки не попадает', () => {
+  const [account] = toAccounts([
+    baseAccount({
+      cards: [
+        { value: '5536••••••••1111', status: 'Заблокирована' },
+        { value: '5536••••••••2222', status: 'Активна' },
+      ],
+    }),
+  ])
+  expect(account?.cardMasks).toEqual(['2222'])
+})
+
+test('основная карта идёт первой', () => {
+  // по метке человек узнаёт счёт, и первой он ждёт увидеть ту карту, которой
+  // платит
+  const [account] = toAccounts([
+    baseAccount({
+      cards: [
+        { value: '5536••••••••1111', status: 'Активна' },
+        { value: '5536••••••••2222', status: 'Активна', primary: true },
+      ],
+    }),
+  ])
+  expect(account?.cardMasks).toEqual(['2222', '1111'])
+})
+
+test('счёт без карт даёт пустой список меток', () => {
+  const [account] = toAccounts([baseAccount()])
+  expect(account?.cardMasks).toEqual([])
+})
+
+test('в метку идут только четыре последних символа, а не весь номер', () => {
+  const [account] = toAccounts([baseAccount({ cards: [{ value: '1234567890123456', status: 'Активна' }] })])
+  expect(account?.cardMasks).toEqual(['3456'])
+})
+
+test('карта, из которой не выходит четырёх цифр, метку не даёт — остальные уезжают', () => {
+  // бэкенд принимает ровно четыре цифры и валидирует запрос целиком: негодная
+  // метка ответила бы 422 на весь импорт вместе с операциями счёта. Счёт без
+  // одной метки узнаваем хуже, счёт без операций — просто не собран
+  const [account] = toAccounts([
+    baseAccount({
+      cards: [
+        { value: '77', status: 'Активна' },
+        { value: '5536••••••••••••', status: 'Активна' },
+        { value: '5536••••••••1234', status: 'Активна' },
+      ],
+    }),
+  ])
+  expect(account?.cardMasks).toEqual(['1234'])
+})
+
+test('карта без номера метки не даёт', () => {
+  const [account] = toAccounts([baseAccount({ cards: [{ status: 'Активна' }] })])
+  expect(account?.cardMasks).toEqual([])
 })
 
 test('нераспознанная валюта операции остаётся явной ошибкой', () => {

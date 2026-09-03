@@ -1,6 +1,6 @@
 import unicodedata
 import uuid
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import NamedTuple
 
@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.operation_kinds import OperationKind, kind_from_amount
 from app.ledger import repository
+from app.ledger.balance import adjustment_for, visible_balance
 from app.ledger.models import Account, Category, DescriptionRule, Transaction
 from app.ledger.schemas import (
     AccountCreate,
@@ -30,8 +31,18 @@ class NotFoundError(Exception):
     pass
 
 
+class ReportedBalanceError(Exception):
+    """У счёта есть остаток от источника — править его руками нельзя."""
+
+
+def _visible_balance(account: Account, operations_sum: Decimal) -> Decimal:
+    """Остаток счёта: наружу отдаём его, а не сумму операций."""
+    return visible_balance(account.reported_balance, account.balance_adjustment, operations_sum)
+
+
 async def list_accounts(db: AsyncSession, workspace_id: uuid.UUID) -> list[tuple[Account, Decimal]]:
-    return await repository.list_accounts_with_balance(db, workspace_id)
+    rows = await repository.list_accounts_with_operations_sum(db, workspace_id)
+    return [(account, _visible_balance(account, total)) for account, total in rows]
 
 
 async def create_account(
@@ -58,9 +69,44 @@ async def update_account(
         account.name = payload.name
     if payload.is_archived is not None:
         account.is_archived = payload.is_archived
+    if payload.balance is not None:
+        if account.reported_balance is not None:
+            # следующий сбор всё равно перезапишет правку: принять её значит
+            # пообещать то, чего мы не сделаем
+            raise ReportedBalanceError
+        operations_sum = await repository.account_operations_sum(db, workspace_id, account_id)
+        account.balance_adjustment = adjustment_for(payload.balance, operations_sum)
     await db.commit()
-    balance = await repository.account_balance(db, workspace_id, account_id)
-    return account, balance
+    operations_sum = await repository.account_operations_sum(db, workspace_id, account_id)
+    return account, _visible_balance(account, operations_sum)
+
+
+async def apply_reported_balance(
+    db: AsyncSession,
+    workspace_id: uuid.UUID,
+    account_id: uuid.UUID,
+    balance: Decimal,
+    card_masks: list[str],
+    reported_at: datetime,
+) -> None:
+    """Записать остаток и метки карт, сообщённые источником.
+
+    Без commit: вызывается из подтверждения импорта, и остаток обязан появиться
+    ровно вместе с операциями, а не отдельной транзакцией.
+    """
+    account = await repository.get_account(db, workspace_id, account_id)
+    if account is None:
+        raise NotFoundError
+    if account.reported_at is not None and reported_at <= account.reported_at:
+        # верен последний сбор, а не последнее подтверждение: импорты ждут
+        # своей очереди и подтверждаются в произвольном порядке, а список
+        # показывает их свежими вверх — то есть скорее в обратном
+        return
+    account.reported_balance = balance
+    account.reported_at = reported_at
+    # только присваиванием: колонка — обычный JSONB, правку списка на месте
+    # SQLAlchemy молча не заметит
+    account.card_masks = card_masks
 
 
 async def seed_categories(db: AsyncSession, workspace_id: uuid.UUID) -> None:
@@ -517,7 +563,9 @@ async def build_dashboard(db: AsyncSession, workspace_id: uuid.UUID) -> Dashboar
         else month_start.replace(month=month_start.month + 1)
     )
 
-    accounts = await repository.list_accounts_with_balance(db, workspace_id)
+    # через list_accounts, а не напрямую из repository: дашборд и список счетов
+    # показывают одну и ту же величину, и считать её обязаны одинаково
+    accounts = await list_accounts(db, workspace_id)
     expenses = await repository.month_expenses_by_category(
         db, workspace_id, month_start, next_month_start
     )
@@ -525,7 +573,15 @@ async def build_dashboard(db: AsyncSession, workspace_id: uuid.UUID) -> Dashboar
 
     return DashboardOut(
         accounts=[
-            DashboardAccount(id=a.id, name=a.name, currency=a.currency, balance=bal)
+            DashboardAccount(
+                id=a.id,
+                name=a.name,
+                type=a.type,
+                currency=a.currency,
+                balance=bal,
+                reported_at=a.reported_at,
+                card_masks=a.card_masks,
+            )
             for a, bal in accounts
         ],
         month_expenses=[

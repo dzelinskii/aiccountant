@@ -32,7 +32,7 @@ router = APIRouter(prefix="/api")
 
 
 def _account_out(account: Account, balance: Decimal) -> AccountOut:
-    # balance нет в модели Account — считается по транзакциям, подставляем отдельно
+    # balance нет в модели Account — это результат правила остатка, подставляем отдельно
     return AccountOut(
         id=account.id,
         name=account.name,
@@ -40,6 +40,8 @@ def _account_out(account: Account, balance: Decimal) -> AccountOut:
         currency=account.currency,
         is_archived=account.is_archived,
         balance=balance,
+        reported_at=account.reported_at,
+        card_masks=account.card_masks,
     )
 
 
@@ -76,6 +78,8 @@ async def update_account(
         account, balance = await service.update_account(db, workspace_id, account_id, payload)
     except service.NotFoundError:
         raise HTTPException(status_code=404, detail="Счёт не найден") from None
+    except service.ReportedBalanceError:
+        raise HTTPException(status_code=409, detail="Остаток счёта приходит от источника") from None
     return _account_out(account, balance)
 
 

@@ -6,14 +6,34 @@
       "name": "Счёт для трат",
       "accountType": "Current",
       "currency": { "code": 643, "name": "RUB", "strCode": "643" },
-      "moneyAmount": { "value": 10000, "currency": { "code": 643, "name": "RUB", "strCode": "643" } }
+      "moneyAmount": { "value": "10000.50", "currency": { "code": 643, "name": "RUB", "strCode": "643" } },
+      "cards": [
+        {
+          "id": "card-1",
+          "statusCode": "BLCK",
+          "status": "Заблокирована",
+          "value": "5536••••••••1111",
+          "name": "Карта для трат",
+          "paymentSystem": "MC",
+          "primary": false
+        },
+        {
+          "id": "card-2",
+          "statusCode": "NORM",
+          "status": "Активна",
+          "value": "5536••••••••1234",
+          "name": "Карта для трат",
+          "paymentSystem": "MC",
+          "primary": true
+        }
+      ]
     },
     {
       "id": "acc-2",
       "name": "Накопительный",
       "accountType": "Saving",
       "currency": { "code": 643, "name": "RUB", "strCode": "643" },
-      "moneyAmount": { "value": 500, "currency": { "code": 643, "name": "RUB", "strCode": "643" } }
+      "moneyAmount": { "value": "500", "currency": { "code": 643, "name": "RUB", "strCode": "643" } }
     }
   ]
 }

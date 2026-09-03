@@ -1,5 +1,5 @@
 import uuid
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, Field, field_serializer
@@ -19,6 +19,9 @@ class AccountCreate(BaseModel):
 class AccountUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     is_archived: bool | None = None
+    # текущий остаток, каким его видит человек; поправку к сумме операций
+    # считает бэкенд, наружу это понятие не выносится
+    balance: Decimal | None = None
 
 
 class AccountOut(BaseModel):
@@ -28,6 +31,11 @@ class AccountOut(BaseModel):
     currency: str
     is_archived: bool
     balance: MoneyStr
+    # момент, на который верен остаток от источника; пусто — счёт ведётся
+    # руками, и остаток считается по операциям
+    reported_at: datetime | None
+    # последние четыре цифры карт; пусто у счетов без карт
+    card_masks: list[str]
 
 
 class CategoryCreate(BaseModel):
@@ -123,8 +131,13 @@ class TransactionList(BaseModel):
 class DashboardAccount(BaseModel):
     id: uuid.UUID
     name: str
+    type: str
     currency: str
     balance: MoneyStr
+    # то же, что в AccountOut: остаток без момента и счёт без опознавательного
+    # знака непонятны на любом экране, а дашборд обязан отдавать всё одним ответом
+    reported_at: datetime | None
+    card_masks: list[str]
 
 
 class MonthExpense(BaseModel):

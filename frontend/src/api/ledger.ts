@@ -7,6 +7,11 @@ export interface Account {
   currency: string
   is_archived: boolean
   balance: string
+  // момент, на который остаток верен; null — остаток никто не сообщает,
+  // счёт ведётся вручную
+  reported_at: string | null
+  // последние четыре цифры карт счёта; пусто у счетов без карт
+  card_masks: string[]
 }
 
 export interface Category {
@@ -42,7 +47,15 @@ export interface TransactionList {
 }
 
 export interface Dashboard {
-  accounts: { id: string; name: string; currency: string; balance: string }[]
+  accounts: {
+    id: string
+    name: string
+    type: string
+    currency: string
+    balance: string
+    reported_at: string | null
+    card_masks: string[]
+  }[]
   month_expenses: { category_id: string; category_name: string; total: string }[]
   recent: {
     id: string
@@ -66,8 +79,10 @@ export const getAccounts = (ws: string) => api<Account[]>(`/api/accounts?${q(ws)
 export const createAccount = (ws: string, body: { name: string; type: string; currency: string }) =>
   api<Account>(`/api/accounts?${q(ws)}`, { method: 'POST', body: JSON.stringify(body) })
 
+// balance — строкой, как и остальные деньги: через float точность теряется.
+// Счёт с сообщённым остатком бэкенд править не даёт и отвечает 409
 export const updateAccount = (
-  ws: string, id: string, body: { name?: string; is_archived?: boolean },
+  ws: string, id: string, body: { name?: string; is_archived?: boolean; balance?: string },
 ) => api<Account>(`/api/accounts/${id}?${q(ws)}`, { method: 'PATCH', body: JSON.stringify(body) })
 
 export const getCategories = (ws: string) => api<Category[]>(`/api/categories?${q(ws)}`)

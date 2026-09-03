@@ -1,4 +1,5 @@
 import hashlib
+import re
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import date, datetime
@@ -15,12 +16,14 @@ from app.imports.models import Import
 from app.imports.parser import ParsedOperation, ParsedStatement, StatementParseError
 from app.imports.schemas import (
     BANK_EXTERNAL_ID_PREFIX,
+    CARD_MASK,
     ImportListItemOut,
     ImportOperationOut,
     ImportPreviewOut,
     ImportResultOut,
     ImportStatus,
     ImportStatusOut,
+    ParsedAccountIn,
     ParsedOperationIn,
 )
 from app.ledger import service as ledger_service
@@ -95,6 +98,47 @@ def _finite_decimal(raw: object) -> Decimal:
         # молча отравляют сравнения контрольной суммы — это тоже порча данных
         raise ValueError(f"не конечное число: {value}")
     return value
+
+
+def _card_masks(raw: object, import_id: uuid.UUID) -> list[str]:
+    """Метки карт из сохранённого разбора: на входе их проверила схема, но лежат
+    они в JSONB, где оказаться может что угодно, — поэтому правило «ровно четыре
+    цифры» перепроверяем здесь.
+
+    Негодную метку отбрасываем, а не роняем ею импорт: метка — подпись счёта на
+    экране, и косметика не должна отменять денежную часть работы. Тем более что
+    ошибка разбора при подтверждении наружу не переводится — импорт остался бы
+    в ready навсегда, отвечая 500 на каждую следующую попытку. Молча это не
+    проходит: импорт с мусором виден в логе, самих значений там нет намеренно
+    (см. _known_kind)."""
+    if not isinstance(raw, list):
+        logger.warning("import_broken_card_masks", import_id=str(import_id))
+        return []
+    masks = [mask for mask in raw if isinstance(mask, str) and re.fullmatch(CARD_MASK, mask)]
+    if len(masks) != len(raw):
+        logger.warning("import_broken_card_masks", import_id=str(import_id))
+    return masks
+
+
+def _payload_account(
+    payload: dict[str, object], import_id: uuid.UUID
+) -> tuple[Decimal, list[str]] | None:
+    """Остаток счёта и метки карт из сохранённого разбора; None — источник о счёте
+    ничего не сообщал (выписка из PDF про сам счёт не знает).
+
+    Остаток — деньги, и его порча роняет разбор так же, как порча суммы операции
+    в _payload_to_statement: молча оставить счёт с прежним числом нельзя. Метки
+    рядом переживают порчу по-другому — см. _card_masks."""
+    stored = payload.get("account")
+    if stored is None:
+        return None
+    if not isinstance(stored, dict):
+        raise StatementParseError("повреждён сохранённый разбор выписки")
+    try:
+        balance = _finite_decimal(stored["balance"])
+    except (KeyError, ValueError, TypeError, InvalidOperation) as exc:
+        raise StatementParseError("повреждён сохранённый разбор выписки") from exc
+    return balance, _card_masks(stored.get("card_masks"), import_id)
 
 
 def _known_kind(raw: str, import_id: uuid.UUID) -> OperationKind:
@@ -197,6 +241,7 @@ async def create_parsed_import(
     user_id: uuid.UUID,
     parser: str,
     operations: list[ParsedOperationIn],
+    account: ParsedAccountIn | None = None,
 ) -> Import:
     """Принять уже разобранные операции: разбирать нечего, сразу ready."""
     statement = ParsedStatement(
@@ -218,6 +263,11 @@ async def create_parsed_import(
     # Префикс отделяет их пространство от наших sha256-хешей (см. BANK_EXTERNAL_ID_PREFIX)
     payload = _statement_to_payload(statement, [])
     payload["external_ids"] = [BANK_EXTERNAL_ID_PREFIX + op.external_id for op in operations]
+    if account is not None:
+        # остаток применяется при подтверждении, а оно случится позже отдельным
+        # запросом: не положив блок сюда, потеряли бы его по дороге. Деньги
+        # строкой — Decimal в JSONB не хранится
+        payload["account"] = {"balance": str(account.balance), "card_masks": account.card_masks}
 
     imp = Import(
         workspace_id=workspace_id,
@@ -423,6 +473,9 @@ async def commit_from_import(
         raise ImportNotReadyError("импорт не готов к подтверждению")
     statement = _payload_to_statement(imp.parsed_payload)
     ext_ids = _payload_external_ids(imp.parsed_payload, imp.account_id, statement.operations)
+    # разбираем до вставок: на порче блока падать после двадцати тысяч операций,
+    # которые тут же откатятся, — пустая работа
+    reported = _payload_account(imp.parsed_payload, imp.id)
     existing = await ledger_service.existing_external_ids(
         db, workspace_id, imp.account_id, set(ext_ids)
     )
@@ -457,6 +510,13 @@ async def commit_from_import(
             operation_kind=_known_kind(op.kind, imp.id),
         )
         imported += 1
+
+    if reported is not None:
+        balance, card_masks = reported
+        # момент — время создания импорта: тогда коллектор и обращался в банк
+        await ledger_service.apply_reported_balance(
+            db, workspace_id, imp.account_id, balance, card_masks, imp.created_at
+        )
 
     duplicates = len(statement.operations) - imported
     imp.stats = {
