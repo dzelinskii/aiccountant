@@ -103,6 +103,31 @@ test('checkSession принимает живую сессию, когда пол
   await expect(checkSession(client)).resolves.toBeUndefined()
 })
 
+test('анонимная сессия не считается живой, хотя ответ успешный', async () => {
+  // ровно то, что вернул живой банк через 2,5 часа после истечения сессии:
+  // resultCode "OK" и положительный millisLeft — но это счётчик анонимной
+  // сессии. Одного millisLeft мало, различает только accessLevel
+  const fetchImpl = vi.fn(
+    async () =>
+      jsonResponse('{"resultCode":"OK","payload":{"accessLevel":"ANONYMOUS","millisLeft":659622}}'),
+  )
+  const client = createTBankClient('token', { fetchImpl: fetchImpl as unknown as FetchImpl })
+
+  await expect(checkSession(client)).rejects.toBeInstanceOf(SessionExpiredError)
+})
+
+test('незнакомый уровень доступа живой сессии не мешает', async () => {
+  // обратная проверка (равенство "CLIENT") отправила бы человека вводить код
+  // по кругу, появись у банка новый уровень доступа
+  const fetchImpl = vi.fn(
+    async () =>
+      jsonResponse('{"resultCode":"OK","payload":{"accessLevel":"PREMIUM","millisLeft":3600000}}'),
+  )
+  const client = createTBankClient('token', { fetchImpl: fetchImpl as unknown as FetchImpl })
+
+  await expect(checkSession(client)).resolves.toBeUndefined()
+})
+
 test('checkSession принимает живую сессию, когда поля лежат в payload', async () => {
   // остальные эндпоинты этого API кладут данные в payload; реального ответа
   // session_status у нас нет, поэтому обе формы конверта равноправны
