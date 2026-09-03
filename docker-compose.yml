@@ -27,6 +27,12 @@ services:
       DATABASE_URL: postgresql+asyncpg://aiccountant:${POSTGRES_PASSWORD}@postgres:5432/aiccountant
       REDIS_URL: redis://redis:6379/0
       COOKIE_SECURE: "true"
+      # LLM-слой: без этих переменных автокатегоризация и разбор выписок
+      # молча ничего не делают — ключ до процесса просто не доходит
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL_CATEGORIZE: ${LLM_MODEL_CATEGORIZE:-gpt-4o-mini}
+      LLM_MODEL_PARSE: ${LLM_MODEL_PARSE:-gpt-4o-mini}
     depends_on:
       postgres:
         condition: service_healthy
@@ -45,6 +51,12 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://aiccountant:${POSTGRES_PASSWORD}@postgres:5432/aiccountant
       REDIS_URL: redis://redis:6379/0
+      # LLM-слой: без этих переменных автокатегоризация и разбор выписок
+      # молча ничего не делают — ключ до процесса просто не доходит
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL_CATEGORIZE: ${LLM_MODEL_CATEGORIZE:-gpt-4o-mini}
+      LLM_MODEL_PARSE: ${LLM_MODEL_PARSE:-gpt-4o-mini}
     depends_on:
       backend:
         condition: service_healthy
@@ -55,6 +67,12 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://aiccountant:${POSTGRES_PASSWORD}@postgres:5432/aiccountant
       REDIS_URL: redis://redis:6379/0
+      # LLM-слой: без этих переменных автокатегоризация и разбор выписок
+      # молча ничего не делают — ключ до процесса просто не доходит
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL_CATEGORIZE: ${LLM_MODEL_CATEGORIZE:-gpt-4o-mini}
+      LLM_MODEL_PARSE: ${LLM_MODEL_PARSE:-gpt-4o-mini}
     depends_on:
       backend:
         condition: service_healthy
