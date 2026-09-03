@@ -1,3 +1,4 @@
+import re
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
@@ -122,9 +123,48 @@ class ParsedOperationIn(BaseModel):
 MAX_PARSED_OPERATIONS = 25_000
 
 
+CARD_MASK = r"^[0-9]{4}$"
+# счёт с десятком карт — уже нечто иное, чем домашний счёт; ограничение здесь
+# затем же, зачем MAX_PARSED_OPERATIONS: предсказуемость размера тела запроса
+MAX_CARD_MASKS = 10
+
+
+class ParsedAccountIn(BaseModel):
+    """Что источник знает о самом счёте на момент сбора.
+
+    Момент не присылаем: временем считается создание импорта — оно и есть
+    момент обращения к банку, а доверять часам чужой машины незачем.
+    """
+
+    balance: Money
+    card_masks: list[str] = Field(default_factory=list, max_length=MAX_CARD_MASKS)
+
+    @field_validator("balance", mode="before")
+    @classmethod
+    def _balance_not_float(cls, value: object) -> object:
+        if isinstance(value, float):
+            # к моменту валидации разряды уже потеряны — то же правило, что
+            # у сумм операций (см. ParsedOperationIn)
+            raise ValueError("остаток должен быть строкой, а не числом JSON")
+        return value
+
+    @field_validator("card_masks")
+    @classmethod
+    def _masks_are_four_digits(cls, value: list[str]) -> list[str]:
+        for mask in value:
+            # хранить кусок номера карты сверх последних четырёх цифр мы не
+            # собираемся, а укороченная метка не опознаёт счёт — и то и другое
+            # означает баг коллектора
+            if not re.fullmatch(CARD_MASK, mask):
+                raise ValueError("метка карты — ровно четыре цифры")
+        return value
+
+
 class ParsedImportIn(BaseModel):
     parser: str = Field(min_length=1, max_length=30, pattern=r"^[a-z0-9_]+$")
     operations: list[ParsedOperationIn] = Field(min_length=1, max_length=MAX_PARSED_OPERATIONS)
+    # необязательный: разбор PDF-выписки про счёт ничего не знает
+    account: ParsedAccountIn | None = None
 
     @model_validator(mode="after")
     def _unique_external_ids(self) -> "ParsedImportIn":

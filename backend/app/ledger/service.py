@@ -1,6 +1,6 @@
 import unicodedata
 import uuid
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import NamedTuple
 
@@ -68,6 +68,29 @@ async def update_account(
     await db.commit()
     operations_sum = await repository.account_operations_sum(db, workspace_id, account_id)
     return account, _visible_balance(account, operations_sum)
+
+
+async def apply_reported_balance(
+    db: AsyncSession,
+    workspace_id: uuid.UUID,
+    account_id: uuid.UUID,
+    balance: Decimal,
+    card_masks: list[str],
+    reported_at: datetime,
+) -> None:
+    """Записать остаток и метки карт, сообщённые источником.
+
+    Без commit: вызывается из подтверждения импорта, и остаток обязан появиться
+    ровно вместе с операциями, а не отдельной транзакцией.
+    """
+    account = await repository.get_account(db, workspace_id, account_id)
+    if account is None:
+        raise NotFoundError
+    account.reported_balance = balance
+    account.reported_at = reported_at
+    # только присваиванием: колонка — обычный JSONB, правку списка на месте
+    # SQLAlchemy молча не заметит
+    account.card_masks = card_masks
 
 
 async def seed_categories(db: AsyncSession, workspace_id: uuid.UUID) -> None:

@@ -91,7 +91,7 @@ async def create_parsed_import(
         # отказом коллектору, который прислал "RUB", хотя валюта та же самая
         raise HTTPException(status_code=422, detail="Валюта операции не совпадает с валютой счёта")
     imp = await service.create_parsed_import(
-        db, workspace_id, account_id, user.id, payload.parser, payload.operations
+        db, workspace_id, account_id, user.id, payload.parser, payload.operations, payload.account
     )
     return ImportStartedOut(import_id=imp.id, status=cast(ImportStatus, imp.status))
 

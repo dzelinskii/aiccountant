@@ -21,6 +21,7 @@ from app.imports.schemas import (
     ImportResultOut,
     ImportStatus,
     ImportStatusOut,
+    ParsedAccountIn,
     ParsedOperationIn,
 )
 from app.ledger import service as ledger_service
@@ -95,6 +96,28 @@ def _finite_decimal(raw: object) -> Decimal:
         # молча отравляют сравнения контрольной суммы — это тоже порча данных
         raise ValueError(f"не конечное число: {value}")
     return value
+
+
+def _payload_account(payload: dict[str, object]) -> tuple[Decimal, list[str]] | None:
+    """Остаток счёта и метки карт из сохранённого разбора; None — источник о счёте
+    ничего не сообщал (выписка из PDF про сам счёт не знает).
+
+    Блок пишем сами (create_parsed_import), поэтому битое содержимое — порча
+    данных, а не законный случай: падаем тем же типом, что и остальной разбор
+    в _payload_to_statement, вместо того чтобы молча оставить прежний остаток."""
+    stored = payload.get("account")
+    if stored is None:
+        return None
+    if not isinstance(stored, dict):
+        raise StatementParseError("повреждён сохранённый разбор выписки")
+    masks = stored.get("card_masks")
+    if not isinstance(masks, list):
+        raise StatementParseError("повреждён сохранённый разбор выписки")
+    try:
+        balance = _finite_decimal(stored["balance"])
+    except (KeyError, ValueError, InvalidOperation) as exc:
+        raise StatementParseError("повреждён сохранённый разбор выписки") from exc
+    return balance, [str(mask) for mask in masks]
 
 
 def _known_kind(raw: str, import_id: uuid.UUID) -> OperationKind:
@@ -197,6 +220,7 @@ async def create_parsed_import(
     user_id: uuid.UUID,
     parser: str,
     operations: list[ParsedOperationIn],
+    account: ParsedAccountIn | None = None,
 ) -> Import:
     """Принять уже разобранные операции: разбирать нечего, сразу ready."""
     statement = ParsedStatement(
@@ -218,6 +242,11 @@ async def create_parsed_import(
     # Префикс отделяет их пространство от наших sha256-хешей (см. BANK_EXTERNAL_ID_PREFIX)
     payload = _statement_to_payload(statement, [])
     payload["external_ids"] = [BANK_EXTERNAL_ID_PREFIX + op.external_id for op in operations]
+    if account is not None:
+        # остаток применяется при подтверждении, а оно случится позже отдельным
+        # запросом: не положив блок сюда, потеряли бы его по дороге. Деньги
+        # строкой — Decimal в JSONB не хранится
+        payload["account"] = {"balance": str(account.balance), "card_masks": account.card_masks}
 
     imp = Import(
         workspace_id=workspace_id,
@@ -457,6 +486,14 @@ async def commit_from_import(
             operation_kind=_known_kind(op.kind, imp.id),
         )
         imported += 1
+
+    reported = _payload_account(imp.parsed_payload)
+    if reported is not None:
+        balance, card_masks = reported
+        # момент — время создания импорта: тогда коллектор и обращался в банк
+        await ledger_service.apply_reported_balance(
+            db, workspace_id, imp.account_id, balance, card_masks, imp.created_at
+        )
 
     duplicates = len(statement.operations) - imported
     imp.stats = {
