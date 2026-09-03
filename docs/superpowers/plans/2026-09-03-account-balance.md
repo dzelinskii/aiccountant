@@ -91,7 +91,7 @@ Mantine, vitest.
 модуль. Ниже код модуля приведён первым для удобства чтения, но писать его надо
 после того, как тесты упали по-настоящему.
 
-- [ ] **Шаг 1: Правило одной функцией** (пишется после Шага 3)
+- [x] **Шаг 1: Правило одной функцией** (пишется после Шага 3)
 
 Создать `backend/app/ledger/balance.py`:
 
@@ -123,7 +123,7 @@ def adjustment_for(desired: Decimal, operations_sum: Decimal) -> Decimal:
     return desired - operations_sum
 ```
 
-- [ ] **Шаг 2: Падающие тесты**
+- [x] **Шаг 2: Падающие тесты**
 
 Создать `backend/tests/test_account_balance.py`:
 
@@ -160,12 +160,12 @@ def test_reported_zero_is_not_absent() -> None:
     assert visible_balance(Decimal(0), Decimal("777.00"), Decimal("13.00")) == Decimal(0)
 ```
 
-- [ ] **Шаг 3: Прогнать — падает**
+- [x] **Шаг 3: Прогнать — падает**
 
 Run: `cd backend && uv run pytest tests/test_account_balance.py -q`
 Ожидание: FAIL — модуля `app.ledger.balance` нет.
 
-- [ ] **Шаг 4: Поля модели**
+- [x] **Шаг 4: Поля модели**
 
 В `backend/app/ledger/models.py` в класс `Account`, после `is_archived`:
 
@@ -190,7 +190,7 @@ Run: `cd backend && uv run pytest tests/test_account_balance.py -q`
 from sqlalchemy.dialects.postgresql import JSONB
 ```
 
-- [ ] **Шаг 5: Миграция**
+- [x] **Шаг 5: Миграция**
 
 Создать `backend/alembic/versions/0011_account_balance.py`, `revision = "0011"`,
 `down_revision = "0010"`. Формат бери из `0010_description_rules.py`.
@@ -231,12 +231,12 @@ def downgrade() -> None:
 
 Нужен импорт `from sqlalchemy.dialects import postgresql`.
 
-- [ ] **Шаг 6: Прогнать**
+- [x] **Шаг 6: Прогнать**
 
 Run: `cd backend && uv run pytest tests/test_account_balance.py -q`
 Ожидание: PASS, 5 тестов.
 
-- [ ] **Шаг 7: Миграция на базе с данными**
+- [x] **Шаг 7: Миграция на базе с данными**
 
 Поднять отдельный контейнер Postgres на свободном порту (боевую базу
 запущенного стека `moneyrain-*` не трогать), накатить `0010`, вставить счёт и
@@ -244,7 +244,7 @@ Run: `cd backend && uv run pytest tests/test_account_balance.py -q`
 `card_masks` равен `[]`, `reported_balance` и `reported_at` пусты, транзакции
 целы. Затем `downgrade 0010` и снова `upgrade head`. Контейнер удалить.
 
-- [ ] **Шаг 8: Коммит**
+- [x] **Шаг 8: Коммит**
 
 ```bash
 git add backend/app/ledger/balance.py backend/app/ledger/models.py \
@@ -267,7 +267,7 @@ git commit -m "Учёт: поля остатка у счёта и правило
 сумму транзакций и называют её остатком. Нужно разделить: сумма операций — факт
 о транзакциях, остаток — то, что показывает правило из Task 1.
 
-- [ ] **Шаг 1: Падающие тесты**
+- [x] **Шаг 1: Падающие тесты**
 
 Дополнить `backend/tests/test_account_balance.py`. Хелперы регистрации и
 создания счёта бери из `tests/test_operation_kinds.py`, стиль — оттуда же.
@@ -278,12 +278,12 @@ git commit -m "Учёт: поля остатка у счёта и правило
 2. после операции на `-100.00` показывает `-100.00` (поведение не изменилось);
 3. в ответе есть поля `reported_at` (пусто) и `card_masks` (пустой список).
 
-- [ ] **Шаг 2: Прогнать — падает**
+- [x] **Шаг 2: Прогнать — падает**
 
 Run: `cd backend && uv run pytest tests/test_account_balance.py -q`
 Ожидание: FAIL — в ответе нет `reported_at` и `card_masks`.
 
-- [ ] **Шаг 3: Repository отдаёт сумму операций**
+- [x] **Шаг 3: Repository отдаёт сумму операций**
 
 В `backend/app/ledger/repository.py` переименовать смысл, а не только имя: обе
 функции считают **сумму операций**, а не остаток.
@@ -295,7 +295,7 @@ Run: `cd backend && uv run pytest tests/test_account_balance.py -q`
 и поправить. Ожидаются `service.list_accounts`, `service.update_account` и,
 возможно, дашборд.
 
-- [ ] **Шаг 4: Сервис возвращает видимый остаток**
+- [x] **Шаг 4: Сервис возвращает видимый остаток**
 
 В `backend/app/ledger/service.py` там, где раньше возвращалась сумма операций,
 считать остаток через `visible_balance` из `app.ledger.balance`:
@@ -307,7 +307,7 @@ from app.ledger.balance import visible_balance
 и в `list_accounts` / `update_account` подставлять
 `visible_balance(account.reported_balance, account.balance_adjustment, operations_sum)`.
 
-- [ ] **Шаг 5: Схема**
+- [x] **Шаг 5: Схема**
 
 В `backend/app/ledger/schemas.py` в `AccountOut` после `balance`:
 
@@ -323,12 +323,12 @@ from app.ledger.balance import visible_balance
 
 В `backend/app/ledger/router.py` в `_account_out` добавить оба поля.
 
-- [ ] **Шаг 6: Прогнать**
+- [x] **Шаг 6: Прогнать**
 
 Run: `cd backend && uv run pytest -q`
 Ожидание: всё зелёное, регрессий нет.
 
-- [ ] **Шаг 7: Коммит**
+- [x] **Шаг 7: Коммит**
 
 ```bash
 git add backend/app/ledger/ backend/tests/test_account_balance.py
@@ -344,7 +344,7 @@ git commit -m "Учёт: сумма операций и остаток счёт�
 - Modify: `backend/app/imports/service.py`
 - Test: `backend/tests/test_account_balance.py` (дополнить)
 
-- [ ] **Шаг 1: Падающие тесты**
+- [x] **Шаг 1: Падающие тесты**
 
 Дополнить `backend/tests/test_account_balance.py`. Создавать импорт через
 `POST /api/imports/parsed`, подтверждать через
@@ -362,12 +362,12 @@ git commit -m "Учёт: сумма операций и остаток счёт�
 7. остаток числом JSON, а не строкой, даёт 422 — то же правило, что у сумм
    операций.
 
-- [ ] **Шаг 2: Прогнать — падает**
+- [x] **Шаг 2: Прогнать — падает**
 
 Run: `cd backend && uv run pytest tests/test_account_balance.py -q`
 Ожидание: FAIL — блок счёта в теле игнорируется.
 
-- [ ] **Шаг 3: Схема блока счёта**
+- [x] **Шаг 3: Схема блока счёта**
 
 В `backend/app/imports/schemas.py`:
 
@@ -413,7 +413,7 @@ class ParsedAccountIn(BaseModel):
     account: ParsedAccountIn | None = None
 ```
 
-- [ ] **Шаг 4: Сохранить блок в payload**
+- [x] **Шаг 4: Сохранить блок в payload**
 
 Блок нужен при **подтверждении**, а импорт подтверждается позже, поэтому его
 надо положить в `parsed_payload` рядом с операциями — иначе он потеряется между
@@ -428,7 +428,7 @@ class ParsedAccountIn(BaseModel):
 присвоенный JSONB нельзя — SQLAlchemy не отследит правку на месте. В этом же
 файле рядом есть комментарий об этом.
 
-- [ ] **Шаг 5: Применить при подтверждении**
+- [x] **Шаг 5: Применить при подтверждении**
 
 В `backend/app/imports/service.py` в `commit_from_import`, после создания
 операций, взять блок из payload и применить к счёту через сервис учёта:
@@ -466,12 +466,12 @@ async def apply_reported_balance(
 **Границы модулей:** `imports` зовёт `ledger.service`, во внутренности `ledger`
 не лезет. После правок обязательно `uv run lint-imports`.
 
-- [ ] **Шаг 6: Прогнать и гейты**
+- [x] **Шаг 6: Прогнать и гейты**
 
 Run: `cd backend && uv run ruff format . && uv run ruff check . && uv run mypy && uv run lint-imports && uv run pytest -q`
 Ожидание: всё зелёное, 7 контрактов целы.
 
-- [ ] **Шаг 7: Мутации**
+- [x] **Шаг 7: Мутации**
 
 - применять остаток при **отправке**, а не при подтверждении — должен покраснеть
   тест 1 (проверка «до подтверждения счёт показывает старое»);
@@ -480,7 +480,7 @@ Run: `cd backend && uv run ruff format . && uv run ruff check . && uv run mypy &
 
 Каждую внести, проверить, **сразу вернуть**, проверить `git status`.
 
-- [ ] **Шаг 8: Коммит**
+- [x] **Шаг 8: Коммит**
 
 ```bash
 git add backend/app/imports/ backend/app/ledger/service.py backend/tests/

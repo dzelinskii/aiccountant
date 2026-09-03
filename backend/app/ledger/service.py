@@ -86,6 +86,11 @@ async def apply_reported_balance(
     account = await repository.get_account(db, workspace_id, account_id)
     if account is None:
         raise NotFoundError
+    if account.reported_at is not None and reported_at <= account.reported_at:
+        # верен последний сбор, а не последнее подтверждение: импорты ждут
+        # своей очереди и подтверждаются в произвольном порядке, а список
+        # показывает их свежими вверх — то есть скорее в обратном
+        return
     account.reported_balance = balance
     account.reported_at = reported_at
     # только присваиванием: колонка — обычный JSONB, правку списка на месте

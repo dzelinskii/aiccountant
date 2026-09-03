@@ -110,6 +110,30 @@ async def test_migrations_add_operation_kind_columns(database_url: str) -> None:
     assert columns == {"operation_kind": "NO", "spending_override": "YES"}
 
 
+async def test_migrations_add_account_balance_columns(database_url: str) -> None:
+    engine = create_async_engine(database_url)
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT column_name, is_nullable, column_default "
+                "FROM information_schema.columns WHERE table_name = 'accounts' "
+                "AND column_name IN ('reported_balance', 'reported_at', "
+                "'balance_adjustment', 'card_masks')"
+            )
+        )
+        columns = {name: (nullable, default) for name, nullable, default in rows.all()}
+    await engine.dispose()
+    # на умолчаниях держится обещание «счета, заведённые до этой миграции,
+    # продолжают показывать сумму операций»: NULL в поправке отравил бы
+    # сложение, а NULL в метках — список на экране
+    assert columns["balance_adjustment"] == ("NO", "0")
+    assert columns["card_masks"] == ("NO", "'[]'::jsonb")
+    # а вот сообщённый остаток обязан быть nullable: пусто — источника нет,
+    # и это не то же самое, что остаток, равный нулю
+    assert columns["reported_balance"][0] == "YES"
+    assert columns["reported_at"][0] == "YES"
+
+
 async def test_migrations_create_api_tokens(database_url: str) -> None:
     engine = create_async_engine(database_url)
     async with engine.connect() as conn:

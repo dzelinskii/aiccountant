@@ -1,9 +1,17 @@
 import json
+import uuid
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
+import pytest
 from httpx import AsyncClient, Response
+from sqlalchemy.ext.asyncio import AsyncSession
+from structlog.testing import capture_logs
 
+from app.imports import service
+from app.imports.models import Import
+from app.imports.parser import StatementParseError
 from app.ledger.balance import adjustment_for, visible_balance
 
 ALICE = {"email": "alice@example.com", "password": "password123"}
@@ -95,10 +103,17 @@ OPERATION = {
 
 
 async def _start_import(
-    client: AsyncClient, ws: str, account_id: str, account: dict[str, Any] | None
+    client: AsyncClient,
+    ws: str,
+    account_id: str,
+    account: dict[str, Any] | None,
+    external_id: str = "bank-op-1",
 ) -> Response:
     """Импорт от коллектора; блок счёта необязателен — разбор PDF его не даёт."""
-    body: dict[str, Any] = {"parser": "tbank_collector", "operations": [OPERATION]}
+    body: dict[str, Any] = {
+        "parser": "tbank_collector",
+        "operations": [{**OPERATION, "external_id": external_id}],
+    }
     if account is not None:
         body["account"] = account
     return await client.post(
@@ -135,6 +150,60 @@ async def test_reported_at_filled_on_commit(client: AsyncClient) -> None:
     await _commit(client, ws, started.json()["import_id"])
 
     assert (await _account(client, ws))["reported_at"] is not None
+
+
+async def test_reported_at_is_the_moment_of_collection(client: AsyncClient) -> None:
+    """Отметка привязана к созданию импорта — это и есть момент обращения к
+    банку. Импорт может пролежать в ожидании подтверждения хоть трое суток, и
+    «сейчас» на кнопке соврало бы ровно там, ради чего отметку и завели."""
+    ws, account_id = await _ws_and_account(client)
+    started = await _start_import(client, ws, account_id, {"balance": "12345.67"})
+    pending = (await client.get("/api/imports", params={"workspace_id": ws})).json()
+    collected_at = datetime.fromisoformat(pending[0]["created_at"])
+
+    await _commit(client, ws, started.json()["import_id"])
+
+    assert datetime.fromisoformat((await _account(client, ws))["reported_at"]) == collected_at
+
+
+async def test_older_import_does_not_roll_balance_back(client: AsyncClient) -> None:
+    """Остаток перезаписывает последний сбор, а не последнее подтверждение.
+
+    Ожидающие импорты показываются свежими сверху, и человек идёт по списку
+    сверху вниз — то есть подтверждает их в обратном порядке. Без сравнения
+    моментов счёт после этого показал бы число самого старого сбора, а вместе
+    с ним уехали бы назад и отметка времени, и метки карт.
+    """
+    ws, account_id = await _ws_and_account(client)
+    older = await _start_import(
+        client, ws, account_id, {"balance": "1000.00", "card_masks": ["1111"]}, "bank-op-1"
+    )
+    newer = await _start_import(
+        client, ws, account_id, {"balance": "2000.00", "card_masks": ["2222"]}, "bank-op-2"
+    )
+
+    await _commit(client, ws, newer.json()["import_id"])
+    await _commit(client, ws, older.json()["import_id"])
+
+    account = await _account(client, ws)
+    assert Decimal(account["balance"]) == Decimal("2000.00")
+    assert account["card_masks"] == ["2222"]
+
+
+async def test_dashboard_agrees_with_account_list(client: AsyncClient) -> None:
+    """Дашборд и список счетов показывают одну и ту же величину, значит обязаны
+    считать её одним путём. Пока у счёта нет сообщённого остатка, расхождение
+    не видно — сумма операций и остаток численно совпадают, — поэтому сверяем
+    именно на счёте, которому источник остаток сообщил."""
+    ws, account_id = await _ws_and_account(client)
+    started = await _start_import(client, ws, account_id, {"balance": "12345.67"})
+    await _commit(client, ws, started.json()["import_id"])
+
+    dashboard = (await client.get("/api/dashboard", params={"workspace_id": ws})).json()
+    assert len(dashboard["accounts"]) == 1
+    on_dashboard = Decimal(dashboard["accounts"][0]["balance"])
+    in_list = Decimal((await _account(client, ws))["balance"])
+    assert on_dashboard == in_list == Decimal("12345.67")
 
 
 async def test_import_without_account_block_keeps_balance(client: AsyncClient) -> None:
@@ -177,6 +246,57 @@ async def test_card_mask_must_be_four_digits(client: AsyncClient) -> None:
             client, ws, account_id, {"balance": "100.00", "card_masks": [mask]}
         )
         assert resp.status_code == 422, mask
+
+
+async def _rewrite_payload_account(
+    db_session: AsyncSession, import_id: str, account: dict[str, Any]
+) -> None:
+    """Подменить блок счёта в сохранённом разборе. Схема стережёт вход, но между
+    отправкой и подтверждением блок лежит в JSONB, где оказаться может что угодно."""
+    imp = await db_session.get(Import, uuid.UUID(import_id))
+    assert imp is not None
+    assert isinstance(imp.parsed_payload, dict)
+    payload = dict(imp.parsed_payload)
+    payload["account"] = account
+    imp.parsed_payload = payload
+    await db_session.commit()
+
+
+async def test_broken_card_masks_are_dropped(client: AsyncClient, db_session: AsyncSession) -> None:
+    """Метка — подпись счёта на экране, и негодную мы выбрасываем, а не роняем
+    ею весь импорт: подтверждение ошибку разбора наружу не переводит, так что
+    импорт остался бы в ready навсегда, а денежная часть не доехала бы из-за
+    косметики. Молча это не проходит — импорт с мусором виден в логе."""
+    ws, account_id = await _ws_and_account(client)
+    started = await _start_import(client, ws, account_id, {"balance": "100.00"})
+    import_id = started.json()["import_id"]
+    await _rewrite_payload_account(
+        db_session, import_id, {"balance": "100.00", "card_masks": [1234, None, "12a4", "5678"]}
+    )
+
+    with capture_logs() as logs:
+        await _commit(client, ws, import_id)
+
+    account = await _account(client, ws)
+    assert account["card_masks"] == ["5678"]
+    assert Decimal(account["balance"]) == Decimal("100.00")
+    assert [e["import_id"] for e in logs if e["event"] == "import_broken_card_masks"] == [import_id]
+
+
+async def test_broken_balance_in_payload_raises(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Остаток, в отличие от меток, — деньги: его порча роняет разбор так же,
+    как порча суммы операции, а не оставляет счёт молча с прежним числом."""
+    ws, account_id = await _ws_and_account(client)
+    started = await _start_import(client, ws, account_id, {"balance": "100.00"})
+    import_id = started.json()["import_id"]
+    await _rewrite_payload_account(db_session, import_id, {"balance": "NaN", "card_masks": []})
+
+    with pytest.raises(StatementParseError):
+        await service.commit_from_import(
+            db_session, uuid.UUID(ws), uuid.UUID(import_id), uuid.uuid4()
+        )
 
 
 async def test_float_balance_rejected(client: AsyncClient) -> None:
