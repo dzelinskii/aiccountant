@@ -1,5 +1,5 @@
 import uuid
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, Field, field_serializer
@@ -28,6 +28,11 @@ class AccountOut(BaseModel):
     currency: str
     is_archived: bool
     balance: MoneyStr
+    # момент, на который верен остаток от источника; пусто — счёт ведётся
+    # руками, и остаток считается по операциям
+    reported_at: datetime | None
+    # последние четыре цифры карт; пусто у счетов без карт
+    card_masks: list[str]
 
 
 class CategoryCreate(BaseModel):

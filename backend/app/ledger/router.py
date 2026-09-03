@@ -32,7 +32,7 @@ router = APIRouter(prefix="/api")
 
 
 def _account_out(account: Account, balance: Decimal) -> AccountOut:
-    # balance нет в модели Account — считается по транзакциям, подставляем отдельно
+    # balance нет в модели Account — это результат правила остатка, подставляем отдельно
     return AccountOut(
         id=account.id,
         name=account.name,
@@ -40,6 +40,8 @@ def _account_out(account: Account, balance: Decimal) -> AccountOut:
         currency=account.currency,
         is_archived=account.is_archived,
         balance=balance,
+        reported_at=account.reported_at,
+        card_masks=account.card_masks,
     )
 
 

@@ -27,19 +27,21 @@ def transaction_counts_in_stats(transaction: Transaction) -> bool:
     return counts_in_stats(transaction.operation_kind, transaction.spending_override)
 
 
-async def list_accounts_with_balance(
+async def list_accounts_with_operations_sum(
     db: AsyncSession, workspace_id: uuid.UUID
 ) -> list[tuple[Account, Decimal]]:
-    balance = func.coalesce(func.sum(Transaction.amount), 0)
+    """Счета и сумма их операций. Это не остаток: остаток считает
+    app.ledger.balance, и сумма операций — лишь одно из его слагаемых."""
+    operations_sum = func.coalesce(func.sum(Transaction.amount), 0)
     stmt = (
-        select(Account, balance)
+        select(Account, operations_sum)
         .outerjoin(Transaction, Transaction.account_id == Account.id)
         .where(Account.workspace_id == workspace_id)
         .group_by(Account.id)
         .order_by(Account.created_at)
     )
     rows = await db.execute(stmt)
-    return [(acc, Decimal(bal)) for acc, bal in rows.all()]
+    return [(acc, Decimal(total)) for acc, total in rows.all()]
 
 
 async def get_account(
@@ -51,9 +53,10 @@ async def get_account(
     return account
 
 
-async def account_balance(
+async def account_operations_sum(
     db: AsyncSession, workspace_id: uuid.UUID, account_id: uuid.UUID
 ) -> Decimal:
+    """Сумма операций одного счёта — см. list_accounts_with_operations_sum."""
     stmt = select(func.coalesce(func.sum(Transaction.amount), 0)).where(
         Transaction.workspace_id == workspace_id, Transaction.account_id == account_id
     )

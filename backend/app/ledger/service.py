@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.operation_kinds import OperationKind, kind_from_amount
 from app.ledger import repository
+from app.ledger.balance import visible_balance
 from app.ledger.models import Account, Category, DescriptionRule, Transaction
 from app.ledger.schemas import (
     AccountCreate,
@@ -30,8 +31,14 @@ class NotFoundError(Exception):
     pass
 
 
+def _visible_balance(account: Account, operations_sum: Decimal) -> Decimal:
+    """Остаток счёта: наружу отдаём его, а не сумму операций."""
+    return visible_balance(account.reported_balance, account.balance_adjustment, operations_sum)
+
+
 async def list_accounts(db: AsyncSession, workspace_id: uuid.UUID) -> list[tuple[Account, Decimal]]:
-    return await repository.list_accounts_with_balance(db, workspace_id)
+    rows = await repository.list_accounts_with_operations_sum(db, workspace_id)
+    return [(account, _visible_balance(account, total)) for account, total in rows]
 
 
 async def create_account(
@@ -59,8 +66,8 @@ async def update_account(
     if payload.is_archived is not None:
         account.is_archived = payload.is_archived
     await db.commit()
-    balance = await repository.account_balance(db, workspace_id, account_id)
-    return account, balance
+    operations_sum = await repository.account_operations_sum(db, workspace_id, account_id)
+    return account, _visible_balance(account, operations_sum)
 
 
 async def seed_categories(db: AsyncSession, workspace_id: uuid.UUID) -> None:
@@ -517,7 +524,9 @@ async def build_dashboard(db: AsyncSession, workspace_id: uuid.UUID) -> Dashboar
         else month_start.replace(month=month_start.month + 1)
     )
 
-    accounts = await repository.list_accounts_with_balance(db, workspace_id)
+    # через list_accounts, а не напрямую из repository: дашборд и список счетов
+    # показывают одну и ту же величину, и считать её обязаны одинаково
+    accounts = await list_accounts(db, workspace_id)
     expenses = await repository.month_expenses_by_category(
         db, workspace_id, month_start, next_month_start
     )
