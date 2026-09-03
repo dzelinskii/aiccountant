@@ -336,8 +336,8 @@ test('счёт без moneyAmount даёт остаток null, а не паде
   expect(account?.id).toBe('acc-x')
 })
 
-test('метка карты — последние четыре символа номера', () => {
-  const [account] = toAccounts([baseAccount({ cards: [{ number: '5536••••••••1234', status: 'Активна' }] })])
+test('метка карты — последние четыре символа номера из cards[].value', () => {
+  const [account] = toAccounts([baseAccount({ cards: [{ value: '5536••••••••1234', status: 'Активна' }] })])
   expect(account?.cardMasks).toEqual(['1234'])
 })
 
@@ -345,8 +345,8 @@ test('заблокированная карта в метки не попада�
   const [account] = toAccounts([
     baseAccount({
       cards: [
-        { number: '5536••••••••1111', status: 'Заблокирована' },
-        { number: '5536••••••••2222', status: 'Активна' },
+        { value: '5536••••••••1111', status: 'Заблокирована' },
+        { value: '5536••••••••2222', status: 'Активна' },
       ],
     }),
   ])
@@ -359,8 +359,8 @@ test('основная карта идёт первой', () => {
   const [account] = toAccounts([
     baseAccount({
       cards: [
-        { number: '5536••••••••1111', status: 'Активна' },
-        { number: '5536••••••••2222', status: 'Активна', primary: true },
+        { value: '5536••••••••1111', status: 'Активна' },
+        { value: '5536••••••••2222', status: 'Активна', primary: true },
       ],
     }),
   ])
@@ -372,21 +372,28 @@ test('счёт без карт даёт пустой список меток', (
   expect(account?.cardMasks).toEqual([])
 })
 
-test('в метку идут только четыре последних символа, какой бы длины ни пришёл номер', () => {
+test('в метку идут только четыре последних символа, а не весь номер', () => {
+  const [account] = toAccounts([baseAccount({ cards: [{ value: '1234567890123456', status: 'Активна' }] })])
+  expect(account?.cardMasks).toEqual(['3456'])
+})
+
+test('карта, из которой не выходит четырёх цифр, метку не даёт — остальные уезжают', () => {
+  // бэкенд принимает ровно четыре цифры и валидирует запрос целиком: негодная
+  // метка ответила бы 422 на весь импорт вместе с операциями счёта. Счёт без
+  // одной метки узнаваем хуже, счёт без операций — просто не собран
   const [account] = toAccounts([
     baseAccount({
       cards: [
-        { number: '1234567890123456', status: 'Активна' },
-        { number: '77', status: 'Активна' },
+        { value: '77', status: 'Активна' },
+        { value: '5536••••••••••••', status: 'Активна' },
+        { value: '5536••••••••1234', status: 'Активна' },
       ],
     }),
   ])
-  expect(account?.cardMasks).toEqual(['3456', '77'])
+  expect(account?.cardMasks).toEqual(['1234'])
 })
 
 test('карта без номера метки не даёт', () => {
-  // пустая метка не прошла бы проверку бэкенда и уронила бы 422 на весь
-  // импорт — вместе со всеми операциями счёта
   const [account] = toAccounts([baseAccount({ cards: [{ status: 'Активна' }] })])
   expect(account?.cardMasks).toEqual([])
 })

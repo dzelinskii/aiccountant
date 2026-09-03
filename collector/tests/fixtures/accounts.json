@@ -10,17 +10,21 @@
       "cards": [
         {
           "id": "card-1",
-          "number": "5536••••••••1111",
+          "statusCode": "BLCK",
           "status": "Заблокирована",
-          "primary": false,
-          "paymentSystem": "MasterCard"
+          "value": "5536••••••••1111",
+          "name": "Карта для трат",
+          "paymentSystem": "MC",
+          "primary": false
         },
         {
           "id": "card-2",
-          "number": "5536••••••••1234",
+          "statusCode": "NORM",
           "status": "Активна",
-          "primary": true,
-          "paymentSystem": "MasterCard"
+          "value": "5536••••••••1234",
+          "name": "Карта для трат",
+          "paymentSystem": "MC",
+          "primary": true
         }
       ]
     },

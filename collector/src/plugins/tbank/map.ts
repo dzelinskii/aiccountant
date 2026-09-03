@@ -102,8 +102,7 @@ const MASK_LENGTH = 4
 const BLOCKED_CARD_STATUS = 'Заблокирована'
 
 // Метка нужна, чтобы человек узнал свой счёт в приложении, поэтому первой идёт
-// основная карта — та, которой платят. Номер банк отдаёт уже замаскированным;
-// последние символы из него берём потому, что больше для узнавания не нужно
+// основная карта — та, которой платят
 function resolveCardMasks(item: Record<string, unknown>): string[] {
   const cards = item['cards']
   if (!Array.isArray(cards)) return []
@@ -112,13 +111,26 @@ function resolveCardMasks(item: Record<string, unknown>): string[] {
 
   const masks: string[] = []
   for (const card of ordered) {
-    const number = getStr(card, 'number')
-    // карта без номера метки не даёт: пустая метка не пройдёт проверку бэкенда
-    // и уронит 422 на весь импорт вместе с операциями
-    if (!number) continue
-    masks.push(number.slice(-MASK_LENGTH))
+    const mask = cardMask(card)
+    if (mask !== null) masks.push(mask)
   }
   return masks
+}
+
+// Ровно четыре цифры — то, что принимает бэкенд (ParsedAccountIn.card_masks,
+// backend/app/imports/schemas.py). Он валидирует запрос целиком, поэтому одна
+// негодная метка ответила бы 422 на весь импорт и унесла с собой все операции
+// счёта; та же причина, по которой здесь отсекаются описания и суммы. Метка без
+// четырёх цифр — потеря узнаваемости счёта, метка ценой сбора — потеря денег
+const FOUR_DIGITS = /^\d{4}$/
+
+// Номер банк отдаёт уже замаскированным (16 символов вида 5536••••••••1234);
+// последние символы берём потому, что больше для узнавания счёта не нужно
+function cardMask(card: Record<string, unknown>): string | null {
+  const number = getStr(card, 'value')
+  if (!number) return null
+  const mask = number.slice(-MASK_LENGTH)
+  return FOUR_DIGITS.test(mask) ? mask : null
 }
 
 function isPrimaryCard(card: Record<string, unknown>): boolean {
