@@ -131,6 +131,7 @@ class TransactionList(BaseModel):
 class DashboardAccount(BaseModel):
     id: uuid.UUID
     name: str
+    type: str
     currency: str
     balance: MoneyStr
     # то же, что в AccountOut: остаток без момента и счёт без опознавательного

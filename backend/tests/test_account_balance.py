@@ -210,7 +210,12 @@ async def test_dashboard_agrees_with_account_list(client: AsyncClient) -> None:
 async def test_dashboard_carries_label_and_moment(client: AsyncClient) -> None:
     """Дашборд — первый экран: счёт на нём тоже надо опознавать, а у остатка
     видеть давность. Ходить за этим вторым запросом незачем — ручка дашборда
-    затем и существует, чтобы экран собирался одним ответом."""
+    затем и существует, чтобы экран собирался одним ответом.
+
+    Тип счёта нужен там же: метка счёта — цифры карт, а если карт нет, подпись
+    типа. Без типа дашборд молчал бы о счетах без карт, хотя список счетов о них
+    говорит, и два экрана разошлись бы на одном и том же счёте.
+    """
     ws, account_id = await _ws_and_account(client)
     started = await _start_import(
         client, ws, account_id, {"balance": "12345.67", "card_masks": ["1234"]}
@@ -221,6 +226,7 @@ async def test_dashboard_carries_label_and_moment(client: AsyncClient) -> None:
 
     on_dashboard = dashboard["accounts"][0]
     assert on_dashboard["card_masks"] == ["1234"]
+    assert on_dashboard["type"] == "card"
     assert on_dashboard["reported_at"] == (await _account(client, ws))["reported_at"]
 
 

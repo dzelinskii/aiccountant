@@ -50,6 +50,7 @@ export interface Dashboard {
   accounts: {
     id: string
     name: string
+    type: string
     currency: string
     balance: string
     reported_at: string | null

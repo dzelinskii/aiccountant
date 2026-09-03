@@ -576,6 +576,7 @@ async def build_dashboard(db: AsyncSession, workspace_id: uuid.UUID) -> Dashboar
             DashboardAccount(
                 id=a.id,
                 name=a.name,
+                type=a.type,
                 currency=a.currency,
                 balance=bal,
                 reported_at=a.reported_at,

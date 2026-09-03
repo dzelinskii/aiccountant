@@ -1,7 +1,7 @@
 import { Badge, Card, Grid, Group, Progress, Stack, Table, Text, Title } from '@mantine/core'
 import { useQuery } from '@tanstack/react-query'
 import { getDashboard } from '../api/ledger'
-import { cardMasksLabel, formatMoment } from '../lib/account'
+import { accountLabel, formatMoment } from '../lib/account'
 import { formatMoney } from '../lib/money'
 import { useWorkspaceStore } from '../store/workspace'
 
@@ -28,10 +28,7 @@ export function DashboardPage() {
             <Card withBorder>
               <Group gap="xs">
                 <Text c="dimmed" size="sm">{a.name}</Text>
-                {/* тип счёта дашборд не отдаёт — здесь метка только по картам */}
-                {a.card_masks.length > 0 && (
-                  <Text c="dimmed" size="sm">{cardMasksLabel(a.card_masks)}</Text>
-                )}
+                <Text c="dimmed" size="sm">{accountLabel(a)}</Text>
               </Group>
               <Text fw={700} size="lg">{formatMoney(a.balance, a.currency)}</Text>
               {a.reported_at && (
