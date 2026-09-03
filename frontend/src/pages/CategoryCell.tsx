@@ -9,7 +9,19 @@ interface Props {
 }
 
 export function CategoryCell({ txn, categoryName, onConfirm, onDismiss }: Props) {
-  if (txn.transfer_group_id) return <Text>Перевод</Text>
+  const name = categoryName(txn.category_id)
+
+  // операции вне статистики категоризация не трогает — подсказок у них не будет.
+  // Но заданную человеком категорию прячем не мы: она сохранена и видна, пометка
+  // идёт рядом с ней. Участие в статистике считает бэкенд, правило одно
+  if (!txn.counts_in_stats) {
+    return (
+      <Group gap="xs">
+        <Text>{name ?? '—'}</Text>
+        <Badge size="xs" variant="light" color="gray">Вне статистики</Badge>
+      </Group>
+    )
+  }
 
   // подсказка ниже порога — предложить подтвердить/отклонить
   if (txn.suggested_category_id && !txn.category_id) {
@@ -33,7 +45,6 @@ export function CategoryCell({ txn, categoryName, onConfirm, onDismiss }: Props)
     )
   }
 
-  const name = categoryName(txn.category_id)
   if (!name) return <Text>—</Text>
 
   // авто-простановка AI ещё не подтверждена человеком — помечаем бейджем

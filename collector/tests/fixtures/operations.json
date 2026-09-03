@@ -48,7 +48,7 @@
       "id": "op-4",
       "status": "OK",
       "type": "Credit",
-      "group": "INCOME",
+      "group": "TRANSFER",
       "isInner": false,
       "account": "acc-1",
       "operationTime": { "milliseconds": 1783641600000 },

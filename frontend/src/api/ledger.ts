@@ -26,6 +26,11 @@ export interface Transaction {
   merchant: string | null
   note: string | null
   transfer_group_id: string | null
+  operation_kind: string
+  spending_override: boolean | null
+  // считает бэкенд тем же правилом, что и запросы статистики: повторять его
+  // здесь нельзя, иначе появится вторая реализация и разойдётся с первой
+  counts_in_stats: boolean
   category_confirmed: boolean
   suggested_category_id: string | null
   category_confidence: string | null
@@ -47,7 +52,7 @@ export interface Dashboard {
     account_name: string
     category_name: string | null
     merchant: string | null
-    is_transfer: boolean
+    counts_in_stats: boolean
   }[]
 }
 
@@ -93,6 +98,13 @@ export const updateTransaction = (
   ws: string, id: string,
   body: { category_id?: string; amount?: string; occurred_at?: string; merchant?: string; note?: string },
 ) => api<Transaction>(`/api/transactions/${id}?${q(ws)}`, { method: 'PATCH', body: JSON.stringify(body) })
+
+// null — сброс решения: дальше снова решает правило по виду операции
+export const setSpendingOverride = (ws: string, id: string, value: boolean | null) =>
+  api<Transaction>(`/api/transactions/${id}?${q(ws)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ spending_override: value }),
+  })
 
 export const deleteTransaction = (ws: string, id: string) =>
   api<void>(`/api/transactions/${id}?${q(ws)}`, { method: 'DELETE' })

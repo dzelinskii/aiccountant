@@ -8,6 +8,7 @@ from typing import cast
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.operation_kinds import OPERATION_KINDS, OperationKind
 from app.imports import repository
 from app.imports.llm_parser import StatementTooLargeError
 from app.imports.models import Import
@@ -77,6 +78,7 @@ def _statement_to_payload(statement: ParsedStatement, warnings: list[str]) -> di
                 "amount": str(op.amount),
                 "currency": op.currency,
                 "description": op.description,
+                "kind": op.kind,
             }
             for op in statement.operations
         ],
@@ -95,6 +97,27 @@ def _finite_decimal(raw: object) -> Decimal:
     return value
 
 
+def _known_kind(raw: str, import_id: uuid.UUID) -> OperationKind:
+    """Вид из сохранённого разбора — на входе он проверен схемой, но лежит в JSONB,
+    где оказаться может что угодно. Незнакомое слово не роняет весь импорт из-за
+    одной строки: операция приезжает как unknown — так она остаётся видимой в
+    статистике, тогда как догадка в пользу transfer_self унесла бы её оттуда.
+    Молча это не проходит: импорт с мусором виден в логе. Само значение туда не
+    пишем — по построению это может оказаться куском данных выписки.
+
+    Сужение живёт здесь, а не в _payload_to_statement, где payload превращается
+    в ParsedOperation: там любая порча роняет весь разбор (и это верно для суммы
+    или даты, без которых операции нет), а виду нужна именно деградация. Поэтому
+    ParsedOperation.kind типизирован как str, а словарём он становится на входе
+    в ledger — единственном месте, где вид что-то решает."""
+    if raw in OPERATION_KINDS:
+        # cast, а не проверка типом: mypy не сужает str по вхождению в tuple[str, ...],
+        # хотя именно это вхождение и есть определение OperationKind
+        return cast(OperationKind, raw)
+    logger.warning("import_unknown_operation_kind", import_id=str(import_id))
+    return "unknown"
+
+
 def _payload_to_statement(payload: dict[str, object]) -> ParsedStatement:
     # это наш собственный payload (не ввод пользователя): пустой/нетипизированный
     # "operations" или битый элемент внутри — порча данных, а не законный случай
@@ -110,6 +133,8 @@ def _payload_to_statement(payload: dict[str, object]) -> ParsedStatement:
                 amount=_finite_decimal(op["amount"]),
                 currency=str(op["currency"]),
                 description="" if op.get("description") is None else str(op["description"]),
+                # у импортов, созданных до появления вида, ключа нет — это не порча
+                kind=str(op.get("kind", "unknown")),
             )
             for op in raw_ops
         ]
@@ -181,6 +206,7 @@ async def create_parsed_import(
                 amount=op.amount,
                 currency=op.currency,
                 description=op.description,
+                kind=op.kind,
             )
             for op in operations
         ],
@@ -401,24 +427,34 @@ async def commit_from_import(
         db, workspace_id, imp.account_id, set(ext_ids)
     )
 
+    # правила читаем разом до цикла: их единицы, а операций в пачке до десятков
+    # тысяч, и запрос на строку сделал бы синхронную ручку N+1
+    rules = await ledger_service.load_description_rules(db, workspace_id)
+
     seen: set[str] = set()
     imported = 0
     for op, eid in zip(statement.operations, ext_ids, strict=True):
         if eid in existing or eid in seen:
             continue
         seen.add(eid)
+        # правило «описание → категория» применяем только здесь: при ручном вводе
+        # человек выбирает категорию сам, подставлять за него нечего. Флаг
+        # category_confirmed при этом не ставим — человек подтвердил правило,
+        # а не эту конкретную операцию
+        rule_category_id = ledger_service.category_for_description(rules, op.description, op.amount)
         await ledger_service.post_transaction(
             db,
             workspace_id,
             user_id,
             account_id=imp.account_id,
-            category_id=None,
+            category_id=rule_category_id,
             amount=op.amount,
             occurred_at=op.occurred_at,
             source="import",
             merchant=op.description[:300] or None,
             external_id=eid,
             import_id=imp.id,
+            operation_kind=_known_kind(op.kind, imp.id),
         )
         imported += 1
 

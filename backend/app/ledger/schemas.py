@@ -48,6 +48,20 @@ class CategoryOut(BaseModel):
     kind: str
 
 
+class DescriptionRuleCreate(BaseModel):
+    text: str = Field(min_length=1, max_length=300)
+    category_id: uuid.UUID
+
+
+class DescriptionRuleOut(BaseModel):
+    # отдаём нормализованный текст, а не исходный: правило ищется именно по нему,
+    # и человек должен видеть тот ключ, который реально сработает
+    id: uuid.UUID
+    normalized_text: str
+    category_id: uuid.UUID
+    source: str
+
+
 class TransactionCreate(BaseModel):
     account_id: uuid.UUID
     category_id: uuid.UUID | None = None
@@ -63,6 +77,9 @@ class TransactionUpdate(BaseModel):
     occurred_at: date | None = None
     merchant: str | None = Field(default=None, max_length=300)
     note: str | None = Field(default=None, max_length=1000)
+    # null здесь — не «поле не прислали», а «сбросить решение человека»;
+    # различает их update_transaction по model_fields_set
+    spending_override: bool | None = None
 
 
 class TransferCreate(BaseModel):
@@ -84,6 +101,11 @@ class TransactionOut(BaseModel):
     merchant: str | None
     note: str | None
     transfer_group_id: uuid.UUID | None
+    operation_kind: str
+    spending_override: bool | None
+    # решение правила по виду и переопределению: фронт его читает, а не считает
+    # сам — иначе появилась бы вторая реализация правила
+    counts_in_stats: bool
     category_confirmed: bool
     suggested_category_id: uuid.UUID | None
     category_confidence: Decimal | None
@@ -119,7 +141,9 @@ class RecentTransaction(BaseModel):
     account_name: str
     category_name: str | None
     merchant: str | None
-    is_transfer: bool
+    # то же правило, что и в расходах месяца: строку, которой в них нет, лента
+    # обязана пометить — иначе прочерк в колонке категории нечем объяснить
+    counts_in_stats: bool
 
 
 class DashboardOut(BaseModel):

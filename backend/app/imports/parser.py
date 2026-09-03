@@ -25,6 +25,8 @@ class ParsedOperation:
     amount: Decimal  # знаковая: расход < 0, доход > 0
     currency: str
     description: str
+    # значение по умолчанию — чтобы парсеры PDF и LLM не менялись: они вида не знают
+    kind: str = "unknown"
 
 
 @dataclass

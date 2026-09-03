@@ -92,6 +92,24 @@ async def test_migrations_add_import_async_columns(database_url: str) -> None:
     assert {"parser", "parsed_payload", "error", "raw_text"} <= columns
 
 
+async def test_migrations_add_operation_kind_columns(database_url: str) -> None:
+    engine = create_async_engine(database_url)
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT column_name, is_nullable FROM information_schema.columns "
+                "WHERE table_name = 'transactions' "
+                "AND column_name IN ('operation_kind', 'spending_override')"
+            )
+        )
+        columns = {name: nullable for name, nullable in rows.all()}
+    await engine.dispose()
+    # на ненулевом виде держится правило участия в статистике: NULL не попадает
+    # в notin_(NON_SPENDING_KINDS), и такие строки молча выпали бы из расходов.
+    # spending_override, наоборот, обязан быть nullable — NULL это «человек не решал»
+    assert columns == {"operation_kind": "NO", "spending_override": "YES"}
+
+
 async def test_migrations_create_api_tokens(database_url: str) -> None:
     engine = create_async_engine(database_url)
     async with engine.connect() as conn:

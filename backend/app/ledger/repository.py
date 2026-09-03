@@ -4,8 +4,27 @@ from decimal import Decimal
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
-from app.ledger.models import Account, Category, Transaction
+from app.core.operation_kinds import IN_STATS_KINDS, counts_in_stats
+from app.ledger.models import Account, Category, DescriptionRule, Transaction
+
+
+def counts_in_stats_sql() -> ColumnElement[bool]:
+    """Правило участия операции в статистике и категоризации выражением SQL.
+
+    Само правило — counts_in_stats, здесь только перевод на язык запроса:
+    coalesce повторяет её приоритет решения человека, а набор видов тот же.
+    """
+    return func.coalesce(
+        Transaction.spending_override, Transaction.operation_kind.in_(IN_STATS_KINDS)
+    )
+
+
+def transaction_counts_in_stats(transaction: Transaction) -> bool:
+    """То же правило для одной прочитанной строки: ответ API и цифры дашборда
+    обязаны считаться одинаково."""
+    return counts_in_stats(transaction.operation_kind, transaction.spending_override)
 
 
 async def list_accounts_with_balance(
@@ -101,6 +120,70 @@ def seed_default_categories(db: AsyncSession, workspace_id: uuid.UUID) -> None:
         db.add(Category(workspace_id=workspace_id, name=name, kind=kind))
 
 
+async def find_description_rule(
+    db: AsyncSession, workspace_id: uuid.UUID, normalized_text: str
+) -> DescriptionRule | None:
+    rule: DescriptionRule | None = await db.scalar(
+        select(DescriptionRule).where(
+            DescriptionRule.workspace_id == workspace_id,
+            DescriptionRule.normalized_text == normalized_text,
+        )
+    )
+    return rule
+
+
+async def list_description_rules(
+    db: AsyncSession, workspace_id: uuid.UUID
+) -> list[DescriptionRule]:
+    rows = await db.execute(
+        select(DescriptionRule)
+        .where(DescriptionRule.workspace_id == workspace_id)
+        .order_by(DescriptionRule.created_at.desc())
+    )
+    return list(rows.scalars().all())
+
+
+async def description_rule_targets(
+    db: AsyncSession, workspace_id: uuid.UUID
+) -> list[tuple[str, uuid.UUID, str]]:
+    """Ключ правила, его категория и направление категории — для применения
+    правил к пачке операций без запроса на каждую строку.
+
+    Категорию присоединяем с тем же фильтром по workspace: правило и категория
+    чужого workspace связаны только друг с другом, и одна снятая проверка
+    не должна открывать вторую.
+    """
+    rows = await db.execute(
+        select(DescriptionRule.normalized_text, DescriptionRule.category_id, Category.kind)
+        .join(Category, Category.id == DescriptionRule.category_id)
+        .where(
+            DescriptionRule.workspace_id == workspace_id,
+            Category.workspace_id == workspace_id,
+        )
+    )
+    return [(text, category_id, kind) for text, category_id, kind in rows.all()]
+
+
+async def get_description_rule(
+    db: AsyncSession, workspace_id: uuid.UUID, rule_id: uuid.UUID
+) -> DescriptionRule | None:
+    rule: DescriptionRule | None = await db.scalar(
+        select(DescriptionRule).where(
+            DescriptionRule.id == rule_id,
+            DescriptionRule.workspace_id == workspace_id,
+        )
+    )
+    return rule
+
+
+def add_description_rule(db: AsyncSession, rule: DescriptionRule) -> None:
+    db.add(rule)
+
+
+async def delete_description_rule(db: AsyncSession, rule: DescriptionRule) -> None:
+    await db.delete(rule)
+
+
 async def list_transactions(
     db: AsyncSession,
     workspace_id: uuid.UUID,
@@ -174,7 +257,7 @@ async def month_expenses_by_category(
         .where(
             Transaction.workspace_id == workspace_id,
             Transaction.amount < 0,
-            Transaction.transfer_group_id.is_(None),
+            counts_in_stats_sql(),
             Transaction.occurred_at >= month_start,
             Transaction.occurred_at < next_month_start,
         )
@@ -200,15 +283,15 @@ async def recent_transactions(
 
 async def list_uncategorized(db: AsyncSession, workspace_id: uuid.UUID) -> list[Transaction]:
     """Операции без категории, без активной подсказки и без принятого человеком
-    решения; переводы не трогаем. Отклонённая подсказка помечается как
-    подтверждённое решение (см. dismiss_suggestion) — поэтому такие строки
-    сюда не попадают и не предлагаются повторно."""
+    решения; не участвующие в статистике не трогаем. Отклонённая подсказка
+    помечается как подтверждённое решение (см. dismiss_suggestion) — поэтому
+    такие строки сюда не попадают и не предлагаются повторно."""
     rows = await db.execute(
         select(Transaction).where(
             Transaction.workspace_id == workspace_id,
             Transaction.category_id.is_(None),
             Transaction.suggested_category_id.is_(None),
-            Transaction.transfer_group_id.is_(None),
+            counts_in_stats_sql(),
             Transaction.category_confirmed.is_(False),
         )
     )

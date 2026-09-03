@@ -4,7 +4,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import {
   categorizeUncategorized, createTransaction, createTransfer, deleteTransaction, dismissSuggestion,
-  getAccounts, getCategories, getTransactions, updateTransaction, type Transaction,
+  getAccounts, getCategories, getTransactions, setSpendingOverride, updateTransaction,
+  type Transaction,
 } from '../api/ledger'
 import { formatMoney } from '../lib/money'
 import { useWorkspaceStore } from '../store/workspace'
@@ -13,6 +14,20 @@ import { TransactionForm, type TransactionFormValues } from './TransactionForm'
 import { TransferForm, type TransferFormValues } from './TransferForm'
 
 const PAGE_SIZE = 20
+
+// подписи для человека; сам словарь видов задаёт бэкенд. Обычные покупки и
+// поступления не подписываем — подпись нужна там, где вид объясняет строку
+const KIND_LABELS: Record<string, string> = {
+  transfer_person: 'Перевод',
+  transfer_self: 'Между счетами',
+  cash: 'Наличные',
+  loan: 'Кредит',
+  unknown: 'Вид неизвестен',
+}
+
+// проверка на собственное свойство обязательна: справочник — обычный объект,
+// и вид вроде "toString" достал бы из прототипа функцию вместо подписи
+const kindLabel = (kind: string) => (Object.hasOwn(KIND_LABELS, kind) ? KIND_LABELS[kind] : null)
 
 export function TransactionsPage() {
   const ws = useWorkspaceStore((s) => s.workspaceId)!
@@ -55,6 +70,11 @@ export function TransactionsPage() {
   })
   const deleteMut = useMutation({
     mutationFn: (id: string) => deleteTransaction(ws, id),
+    onSuccess: invalidate,
+  })
+  const overrideMut = useMutation({
+    mutationFn: ({ id, value }: { id: string; value: boolean | null }) =>
+      setSpendingOverride(ws, id, value),
     onSuccess: invalidate,
   })
   const confirmMut = useMutation({
@@ -128,11 +148,38 @@ export function TransactionsPage() {
                   onDismiss={(x) => dismissMut.mutate(x)}
                 />
               </Table.Td>
-              <Table.Td ta="right">{formatMoney(t.amount, t.currency)}</Table.Td>
+              <Table.Td ta="right">
+                {formatMoney(t.amount, t.currency)}
+                {kindLabel(t.operation_kind) && (
+                  <Text size="xs" c="dimmed">{kindLabel(t.operation_kind)}</Text>
+                )}
+              </Table.Td>
               <Table.Td>
-                <Button variant="subtle" color="red" size="xs" onClick={() => deleteMut.mutate(t.id)}>
-                  Удалить
-                </Button>
+                <Group gap={4} wrap="nowrap">
+                  {/* у парного перевода переопределения нет: обе его строки —
+                      движение между своими счетами, и учёт одной из них
+                      посчитал бы эти деньги дважды. Бэкенд такую правку
+                      отклоняет, поэтому и предлагать её нельзя */}
+                  {!t.transfer_group_id && (
+                    <Button
+                      variant="subtle" size="xs"
+                      onClick={() => overrideMut.mutate({ id: t.id, value: !t.counts_in_stats })}
+                    >
+                      {t.counts_in_stats ? 'Не учитывать в статистике' : 'Учитывать в статистике'}
+                    </Button>
+                  )}
+                  {t.spending_override !== null && (
+                    <Button
+                      variant="subtle" color="gray" size="xs"
+                      onClick={() => overrideMut.mutate({ id: t.id, value: null })}
+                    >
+                      Сбросить решение
+                    </Button>
+                  )}
+                  <Button variant="subtle" color="red" size="xs" onClick={() => deleteMut.mutate(t.id)}>
+                    Удалить
+                  </Button>
+                </Group>
               </Table.Td>
             </Table.Tr>
           ))}

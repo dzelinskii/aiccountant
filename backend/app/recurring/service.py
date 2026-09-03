@@ -5,6 +5,7 @@ from decimal import Decimal
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.operation_kinds import kind_from_amount
 from app.ledger import service as ledger_service
 from app.recurring import repository
 from app.recurring.models import RecurringOccurrence, RecurringRule
@@ -158,6 +159,7 @@ async def process_due_rules(db: AsyncSession, today: date) -> int:
                 amount=rule.amount,
                 occurred_at=due,
                 source="recurring",
+                operation_kind=kind_from_amount(rule.amount),
             )
             occurrence.status = "posted"
             occurrence.transaction_id = transaction.id
@@ -203,6 +205,7 @@ async def confirm_occurrence(
             amount=post_amount,
             occurred_at=occurrence.due_date,
             source="recurring",
+            operation_kind=kind_from_amount(post_amount),
         )
     except ledger_service.NotFoundError:
         raise NotFoundError from None

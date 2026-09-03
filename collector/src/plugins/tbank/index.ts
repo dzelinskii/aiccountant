@@ -83,11 +83,19 @@ function assertOk(resultCode: string): void {
 // человек ввёл код → тот же ответ → опять окно входа», и каждый его виток
 // врёт про причину. Поэтому непонятный ответ — обычная ошибка разбора.
 //
-// accessLevel не проверяем: его наличие ничего не говорит о живости сессии, а
-// конкретные значения для полного и урезанного доступа разведкой не сняты.
-// Когда они станут известны — здесь появится настоящая проверка уровня доступа.
+// Одного millisLeft мало: на мёртвой сессии банк отвечает resultCode "OK" и
+// millisLeft около 11 минут — это счётчик анонимной сессии, а не нашей.
+// Различает их accessLevel: "CLIENT" у входа под клиентом, "ANONYMOUS" когда
+// входа нет. Проверяем именно известное мёртвое значение, а не равенство
+// "CLIENT": появись у банка новый уровень доступа, обратная проверка отправила
+// бы человека вводить код по кругу без всякой пользы.
+const ANONYMOUS_ACCESS_LEVEL = 'ANONYMOUS'
+
 function assertSessionAlive(body: Record<string, unknown>): void {
-  const millisLeft = findMillisLeft(body)
+  if (findField(body, 'accessLevel') === ANONYMOUS_ACCESS_LEVEL) {
+    throw new SessionExpiredError('Сессия Т-Банка анонимная — нужен вход')
+  }
+  const millisLeft = toFiniteNumber(findField(body, 'millisLeft'))
   if (millisLeft === undefined) {
     throw new Error(
       'Ответ session_status без числового millisLeft — устарел наш разбор ответа банка, повторный вход не поможет',
@@ -98,15 +106,15 @@ function assertSessionAlive(body: Record<string, unknown>): void {
   }
 }
 
-// Реального ответа session_status у нас нет: остальные эндпоинты этого API
-// кладут данные в payload, но плоский конверт тоже возможен. Проверяем оба
-// места, пока живой запрос не покажет, какое из них настоящее
-function findMillisLeft(body: Record<string, unknown>): number | undefined {
+// Живой запрос показал, что session_status кладёт данные в payload, как и
+// остальные эндпоинты. Плоский конверт проверяем следом на случай, если у
+// банка это когда-то различалось: цена — одна лишняя проверка словаря
+function findField(body: Record<string, unknown>, name: string): unknown {
   const payload = body['payload']
   const places = isRecord(payload) ? [payload, body] : [body]
   for (const place of places) {
-    const millisLeft = toFiniteNumber(place['millisLeft'])
-    if (millisLeft !== undefined) return millisLeft
+    const value = place[name]
+    if (value !== undefined) return value
   }
   return undefined
 }

@@ -5,6 +5,8 @@ export interface CollectedOperation {
   currency: string
   description: string
   external_id: string
+  /** Вид операции в словаре приложения; словарь банка переводится здесь, в плагине. */
+  kind: string
 }
 
 export interface CollectedAccount {
