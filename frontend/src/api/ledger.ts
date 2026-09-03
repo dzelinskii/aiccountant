@@ -47,7 +47,14 @@ export interface TransactionList {
 }
 
 export interface Dashboard {
-  accounts: { id: string; name: string; currency: string; balance: string }[]
+  accounts: {
+    id: string
+    name: string
+    currency: string
+    balance: string
+    reported_at: string | null
+    card_masks: string[]
+  }[]
   month_expenses: { category_id: string; category_name: string; total: string }[]
   recent: {
     id: string

@@ -57,9 +57,11 @@ export function AccountsPage() {
       createMut.mutate({ name: v.name, type: v.type, currency: v.currency })
       return
     }
-    // пустое поле остатка — «не трогать»: правку остатка человек делает не
-    // каждый раз, когда переименовывает счёт
-    updateMut.mutate({ id: editing.id, name: v.name, balance: v.balance || undefined })
+    // по-русски разделитель — запятая, а бэкенд ждёт точку: осмысленный ввод не
+    // должен упираться в 422. Пустое поле — «не трогать»: правку остатка человек
+    // делает не каждый раз, когда переименовывает счёт
+    const balance = v.balance.trim().replace(',', '.')
+    updateMut.mutate({ id: editing.id, name: v.name, balance: balance || undefined })
   }
 
   return (

@@ -1,7 +1,7 @@
 import { Badge, Card, Grid, Group, Progress, Stack, Table, Text, Title } from '@mantine/core'
 import { useQuery } from '@tanstack/react-query'
-import { getAccounts, getDashboard } from '../api/ledger'
-import { accountLabel, formatMoment } from '../lib/account'
+import { getDashboard } from '../api/ledger'
+import { cardMasksLabel, formatMoment } from '../lib/account'
 import { formatMoney } from '../lib/money'
 import { useWorkspaceStore } from '../store/workspace'
 
@@ -11,9 +11,6 @@ export function DashboardPage() {
     queryKey: ['dashboard', ws],
     queryFn: () => getDashboard(ws),
   })
-  // дашборд отдаёт по счёту только имя и остаток; метку и момент берём из
-  // списка счетов — запрос общий с остальными страницами, лишнего похода нет
-  const { data: accounts } = useQuery({ queryKey: ['accounts', ws], queryFn: () => getAccounts(ws) })
   if (isPending || !data) return <Text>Загрузка…</Text>
 
   const maxExpense = data.month_expenses.reduce(
@@ -26,23 +23,23 @@ export function DashboardPage() {
       <Title order={2}>Дашборд</Title>
 
       <Grid>
-        {data.accounts.map((a) => {
-          const details = accounts?.find((acc) => acc.id === a.id)
-          return (
-            <Grid.Col key={a.id} span={{ base: 12, sm: 6, md: 4 }}>
-              <Card withBorder>
-                <Group gap="xs">
-                  <Text c="dimmed" size="sm">{a.name}</Text>
-                  {details && <Text c="dimmed" size="sm">{accountLabel(details)}</Text>}
-                </Group>
-                <Text fw={700} size="lg">{formatMoney(a.balance, a.currency)}</Text>
-                {details?.reported_at && (
-                  <Text c="dimmed" size="xs">остаток на {formatMoment(details.reported_at)}</Text>
+        {data.accounts.map((a) => (
+          <Grid.Col key={a.id} span={{ base: 12, sm: 6, md: 4 }}>
+            <Card withBorder>
+              <Group gap="xs">
+                <Text c="dimmed" size="sm">{a.name}</Text>
+                {/* тип счёта дашборд не отдаёт — здесь метка только по картам */}
+                {a.card_masks.length > 0 && (
+                  <Text c="dimmed" size="sm">{cardMasksLabel(a.card_masks)}</Text>
                 )}
-              </Card>
-            </Grid.Col>
-          )
-        })}
+              </Group>
+              <Text fw={700} size="lg">{formatMoney(a.balance, a.currency)}</Text>
+              {a.reported_at && (
+                <Text c="dimmed" size="xs">остаток на {formatMoment(a.reported_at)}</Text>
+              )}
+            </Card>
+          </Grid.Col>
+        ))}
       </Grid>
 
       <Card withBorder>

@@ -78,6 +78,19 @@ test('счёту без источника остаток правится вр�
   })
 })
 
+test('остаток с запятой уходит с точкой', async () => {
+  // по-русски разделитель — запятая; осмысленное число не должно упираться в 422
+  renderPage(base)
+
+  await userEvent.click(await screen.findByRole('button', { name: 'Изменить' }))
+  await userEvent.type(await screen.findByLabelText('Остаток'), '5100,50')
+  await userEvent.click(screen.getByRole('button', { name: 'Сохранить' }))
+
+  expect(updateAccount).toHaveBeenCalledWith('ws-1', 'a1', {
+    name: 'Т-Банк', is_archived: undefined, balance: '5100.50',
+  })
+})
+
 test('отказ бэкенда в правке остатка виден человеку', async () => {
   // между загрузкой страницы и сохранением источник мог сообщить остаток —
   // тогда правка упирается в 409, и кнопка обязана это объяснить

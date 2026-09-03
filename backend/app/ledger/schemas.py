@@ -133,6 +133,10 @@ class DashboardAccount(BaseModel):
     name: str
     currency: str
     balance: MoneyStr
+    # то же, что в AccountOut: остаток без момента и счёт без опознавательного
+    # знака непонятны на любом экране, а дашборд обязан отдавать всё одним ответом
+    reported_at: datetime | None
+    card_masks: list[str]
 
 
 class MonthExpense(BaseModel):

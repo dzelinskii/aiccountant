@@ -573,7 +573,14 @@ async def build_dashboard(db: AsyncSession, workspace_id: uuid.UUID) -> Dashboar
 
     return DashboardOut(
         accounts=[
-            DashboardAccount(id=a.id, name=a.name, currency=a.currency, balance=bal)
+            DashboardAccount(
+                id=a.id,
+                name=a.name,
+                currency=a.currency,
+                balance=bal,
+                reported_at=a.reported_at,
+                card_masks=a.card_masks,
+            )
             for a, bal in accounts
         ],
         month_expenses=[

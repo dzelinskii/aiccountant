@@ -207,6 +207,23 @@ async def test_dashboard_agrees_with_account_list(client: AsyncClient) -> None:
     assert on_dashboard == in_list == Decimal("12345.67")
 
 
+async def test_dashboard_carries_label_and_moment(client: AsyncClient) -> None:
+    """Дашборд — первый экран: счёт на нём тоже надо опознавать, а у остатка
+    видеть давность. Ходить за этим вторым запросом незачем — ручка дашборда
+    затем и существует, чтобы экран собирался одним ответом."""
+    ws, account_id = await _ws_and_account(client)
+    started = await _start_import(
+        client, ws, account_id, {"balance": "12345.67", "card_masks": ["1234"]}
+    )
+    await _commit(client, ws, started.json()["import_id"])
+
+    dashboard = (await client.get("/api/dashboard", params={"workspace_id": ws})).json()
+
+    on_dashboard = dashboard["accounts"][0]
+    assert on_dashboard["card_masks"] == ["1234"]
+    assert on_dashboard["reported_at"] == (await _account(client, ws))["reported_at"]
+
+
 async def test_import_without_account_block_keeps_balance(client: AsyncClient) -> None:
     """Разбор PDF-выписки про счёт ничего не знает — такой импорт остаток не
     трогает, и счёт по-прежнему считается по операциям."""
