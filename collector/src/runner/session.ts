@@ -94,16 +94,29 @@ async function logIn(context: BrowserContext): Promise<string> {
   return token
 }
 
+// session_status кабинет дёргает и когда сессии нет — это его способ спросить
+// «я вообще залогинен?». Такой запрос несёт sessionid анонимной сессии, поэтому
+// доказательством авторизации служить не может: считать его признаком успеха
+// значит вернуть мёртвый токен ровно в том случае, ради которого проверка и
+// заведена
+const SESSION_PROBE_PATH = '/api/common/v1/session_status'
+
 /**
  * Переход на страницу ЛК ещё не означает рабочую сессию: в этот момент кука
  * есть, но банк её сессией не считает и отвечает SESSION_IS_ABSENT. Дожидаемся
- * доказательства — собственного запроса ЛК к data-API с этим токеном; после
- * него кука авторизована. Фиксированная пауза здесь была бы гаданием.
+ * доказательства — собственного запроса ЛК за данными, который без живой сессии
+ * не имеет смысла. Фиксированная пауза здесь была бы гаданием.
  */
 async function waitForAuthorizedRequest(page: Page, timeout: number): Promise<void> {
-  await page.waitForRequest((request) => new URL(request.url()).searchParams.has('sessionid'), {
-    timeout,
-  })
+  await page.waitForRequest(
+    (request) => {
+      const url = new URL(request.url())
+      if (url.pathname === SESSION_PROBE_PATH) return false
+      const sessionid = url.searchParams.get('sessionid')
+      return sessionid !== null && sessionid.length > 0
+    },
+    { timeout },
+  )
 }
 
 async function readToken(context: BrowserContext): Promise<string | null> {
