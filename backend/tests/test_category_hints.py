@@ -1,4 +1,5 @@
 import uuid
+from datetime import date
 from decimal import Decimal
 from typing import Any
 
@@ -621,3 +622,83 @@ async def test_hint_asks_the_database_once_per_hint_even_when_it_never_resolves(
 
     assert imported == 20
     assert len(seen) <= 2, seen
+
+
+# Свёртка расходов месяца к категориям верхнего уровня. Смотрим через дашборд:
+# считает свёртку запрос в repository, но видит её человек именно там, и границы
+# месяца тогда не приходится вычислять в тесте заново.
+
+
+async def _month_expenses(client: AsyncClient, ws: str) -> list[dict[str, Any]]:
+    resp = await client.get("/api/dashboard", params={"workspace_id": ws})
+    assert resp.status_code == 200
+    rows: list[dict[str, Any]] = resp.json()["month_expenses"]
+    return rows
+
+
+async def _spend(
+    client: AsyncClient, ws: str, acc: str, category_id: str | None, amount: str
+) -> None:
+    body: dict[str, Any] = {
+        "account_id": acc,
+        "amount": amount,
+        "occurred_at": date.today().isoformat(),
+    }
+    if category_id is not None:
+        body["category_id"] = category_id
+    resp = await client.post("/api/transactions", params={"workspace_id": ws}, json=body)
+    assert resp.status_code == 201
+
+
+async def test_subcategory_spending_counts_in_parent(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Без свёртки первый же сбор с подсказками опустошил бы «Еду», разложив
+    её по «Продуктам» и «Кафе»."""
+    ws, acc = await _register(client, ALICE)
+    # commit не нужен: у теста и у приложения сессия одна, flush внутри
+    # resolve_hint_category делает категории видимыми для следующего запроса
+    groceries = await _resolve(db_session, ws, "groceries", "-1.00")
+    dining = await _resolve(db_session, ws, "dining", "-1.00")
+    await _spend(client, ws, acc, str(groceries), "-100.00")
+    await _spend(client, ws, acc, str(dining), "-50.00")
+
+    rows = await _month_expenses(client, ws)
+    assert [(r["category_name"], r["total"]) for r in rows] == [("Еда", "150.0000")]
+
+
+async def test_top_level_category_counts_on_its_own(client: AsyncClient) -> None:
+    """У категории верхнего уровня родителя нет, и считаться она должна сама
+    по себе, а не пропасть из свёртки."""
+    ws, acc = await _register(client, ALICE)
+    cats = (await client.get("/api/categories", params={"workspace_id": ws})).json()
+    food = next(c for c in cats if c["name"] == "Еда")
+    await _spend(client, ws, acc, food["id"], "-70.00")
+
+    rows = await _month_expenses(client, ws)
+    assert [(r["category_id"], r["category_name"]) for r in rows] == [(food["id"], "Еда")]
+
+
+async def test_month_expenses_do_not_leak_between_workspaces(client: AsyncClient) -> None:
+    """Свёртка отбирает операции своего workspace сама, а не полагается на
+    проверку доступа в роутере: чужие расходы на дашборде — не лишняя строка,
+    а утечка между домохозяйствами. Прикрыт этим тестом и один только он:
+    остальные тесты дашборда живут в одном workspace и снятый фильтр
+    не заметили бы."""
+    ws_alice, acc_alice = await _register(client, ALICE)
+    alice_cats = (await client.get("/api/categories", params={"workspace_id": ws_alice})).json()
+    alice_food = next(c for c in alice_cats if c["name"] == "Еда")["id"]
+    await _spend(client, ws_alice, acc_alice, alice_food, "-100.00")
+
+    ws_bob, acc_bob = await _register(client, BOB)
+    bob_cats = (await client.get("/api/categories", params={"workspace_id": ws_bob})).json()
+    bob_food = next(c for c in bob_cats if c["name"] == "Еда")["id"]
+    await _spend(client, ws_bob, acc_bob, bob_food, "-777.00")
+
+    rows = await _month_expenses(client, ws_bob)
+    assert [(r["category_id"], r["total"]) for r in rows] == [(bob_food, "777.0000")]
+
+    client.cookies.clear()
+    await client.post("/api/auth/login", json=ALICE)
+    rows = await _month_expenses(client, ws_alice)
+    assert [(r["category_id"], r["total"]) for r in rows] == [(alice_food, "100.0000")]
