@@ -50,6 +50,10 @@ class Category(Base):
     parent_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("categories.id"), nullable=True)
     name: Mapped[str] = mapped_column(String(200))
     kind: Mapped[str] = mapped_column(String(20))
+    # «сюда садится вот эта подсказка банка». Отметка на самой категории, а не
+    # отдельная таблица соответствий: переименование категории соответствие не
+    # рвёт, а переназначить подсказку — значит отредактировать категорию
+    hint: Mapped[str | None] = mapped_column(String(30), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
