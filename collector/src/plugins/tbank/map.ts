@@ -1,4 +1,4 @@
-import type { CategoryHint } from '../../core/category-hints'
+import { hintFromMcc, type CategoryHint } from '../../core/category-hints'
 import type { CollectedAccount, CollectedOperation } from './types'
 
 /**
@@ -61,6 +61,7 @@ function toOperation(item: unknown): CollectedOperation | null {
     description: limitDescription(description && description.length > 0 ? description : (merchantName ?? '')),
     external_id: id,
     kind: resolveKind(item),
+    category_hint: resolveHint(item),
   }
 }
 
@@ -330,6 +331,30 @@ export const IGNORED_BANK_CATEGORIES: ReadonlySet<string> = new Set([
   // бессодержательно по построению: у владельца этим помечены 167 операций из 167
   'Другое',
 ])
+
+/**
+ * Подсказка о категории: сперва собственная метка банка, затем MCC.
+ *
+ * Метка первая, потому что информативнее: банк выводит её из MCC плюс знания о
+ * торговой точке, и на живых данных покрывает 163 операции из 167 против 26 у
+ * MCC. Явно игнорируемая метка к MCC не проваливается: это решение, а не
+ * пробел, и MCC у таких операций всё равно заглушка.
+ *
+ * Незнакомая метка — не повод останавливаться: банк вправе завести значение в
+ * любой момент. Операция приедет без подсказки и попадёт в счётчик при сборе.
+ */
+function resolveHint(item: Record<string, unknown>): CategoryHint | null {
+  const spending = getRecord(item, 'spendingCategory')
+  const rawName = spending ? getStr(spending, 'name') : undefined
+  if (rawName !== undefined) {
+    const name = normalizeBankCategoryName(rawName)
+    // проверка на собственное свойство обязательна: таблица — обычный объект,
+    // и метка вроде "toString" достала бы из прототипа функцию вместо подсказки
+    if (Object.hasOwn(BANK_CATEGORY_TO_HINT, name)) return BANK_CATEGORY_TO_HINT[name] ?? null
+    if (IGNORED_BANK_CATEGORIES.has(name)) return null
+  }
+  return hintFromMcc(getStr(item, 'mcc'))
+}
 
 const ALPHA3_CURRENCY = /^[A-Za-z]{3}$/
 // Подтверждено разведкой только про рубль; остальные коды маппить не на чем
