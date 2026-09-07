@@ -114,6 +114,26 @@ async def get_category(
     return category
 
 
+async def category_by_hint(db: AsyncSession, workspace_id: uuid.UUID, hint: str) -> Category | None:
+    category: Category | None = await db.scalar(
+        select(Category).where(Category.workspace_id == workspace_id, Category.hint == hint)
+    )
+    return category
+
+
+async def category_by_name(
+    db: AsyncSession, workspace_id: uuid.UUID, name: str, parent_id: uuid.UUID | None
+) -> Category | None:
+    category: Category | None = await db.scalar(
+        select(Category).where(
+            Category.workspace_id == workspace_id,
+            Category.name == name,
+            Category.parent_id == parent_id,
+        )
+    )
+    return category
+
+
 def add_category(db: AsyncSession, category: Category) -> None:
     db.add(category)
 
