@@ -82,6 +82,7 @@ def _statement_to_payload(statement: ParsedStatement, warnings: list[str]) -> di
                 "currency": op.currency,
                 "description": op.description,
                 "kind": op.kind,
+                "category_hint": op.category_hint,
             }
             for op in statement.operations
         ],
@@ -89,6 +90,13 @@ def _statement_to_payload(statement: ParsedStatement, warnings: list[str]) -> di
         "total_expense": None if statement.total_expense is None else str(statement.total_expense),
         "warnings": warnings,
     }
+
+
+def _optional_str(value: object) -> str | None:
+    """Строка из JSONB или None. Отдельная функция, потому что str(None) даёт
+    "None" — строку, которая ни одной подсказке не соответствует, но выглядит
+    как значение."""
+    return None if value is None else str(value)
 
 
 def _finite_decimal(raw: object) -> Decimal:
@@ -179,6 +187,9 @@ def _payload_to_statement(payload: dict[str, object]) -> ParsedStatement:
                 description="" if op.get("description") is None else str(op["description"]),
                 # у импортов, созданных до появления вида, ключа нет — это не порча
                 kind=str(op.get("kind", "unknown")),
+                # у импортов, созданных до появления подсказки, ключа нет —
+                # это не порча, а прежняя версия payload
+                category_hint=_optional_str(op.get("category_hint")),
             )
             for op in raw_ops
         ]
@@ -252,6 +263,7 @@ async def create_parsed_import(
                 currency=op.currency,
                 description=op.description,
                 kind=op.kind,
+                category_hint=op.category_hint,
             )
             for op in operations
         ],

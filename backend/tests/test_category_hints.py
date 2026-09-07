@@ -1,16 +1,98 @@
 import uuid
 from decimal import Decimal
 
+import pytest
 from httpx import AsyncClient
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.category_hints import CATEGORY_HINTS, HINT_DEFAULTS, HintTarget
+from app.imports import service
+from app.imports.models import Import
+from app.imports.schemas import ParsedOperationIn
 from app.ledger import service as ledger_service
 from app.ledger.models import Category
 from app.ledger.repository import DEFAULT_CATEGORIES
 
 ALICE = {"email": "alice@example.com", "password": "password123"}
 BOB = {"email": "bob@example.com", "password": "password123"}
+
+OPERATION = {
+    "occurred_at": "2026-09-01",
+    "amount": "-100.00",
+    "currency": "RUB",
+    "description": "Пятёрочка",
+    "external_id": "bank-1",
+}
+
+
+def test_schema_accepts_hint_from_vocabulary() -> None:
+    op = ParsedOperationIn(**OPERATION, category_hint="groceries")
+    assert op.category_hint == "groceries"
+
+
+def test_schema_rejects_hint_outside_vocabulary() -> None:
+    """Слово вне словаря — баг коллектора или разъехавшиеся версии; лучше 422,
+    чем категория, которой ни одна операция не соответствует."""
+    with pytest.raises(ValidationError):
+        ParsedOperationIn(**OPERATION, category_hint="самолёты")
+
+
+def test_hint_is_optional() -> None:
+    """Разбор PDF-выписки о категории ничего не знает."""
+    assert ParsedOperationIn(**OPERATION).category_hint is None
+
+
+async def test_hint_survives_the_trip_into_parsed_payload(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Три теста выше проверяют только схему на входе. Само применение подсказки —
+    задача следующего этапа, но между приёмом и подтверждением она лежит в JSONB
+    (parsed_payload) неопределённое время, и именно там её легче всего потерять
+    молча. Проверяем этот участок пути напрямую, а не через побочный эффект
+    в ledger, которого на этом этапе ещё нет."""
+    ws, acc = await _register(client, ALICE)
+    resp = await client.post(
+        "/api/imports/parsed",
+        params={"workspace_id": ws, "account_id": acc},
+        json={
+            "parser": "tbank_collector",
+            "operations": [{**OPERATION, "category_hint": "groceries"}],
+        },
+    )
+    assert resp.status_code == 201
+
+    imp = await db_session.get(Import, uuid.UUID(resp.json()["import_id"]))
+    assert imp is not None
+    assert isinstance(imp.parsed_payload, dict)
+    operations = imp.parsed_payload["operations"]
+    assert isinstance(operations, list)
+    assert operations[0]["category_hint"] == "groceries"
+
+
+def test_missing_hint_key_deserializes_to_none_not_the_string_none() -> None:
+    """Подсказка нигде не читается после разбора (следующая задача) и не видна
+    ни в одном ответе API — поэтому чёрным ящиком порчу на чтении не заметить,
+    и она требует прямой проверки. Ради этого и написана _optional_str:
+    str(None) даёт строку "None", которая ни одной подсказке не соответствует,
+    но выглядит как значение и не упала бы ни на одной проверке ниже по цепочке."""
+    payload: dict[str, object] = {
+        "operations": [
+            {
+                "occurred_at": "2026-09-01",
+                "amount": "-100.00",
+                "currency": "RUB",
+                "description": "Пятёрочка",
+                "kind": "unknown",
+                # ключа category_hint нет — так выглядит payload, созданный до этой правки
+            }
+        ],
+        "total_income": None,
+        "total_expense": None,
+        "warnings": [],
+    }
+    statement = service._payload_to_statement(payload)  # noqa: SLF001 — внутреннее чтение JSONB больше нигде не наблюдаемо
+    assert statement.operations[0].category_hint is None
 
 
 def test_every_hint_has_a_target() -> None:
