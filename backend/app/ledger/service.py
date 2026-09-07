@@ -227,6 +227,57 @@ async def create_description_rule(
     return rule
 
 
+async def learn_rule_from(
+    db: AsyncSession, workspace_id: uuid.UUID, transaction: Transaction
+) -> None:
+    """Запомнить решение человека: это описание даёт эту категорию.
+
+    Правило, заведённое руками, не трогаем: тот, кто завёл его сам, знал, что
+    делает, и не ждёт, что оно поменяется от правки одной операции. Выученное
+    обновляем свободно — последнее подтверждение и есть текущее намерение.
+
+    Пустой ключ пропускаем: он ловил бы любую операцию с пробельным описанием.
+
+    Своим commit'ом и после того, как правка операции уже сохранена: правило —
+    побочная польза от подтверждения, и провалить из-за него саму правку нельзя.
+    """
+    category_id = transaction.category_id
+    if category_id is None or not transaction.merchant:
+        return
+    normalized = normalize_description(transaction.merchant)
+    if not normalized or len(normalized) > RULE_TEXT_MAX_LENGTH:
+        return
+
+    existing = await repository.find_description_rule(db, workspace_id, normalized)
+    if existing is not None:
+        if existing.source == "manual":
+            return
+        existing.category_id = category_id
+        await db.commit()
+        return
+
+    repository.add_description_rule(
+        db,
+        DescriptionRule(
+            workspace_id=workspace_id,
+            normalized_text=normalized,
+            category_id=category_id,
+            source="learned",
+        ),
+    )
+    try:
+        await db.commit()
+    except IntegrityError:
+        # то же описание подтвердили одновременно в другом запросе: проверка выше
+        # этого не видит (обе сессии видят пустоту), видит уникальный индекс.
+        # Правило уже есть — это ровно то, чего мы хотели, падать не из-за чего
+        await db.rollback()
+        # откат помечает всё прочитанное сессией устаревшим, а операцию ещё
+        # отдавать наружу: перечитываем явно, иначе догрузка полей полезет
+        # из синхронного кода сериализации
+        await db.refresh(transaction)
+
+
 async def list_description_rules(
     db: AsyncSession, workspace_id: uuid.UUID
 ) -> list[DescriptionRule]:
@@ -498,6 +549,11 @@ async def update_transaction(
     if "spending_override" in payload.model_fields_set:
         transaction.spending_override = payload.spending_override
     await db.commit()
+    if payload.category_id is not None:
+        # тот же признак, что и у category_confirmed выше: человек явно выбрал
+        # категорию — значит, есть чему учиться. После commit'а: правка операции
+        # уже сохранена и от судьбы правила не зависит
+        await learn_rule_from(db, workspace_id, transaction)
     return transaction
 
 
