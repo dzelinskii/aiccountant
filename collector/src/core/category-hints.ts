@@ -141,8 +141,11 @@ const MCC_FORMAT = /^\d{4}$/
  */
 export function hintFromMcc(mcc: string | undefined): CategoryHint | null {
   if (mcc === undefined || !MCC_FORMAT.test(mcc)) return null
-  // проверка на собственное свойство обязательна: таблица — обычный объект,
-  // и ключ вроде "toString" достал бы из прототипа функцию вместо подсказки
+  // таблица — обычный объект, и ключ вроде "toString" достал бы из прототипа
+  // функцию вместо подсказки. Сегодня сюда такой ключ не доходит: проверка
+  // формата выше пропускает только четыре цифры, а четырёхзначных имён у
+  // прототипа нет. Проверка стоит на случай, если формат ослабят или проверки
+  // переставят, — тестом она не закреплена именно потому, что недостижима
   if (Object.hasOwn(MCC_TO_HINT, mcc)) return MCC_TO_HINT[mcc] ?? null
   const code = Number(mcc)
   for (const range of MCC_RANGES) {

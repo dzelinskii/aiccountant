@@ -1280,7 +1280,7 @@ Expected: PASS, 6 тестов
 
 - [ ] **Step 5: Линт и типы**
 
-Run: `cd collector && pnpm lint && pnpm typecheck`
+Run: `cd collector && pnpm lint && pnpm build`
 Expected: без замечаний
 
 - [ ] **Step 6: Коммит**
@@ -1483,7 +1483,7 @@ Expected: PASS, 5 тестов. Если «справочник банка ра�
 
 - [ ] **Step 5: Линт и типы**
 
-Run: `cd collector && pnpm lint && pnpm typecheck`
+Run: `cd collector && pnpm lint && pnpm build`
 Expected: без замечаний
 
 - [ ] **Step 6: Коммит**
@@ -1643,7 +1643,7 @@ Expected: PASS — весь набор коллектора
 
 - [ ] **Step 6: Линт и типы**
 
-Run: `cd collector && pnpm lint && pnpm typecheck`
+Run: `cd collector && pnpm lint && pnpm build`
 Expected: без замечаний
 
 - [ ] **Step 7: Коммит**
@@ -1695,11 +1695,11 @@ cd backend && uv run ruff format --check . && uv run ruff check . && uv run mypy
 ```
 
 ```bash
-cd collector && pnpm lint && pnpm typecheck && pnpm vitest run
+cd collector && pnpm lint && pnpm build && pnpm vitest run
 ```
 
 ```bash
-cd frontend && pnpm lint && pnpm typecheck && pnpm vitest run
+cd frontend && pnpm lint && pnpm build && pnpm vitest run
 ```
 
 - [ ] **Живой прогон**
