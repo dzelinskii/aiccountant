@@ -1,5 +1,6 @@
 import uuid
 from decimal import Decimal
+from typing import Any
 
 import pytest
 from httpx import AsyncClient
@@ -23,6 +24,15 @@ OPERATION = {
     "currency": "RUB",
     "description": "Пятёрочка",
     "external_id": "bank-1",
+}
+
+# без описания и external_id: их тесты подтверждения задают сами — на них
+# и держится разница между строками пачки
+OP = {
+    "occurred_at": "2026-09-01",
+    "amount": "-450.00",
+    "currency": "RUB",
+    "kind": "purchase",
 }
 
 
@@ -399,3 +409,123 @@ async def test_hint_of_another_workspace_is_invisible(
     assert mine is not None
     assert theirs is not None
     assert mine != theirs
+
+
+# Подсказка при подтверждении импорта — там, где она наконец раскладывает
+# операции. Выше проверялось только разрешение подсказки в категорию.
+
+
+async def _import(client: AsyncClient, ws: str, acc: str, *operations: dict[str, Any]) -> int:
+    started = await client.post(
+        "/api/imports/parsed",
+        params={"workspace_id": ws, "account_id": acc},
+        json={"parser": "test_collector", "operations": list(operations)},
+    )
+    assert started.status_code == 201
+    committed = await client.post(
+        f"/api/imports/{started.json()['import_id']}/commit", params={"workspace_id": ws}
+    )
+    assert committed.status_code == 200
+    imported: int = committed.json()["imported"]
+    return imported
+
+
+async def _transactions(client: AsyncClient, ws: str) -> list[dict[str, Any]]:
+    resp = await client.get("/api/transactions", params={"workspace_id": ws})
+    assert resp.status_code == 200
+    items: list[dict[str, Any]] = resp.json()["items"]
+    return items
+
+
+async def _category_names(client: AsyncClient, ws: str) -> list[str]:
+    resp = await client.get("/api/categories", params={"workspace_id": ws})
+    assert resp.status_code == 200
+    return [str(c["name"]) for c in resp.json()]
+
+
+async def _category_name(client: AsyncClient, ws: str, category_id: str) -> str:
+    resp = await client.get("/api/categories", params={"workspace_id": ws})
+    return str(next(c for c in resp.json() if str(c["id"]) == category_id)["name"])
+
+
+async def test_hint_puts_operation_into_subcategory(client: AsyncClient) -> None:
+    ws, acc = await _register(client, ALICE)
+    await _import(
+        client,
+        ws,
+        acc,
+        {**OP, "description": "Пятёрочка", "external_id": "op-1", "category_hint": "groceries"},
+    )
+
+    item = (await _transactions(client, ws))[0]
+    assert await _category_name(client, ws, item["category_id"]) == "Продукты"
+    # решение машинное: эту конкретную операцию человек не смотрел
+    assert item["category_confirmed"] is False
+    # подсказка детерминирована; приписать ей уверенность значило бы выдать
+    # таблицу за оценку модели
+    assert item["category_confidence"] is None
+
+
+async def test_human_rule_beats_bank_hint(client: AsyncClient, db_session: AsyncSession) -> None:
+    """Порядок конвейера: решение человека сильнее подсказки банка."""
+    ws, acc = await _register(client, ALICE)
+    own = (
+        await client.post(
+            "/api/categories",
+            params={"workspace_id": ws},
+            json={"name": "Моя еда", "kind": "expense"},
+        )
+    ).json()["id"]
+    await ledger_service.create_description_rule(
+        db_session, uuid.UUID(ws), "Пятёрочка", uuid.UUID(own)
+    )
+
+    await _import(
+        client,
+        ws,
+        acc,
+        {**OP, "description": "Пятёрочка", "external_id": "op-1", "category_hint": "groceries"},
+    )
+
+    assert (await _transactions(client, ws))[0]["category_id"] == own
+
+
+async def test_operation_without_hint_stays_uncategorized(client: AsyncClient) -> None:
+    """Банк не подсказал — операция ждёт модель, как ждала до этой работы."""
+    ws, acc = await _register(client, ALICE)
+    await _import(client, ws, acc, {**OP, "description": "Что-то", "external_id": "op-1"})
+
+    assert (await _transactions(client, ws))[0]["category_id"] is None
+
+
+async def test_hint_does_not_create_a_learned_rule(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Правило — след решения человека. Заводись оно от подсказки, машинная
+    догадка стала бы неотличима от подтверждения и пережила бы её отмену."""
+    ws, acc = await _register(client, ALICE)
+    await _import(
+        client,
+        ws,
+        acc,
+        {**OP, "description": "Пятёрочка", "external_id": "op-1", "category_hint": "groceries"},
+    )
+
+    assert await ledger_service.load_description_rules(db_session, uuid.UUID(ws)) == {}
+
+
+async def test_subcategory_is_created_once_per_batch(client: AsyncClient) -> None:
+    ws, acc = await _register(client, ALICE)
+    imported = await _import(
+        client,
+        ws,
+        acc,
+        {**OP, "description": "Пятёрочка", "external_id": "op-1", "category_hint": "groceries"},
+        {**OP, "description": "Магнит", "external_id": "op-2", "category_hint": "groceries"},
+    )
+    assert imported == 2
+
+    ids = {item["category_id"] for item in await _transactions(client, ws)}
+    assert len(ids) == 1
+    # ровно одна «Продукты», а не по одной на операцию
+    assert (await _category_names(client, ws)).count("Продукты") == 1

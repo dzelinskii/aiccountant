@@ -505,14 +505,23 @@ async def commit_from_import(
         # правило «описание → категория» применяем только здесь: при ручном вводе
         # человек выбирает категорию сам, подставлять за него нечего. Флаг
         # category_confirmed при этом не ставим — человек подтвердил правило,
-        # а не эту конкретную операцию
-        rule_category_id = ledger_service.category_for_description(rules, op.description, op.amount)
+        # а не эту конкретную операцию.
+        # Порядок конвейера: решение человека сильнее подсказки банка, подсказка
+        # банка сильнее догадки модели (она отработает позже, уже по остаткам).
+        # Подсказка не ставит category_confirmed по той же причине, что и правило,
+        # и не заводит выученного правила: иначе машинная догадка стала бы
+        # неотличима от подтверждения человека и пережила бы его отмену
+        category_id = ledger_service.category_for_description(rules, op.description, op.amount)
+        if category_id is None and op.category_hint is not None:
+            category_id = await ledger_service.resolve_hint_category(
+                db, workspace_id, op.category_hint, op.amount
+            )
         await ledger_service.post_transaction(
             db,
             workspace_id,
             user_id,
             account_id=imp.account_id,
-            category_id=rule_category_id,
+            category_id=category_id,
             amount=op.amount,
             occurred_at=op.occurred_at,
             source="import",
