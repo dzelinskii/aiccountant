@@ -6,6 +6,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ledger import repository as ledger_repository
+from app.ledger.models import Transaction
 
 ALICE = {"email": "alice@example.com", "password": "password123"}
 BOB = {"email": "bob@example.com", "password": "password123"}
@@ -43,8 +44,11 @@ async def _add_transaction(
     merchant: str | None,
     *,
     category_id: str | None = None,
+    amount: str = "-450.00",
 ) -> str:
-    body: dict[str, Any] = {"account_id": acc, "amount": "-450.00", "occurred_at": "2026-09-01"}
+    # сумма строкой: деньги в этом проекте не проходят через float нигде,
+    # включая тесты
+    body: dict[str, Any] = {"account_id": acc, "amount": amount, "occurred_at": "2026-09-01"}
     if merchant is not None:
         body["merchant"] = merchant
     if category_id is not None:
@@ -219,6 +223,33 @@ async def test_racing_confirmation_does_not_break_the_edit(
     assert str(stored.category_id) == chosen
 
 
+async def test_learning_does_not_see_a_rule_of_another_workspace(client: AsyncClient) -> None:
+    """Правило соседа для того же описания обучению не помеха и не добыча:
+    «manual сильнее learned» действует внутри своего workspace, а через границу
+    правила друг о друге не знают вовсе."""
+    ws_b, _acc_b = await _register(client, BOB)
+    theirs = await _category_id(client, ws_b, "expense")
+    created = await client.post(
+        "/api/description-rules",
+        params={"workspace_id": ws_b},
+        json={"text": "Кофейня", "category_id": theirs},
+    )
+    assert created.status_code == 201
+
+    client.cookies.clear()
+    ws_a, acc_a = await _register(client, ALICE)
+    mine = await _category_id(client, ws_a, "expense")
+    transaction = await _add_transaction(client, ws_a, acc_a, "Кофейня")
+
+    await _confirm_category(client, ws_a, transaction, mine)
+
+    assert await _rules(client, ws_a) == [("кофейня", mine, "learned")]
+
+    client.cookies.clear()
+    await client.post("/api/auth/login", json=BOB)
+    assert await _rules(client, ws_b) == [("кофейня", theirs, "manual")]
+
+
 async def test_similar_count_does_not_count_the_transaction_itself(client: AsyncClient) -> None:
     """Вопрос звучит «нашлось ещё N таких» — «ещё», то есть кроме той операции,
     от которой отталкиваемся. Пока она сама без категории, её легко посчитать
@@ -251,6 +282,80 @@ async def test_similar_count_skips_operations_with_a_category(client: AsyncClien
     await _confirm_category(client, ws, source, chosen)
 
     assert await _similar_count(client, ws, source) == 1
+
+
+async def test_dismissed_suggestion_is_not_a_candidate(client: AsyncClient) -> None:
+    """Отклонение подсказки — решение человека оставить операцию без категории.
+    Категории у такой строки нет, и по одной пустоте она неотличима
+    от неразобранной, но трогать её нельзя.
+
+    Иначе выходит худшее из возможного: разбор ставит категорию, а
+    category_confirmed у строки уже стоит от отклонения — и она уходит
+    в примеры для модели как проверенная человеком.
+    """
+    ws, acc = await _register(client, ALICE)
+    cat = await _category_id(client, ws, "expense")
+    source = await _add_transaction(client, ws, acc, "Кофейня")
+    dismissed = await _add_transaction(client, ws, acc, "Кофейня")
+    resp = await client.post(
+        f"/api/transactions/{dismissed}/dismiss-suggestion", params={"workspace_id": ws}
+    )
+    assert resp.status_code == 200
+    await _confirm_category(client, ws, source, cat)
+
+    assert await _similar_count(client, ws, source) == 0
+    assert await _apply_to_similar(client, ws, source) == 0
+    assert (await _transactions_by_id(client, ws))[dismissed]["category_id"] is None
+
+
+async def test_expense_category_does_not_reach_a_refund(client: AsyncClient) -> None:
+    """«Кофейня −450» и «Кофейня +450» (возврат или кэшбэк) в одной выписке —
+    обычное дело. Расходная категория на приходе нарушает инвариант, который
+    стерегут все остальные пути записи: дальше эту строку не сможет починить
+    даже правка примечания — проверка пары отвечает отказом на любую."""
+    ws, acc = await _register(client, ALICE)
+    cat = await _category_id(client, ws, "expense")
+    source = await _add_transaction(client, ws, acc, "Кофейня")
+    refund = await _add_transaction(client, ws, acc, "Кофейня", amount="450.00")
+    await _confirm_category(client, ws, source, cat)
+
+    assert await _similar_count(client, ws, source) == 0
+    assert await _apply_to_similar(client, ws, source) == 0
+    assert (await _transactions_by_id(client, ws))[refund]["category_id"] is None
+
+
+async def test_income_category_does_not_reach_a_spending(client: AsyncClient) -> None:
+    """То же в обратную сторону: доходная категория не липнет к трате."""
+    ws, acc = await _register(client, ALICE)
+    cat = await _category_id(client, ws, "income")
+    source = await _add_transaction(client, ws, acc, "Кофейня", amount="450.00")
+    spending = await _add_transaction(client, ws, acc, "Кофейня")
+    await _confirm_category(client, ws, source, cat)
+
+    assert await _similar_count(client, ws, source) == 0
+    assert await _apply_to_similar(client, ws, source) == 0
+    assert (await _transactions_by_id(client, ws))[spending]["category_id"] is None
+
+
+async def test_operation_out_of_statistics_is_not_a_candidate(client: AsyncClient) -> None:
+    """Что выведено из статистики, система не категоризует — так отбирает
+    операции путь модели. Разбор отвечает на тот же вопрос «что подлежит
+    категоризации» и обязан отвечать тем же условием."""
+    ws, acc = await _register(client, ALICE)
+    cat = await _category_id(client, ws, "expense")
+    source = await _add_transaction(client, ws, acc, "Кофейня")
+    aside = await _add_transaction(client, ws, acc, "Кофейня")
+    excluded = await client.patch(
+        f"/api/transactions/{aside}",
+        params={"workspace_id": ws},
+        json={"spending_override": False},
+    )
+    assert excluded.status_code == 200
+    await _confirm_category(client, ws, source, cat)
+
+    assert await _similar_count(client, ws, source) == 0
+    assert await _apply_to_similar(client, ws, source) == 0
+    assert (await _transactions_by_id(client, ws))[aside]["category_id"] is None
 
 
 async def test_similar_count_matches_by_normalized_description(client: AsyncClient) -> None:
@@ -346,6 +451,60 @@ async def test_second_applying_finds_nothing(client: AsyncClient) -> None:
 
     assert await _apply_to_similar(client, ws, source) == 1
     assert await _apply_to_similar(client, ws, source) == 0
+
+
+async def test_applying_clears_the_pending_suggestion(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Категория проставлена — подсказка про ту же операцию больше не вопрос.
+    Правка человеком гасит её так же; иначе остаётся строка с категорией
+    и живой подсказкой, чего в интерфейсе не видно, а в данных противоречие."""
+    ws, acc = await _register(client, ALICE)
+    chosen, suggested = (await _categories(client, ws, "expense"))[:2]
+    source = await _add_transaction(client, ws, acc, "Кофейня")
+    pending = await _add_transaction(client, ws, acc, "Кофейня")
+    # подсказку ставит классификатор, ручки для неё нет — пишем прямо
+    stored = await ledger_repository.get_transaction(db_session, uuid.UUID(ws), uuid.UUID(pending))
+    assert stored is not None
+    stored.suggested_category_id = uuid.UUID(suggested)
+    await db_session.commit()
+    await _confirm_category(client, ws, source, chosen)
+
+    assert await _apply_to_similar(client, ws, source) == 1
+
+    item = (await _transactions_by_id(client, ws))[pending]
+    assert item["category_id"] == chosen
+    assert item["suggested_category_id"] is None
+
+
+async def test_applying_does_not_overwrite_a_category_set_after_the_read(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Окно между отбором кандидатов и записью: категорию успел проставить
+    чужой коммит. Источник конкуренции настоящий — фоновая категоризация держит
+    транзакцию открытой на весь проход и коммитит один раз в конце.
+
+    Гонку изображаем устаревшим отбором: он отдаёт строку, у которой категория
+    к моменту записи уже есть. Запись обязана проверить пустоту сама.
+    """
+    ws, acc = await _register(client, ALICE)
+    chosen, other = (await _categories(client, ws, "expense"))[:2]
+    source = await _add_transaction(client, ws, acc, "Кофейня")
+    taken = await _add_transaction(client, ws, acc, "Кофейня", category_id=other)
+    await _confirm_category(client, ws, source, chosen)
+
+    async def stale(
+        db: AsyncSession, workspace_id: uuid.UUID, **kwargs: object
+    ) -> list[Transaction]:
+        found = await ledger_repository.get_transaction(db, workspace_id, uuid.UUID(taken))
+        assert found is not None
+        return [found]
+
+    monkeypatch.setattr(ledger_repository, "uncategorized_with_description", stale)
+    assert await _apply_to_similar(client, ws, source) == 0
+    monkeypatch.undo()
+
+    assert (await _transactions_by_id(client, ws))[taken]["category_id"] == other
 
 
 async def test_similar_operations_of_another_workspace_are_invisible(client: AsyncClient) -> None:

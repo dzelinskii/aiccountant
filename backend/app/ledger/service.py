@@ -253,24 +253,25 @@ async def learn_rule_from(
         if existing.source == "manual":
             return
         existing.category_id = category_id
-        await db.commit()
-        return
+    else:
+        repository.add_description_rule(
+            db,
+            DescriptionRule(
+                workspace_id=workspace_id,
+                normalized_text=normalized,
+                category_id=category_id,
+                source="learned",
+            ),
+        )
 
-    repository.add_description_rule(
-        db,
-        DescriptionRule(
-            workspace_id=workspace_id,
-            normalized_text=normalized,
-            category_id=category_id,
-            source="learned",
-        ),
-    )
     try:
         await db.commit()
     except IntegrityError:
-        # то же описание подтвердили одновременно в другом запросе: проверка выше
-        # этого не видит (обе сессии видят пустоту), видит уникальный индекс.
-        # Правило уже есть — это ровно то, чего мы хотели, падать не из-за чего
+        # обе ветки прикрыты одинаково: то же описание подтвердили одновременно
+        # в другом запросе (проверка выше этого не видит — обе сессии видят
+        # пустоту, видит уникальный индекс), или категория правила исчезла между
+        # чтением и записью. Правило — побочная польза, ронять из-за неё
+        # сохранённую правку операции нельзя
         await db.rollback()
         # откат помечает всё прочитанное сессией устаревшим, а операцию ещё
         # отдавать наружу: перечитываем явно, иначе догрузка полей полезет
@@ -560,7 +561,11 @@ async def update_transaction(
 async def _similar_uncategorized(
     db: AsyncSession, workspace_id: uuid.UUID, transaction: Transaction
 ) -> list[Transaction]:
-    """Операции без категории, описанные так же, как заданная.
+    """Операции, описанные так же, как заданная, и пригодные под её категорию.
+
+    Пригодность целиком решает запрос (uncategorized_with_description): пустая
+    категория, отсутствие решения человека, участие в статистике и подходящий
+    знак суммы. Здесь остаётся только сравнение описаний.
 
     «Так же» — по тому же ключу, что и у правил: «КОФЕЙНЯ  У ДОМА» и «Кофейня
     у дома» для человека одно и то же место, и разбираться они обязаны вместе.
@@ -572,7 +577,9 @@ async def _similar_uncategorized(
     key = normalize_description(transaction.merchant)
     if not key:
         return []
-    candidates = await repository.uncategorized_with_description(db, workspace_id, transaction.id)
+    candidates = await repository.uncategorized_with_description(
+        db, workspace_id, exclude_id=transaction.id, amount=transaction.amount
+    )
     return [t for t in candidates if t.merchant and normalize_description(t.merchant) == key]
 
 
@@ -592,9 +599,10 @@ async def apply_category_to_similar(
 ) -> int:
     """Распространить категорию операции на такие же операции без категории.
 
-    Трогаем только пустые: ни выбор человека, ни то, что проставила машина,
-    не переписываем — именно это делает согласие на разбор безопасным, худшее
-    последствие которого — заполнится пустота.
+    Трогаем только пустые, и то не всякую пустоту: отклонённая подсказка — тоже
+    решение человека, и оно остаётся. Ни выбор человека, ни то, что проставила
+    машина, не переписываем — именно это делает согласие на разбор безопасным,
+    худшее последствие которого — заполнится пустота.
 
     category_confirmed при этом не ставим. Человек подтвердил одну операцию,
     а остальные глазами не видел; пометив их подтверждёнными, мы отправили бы
