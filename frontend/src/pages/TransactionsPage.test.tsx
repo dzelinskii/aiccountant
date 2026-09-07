@@ -1,10 +1,13 @@
 import { MantineProvider } from '@mantine/core'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, expect, test, vi } from 'vitest'
 import type { Transaction } from '../api/ledger'
-import { getTransactions, setSpendingOverride } from '../api/ledger'
+import {
+  applyCategoryToSimilar, getSimilarUncategorized, getTransactions, setSpendingOverride,
+  updateTransaction,
+} from '../api/ledger'
 import { useWorkspaceStore } from '../store/workspace'
 import { TransactionsPage } from './TransactionsPage'
 
@@ -23,6 +26,8 @@ vi.mock('../api/ledger', () => ({
   updateTransaction: vi.fn(),
   categorizeUncategorized: vi.fn(),
   setSpendingOverride: vi.fn(),
+  getSimilarUncategorized: vi.fn(),
+  applyCategoryToSimilar: vi.fn(),
 }))
 
 const base: Transaction = {
@@ -86,4 +91,51 @@ test('строке парного перевода переопределени�
   expect(await screen.findByRole('button', { name: 'Удалить' })).toBeDefined()
   expect(screen.queryByRole('button', { name: 'Учитывать в статистике' })).toBeNull()
   expect(screen.queryByRole('button', { name: 'Сбросить решение' })).toBeNull()
+})
+
+// подтверждает подсказанную категорию у операции, на которую похожи ещё count штук
+async function confirmCategory(count: number) {
+  const suggested: Transaction = { ...base, suggested_category_id: 'c1' }
+  vi.mocked(updateTransaction).mockResolvedValue(suggested)
+  vi.mocked(getSimilarUncategorized).mockResolvedValue({ count })
+  vi.mocked(applyCategoryToSimilar).mockResolvedValue({ applied: count })
+  renderPage(suggested)
+
+  await userEvent.click(await screen.findByRole('button', { name: 'Подтвердить категорию' }))
+}
+
+test('когда похожих операций нет, вопрос не задаётся', async () => {
+  await confirmCategory(0)
+  await waitFor(() => expect(getSimilarUncategorized).toHaveBeenCalledWith('ws-1', 't1'))
+
+  // содержимое модального окна Mantine появляется не в тот же такт: сначала
+  // дожидаемся заведомо открывающегося окна, иначе проверка «вопроса нет»
+  // проходила бы при любом поведении страницы
+  await userEvent.click(screen.getByRole('button', { name: 'Добавить расход/доход' }))
+  expect(await screen.findByText('Новая операция')).toBeDefined()
+  expect(screen.queryByRole('button', { name: 'Разложить' })).toBeNull()
+})
+
+test('о похожих операциях спрашивают, называя их число', async () => {
+  await confirmCategory(5)
+
+  expect(await screen.findByText(/Операций с тем же описанием и без категории: 5/)).toBeDefined()
+})
+
+test('согласие раскладывает похожие операции', async () => {
+  await confirmCategory(5)
+
+  await userEvent.click(await screen.findByRole('button', { name: 'Разложить' }))
+
+  expect(applyCategoryToSimilar).toHaveBeenCalledWith('ws-1', 't1')
+})
+
+test('отказ оставляет уже лежащие операции без категории', async () => {
+  // отказ касается только их: правило выучено при подтверждении и отменить
+  // его этой кнопкой нельзя
+  await confirmCategory(5)
+
+  await userEvent.click(await screen.findByRole('button', { name: 'Не нужно' }))
+
+  expect(applyCategoryToSimilar).not.toHaveBeenCalled()
 })

@@ -131,3 +131,12 @@ export const dismissSuggestion = (ws: string, id: string) =>
 
 export const categorizeUncategorized = (ws: string) =>
   api<{ status: string }>(`/api/transactions/categorize?${q(ws)}`, { method: 'POST' })
+
+// сколько ещё операций без категории описаны так же, как эта
+export const getSimilarUncategorized = (ws: string, id: string) =>
+  api<{ count: number }>(`/api/transactions/${id}/similar-uncategorized?${q(ws)}`)
+
+export const applyCategoryToSimilar = (ws: string, id: string) =>
+  api<{ applied: number }>(`/api/transactions/${id}/apply-category-to-similar?${q(ws)}`, {
+    method: 'POST',
+  })
