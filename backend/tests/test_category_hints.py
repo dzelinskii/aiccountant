@@ -28,3 +28,16 @@ def test_hint_direction_matches_parent_direction() -> None:
     знак суммы не совпадёт."""
     kind_of = dict(DEFAULT_CATEGORIES)
     assert [h for h, t in HINT_DEFAULTS.items() if kind_of[t.parent] != t.kind] == []
+
+
+def test_subcategory_names_are_unique_within_parent() -> None:
+    """Две подсказки с одним именем под одним родителем сядут в одну категорию
+    и будут перетирать отметку друг друга на каждой операции."""
+    pairs = [(t.parent, t.sub) for t in HINT_DEFAULTS.values()]
+    assert len(pairs) == len(set(pairs))
+
+
+def test_only_salary_lands_in_the_parent_itself() -> None:
+    """`sub is None` помечает подсказкой саму категорию верхнего уровня.
+    Случайный None увёл бы туда чужую подсказку и занял бы родителя навсегда."""
+    assert [h for h, t in HINT_DEFAULTS.items() if t.sub is None] == ["salary"]
