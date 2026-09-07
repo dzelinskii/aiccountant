@@ -124,12 +124,23 @@ async def category_by_hint(db: AsyncSession, workspace_id: uuid.UUID, hint: str)
 async def category_by_name(
     db: AsyncSession, workspace_id: uuid.UUID, name: str, parent_id: uuid.UUID | None
 ) -> Category | None:
+    """Категория с таким именем под таким родителем (parent_id = None — верхний
+    уровень).
+
+    Имена категорий ничем не ограничены, и одноимённых под одним родителем может
+    оказаться несколько; берём самую раннюю. Без порядка выбирал бы план запроса,
+    и та же подсказка садилась бы то в одну категорию, то в другую — «вчера
+    работало иначе» без единой правки. id — тай-брейк: created_at берётся из
+    func.now() и у категорий, созданных в одной транзакции, совпадает.
+    """
     category: Category | None = await db.scalar(
-        select(Category).where(
+        select(Category)
+        .where(
             Category.workspace_id == workspace_id,
             Category.name == name,
             Category.parent_id == parent_id,
         )
+        .order_by(Category.created_at, Category.id)
     )
     return category
 

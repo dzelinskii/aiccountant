@@ -90,6 +90,23 @@ async def test_hint_creates_subcategory_under_right_parent(
     assert parent.name == "Еда"
 
 
+async def test_income_hint_creates_income_subcategory(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Заведённая подсказкой подкатегория наследует направление подсказки:
+    расходная категория под «Прочими доходами» не приняла бы ни одного прихода."""
+    ws, _ = await _register(client, ALICE)
+    category_id = await _resolve(db_session, ws, "cashback", "100.00")
+    assert category_id is not None
+    created = await db_session.get(Category, category_id)
+    assert created is not None
+    assert created.name == "Бонусы"
+    assert created.kind == "income"
+    parent = await db_session.get(Category, created.parent_id)
+    assert parent is not None
+    assert parent.name == "Прочие доходы"
+
+
 async def test_second_operation_reuses_the_same_category(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
@@ -98,6 +115,26 @@ async def test_second_operation_reuses_the_same_category(
     first = await _resolve(db_session, ws, "groceries", "-100.00")
     second = await _resolve(db_session, ws, "groceries", "-200.00")
     assert first == second
+
+
+async def test_different_hints_land_in_different_categories(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Ищем категорию по значению подсказки, а не по факту отметки: иначе весь
+    банк съехал бы в одну категорию — ту, что помечена первой."""
+    ws, _ = await _register(client, ALICE)
+    groceries = await _resolve(db_session, ws, "groceries", "-100.00")
+    dining = await _resolve(db_session, ws, "dining", "-200.00")
+    assert groceries is not None
+    assert dining is not None
+    assert groceries != dining
+
+    first = await db_session.get(Category, groceries)
+    second = await db_session.get(Category, dining)
+    assert first is not None
+    assert second is not None
+    assert first.name == "Продукты"
+    assert second.name == "Кафе и рестораны"
 
 
 async def test_renaming_category_keeps_it_as_target(
@@ -122,6 +159,15 @@ async def test_income_hint_on_expense_does_not_fire(
     неверно, а не повод положить расход в доходы."""
     ws, _ = await _register(client, ALICE)
     assert await _resolve(db_session, ws, "salary", "-100.00") is None
+
+
+async def test_expense_hint_on_income_does_not_fire(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Возврат в магазин приходит плюсом и с той же меткой «Супермаркеты»:
+    расходную категорию ему давать нельзя — операция с ней не проведётся."""
+    ws, _ = await _register(client, ALICE)
+    assert await _resolve(db_session, ws, "groceries", "100.00") is None
 
 
 async def test_salary_marks_parent_instead_of_creating_child(
@@ -171,6 +217,73 @@ async def test_hint_takes_over_category_the_person_already_made(
 
     listed = (await client.get("/api/categories", params={"workspace_id": ws})).json()
     assert [c["name"] for c in listed].count("Продукты") == 1
+
+    # захват без отметки — половина дела: следующая же операция искала бы
+    # категорию по имени заново, и переименование порвало бы соответствие
+    taken = await db_session.get(Category, uuid.UUID(mine))
+    assert taken is not None
+    assert taken.hint == "groceries"
+
+
+async def test_hint_does_not_take_over_category_of_other_direction(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Человек волен завести доходные «Продукты» под расходной «Едой».
+    Подсказка расхода в них не садится: операция с такой категорией не
+    проведётся, а импорт этот отказ не ловит и уронил бы всю пачку."""
+    ws, _ = await _register(client, ALICE)
+    parent = await ledger_service.find_category_by_name(db_session, uuid.UUID(ws), "Еда")
+    assert parent is not None
+    mine = (
+        await client.post(
+            "/api/categories",
+            params={"workspace_id": ws},
+            json={"name": "Продукты", "kind": "income", "parent_id": str(parent.id)},
+        )
+    ).json()["id"]
+
+    assert await _resolve(db_session, ws, "groceries", "-100.00") is None
+
+    # и отметку на чужой категории не оставили: иначе следующая операция
+    # получила бы её уже готовой, минуя проверку направления
+    theirs = await db_session.get(Category, uuid.UUID(mine))
+    assert theirs is not None
+    await db_session.refresh(theirs)
+    assert theirs.hint is None
+
+
+async def test_parent_is_looked_up_at_top_level(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Родитель подсказки — категория верхнего уровня. Своё дерево человек
+    строит как хочет, и одноимённая ветка внутри него подсказку не перехватывает."""
+    ws, _ = await _register(client, ALICE)
+    other = await ledger_service.find_category_by_name(db_session, uuid.UUID(ws), "Прочее")
+    assert other is not None
+    nested_food = (
+        await client.post(
+            "/api/categories",
+            params={"workspace_id": ws},
+            json={"name": "Еда", "kind": "expense", "parent_id": str(other.id)},
+        )
+    ).json()["id"]
+    nested_groceries = (
+        await client.post(
+            "/api/categories",
+            params={"workspace_id": ws},
+            json={"name": "Продукты", "kind": "expense", "parent_id": nested_food},
+        )
+    ).json()["id"]
+
+    category_id = await _resolve(db_session, ws, "groceries", "-100.00")
+    assert category_id is not None
+    assert category_id != uuid.UUID(nested_groceries)
+    created = await db_session.get(Category, category_id)
+    assert created is not None
+    top = await db_session.get(Category, created.parent_id)
+    assert top is not None
+    assert top.name == "Еда"
+    assert top.parent_id is None
 
 
 async def test_deleted_parent_is_not_resurrected(
