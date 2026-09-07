@@ -21,6 +21,8 @@ from app.ledger.schemas import (
     DashboardOut,
     DescriptionRuleCreate,
     DescriptionRuleOut,
+    SimilarAppliedOut,
+    SimilarUncategorizedOut,
     TransactionCreate,
     TransactionList,
     TransactionOut,
@@ -275,6 +277,34 @@ async def categorize_transactions(
 ) -> dict[str, str]:
     service.enqueue_categorization(workspace_id)
     return {"status": "queued"}
+
+
+@router.get("/transactions/{transaction_id}/similar-uncategorized")
+async def similar_uncategorized(
+    transaction_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> SimilarUncategorizedOut:
+    try:
+        count = await service.count_similar_uncategorized(db, workspace_id, transaction_id)
+    except service.NotFoundError:
+        raise HTTPException(status_code=404, detail="Операция не найдена") from None
+    return SimilarUncategorizedOut(count=count)
+
+
+@router.post("/transactions/{transaction_id}/apply-category-to-similar")
+async def apply_category_to_similar(
+    transaction_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> SimilarAppliedOut:
+    try:
+        applied = await service.apply_category_to_similar(db, workspace_id, transaction_id)
+    except service.NotFoundError:
+        raise HTTPException(status_code=404, detail="Операция не найдена") from None
+    return SimilarAppliedOut(applied=applied)
 
 
 @router.post("/transactions/{transaction_id}/dismiss-suggestion")

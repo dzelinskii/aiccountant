@@ -3,8 +3,9 @@ import { useDisclosure } from '@mantine/hooks'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import {
-  categorizeUncategorized, createTransaction, createTransfer, deleteTransaction, dismissSuggestion,
-  getAccounts, getCategories, getTransactions, setSpendingOverride, updateTransaction,
+  applyCategoryToSimilar, categorizeUncategorized, createTransaction, createTransfer,
+  deleteTransaction, dismissSuggestion, getAccounts, getCategories, getSimilarUncategorized,
+  getTransactions, setSpendingOverride, updateTransaction,
   type Transaction,
 } from '../api/ledger'
 import { formatMoney } from '../lib/money'
@@ -39,6 +40,8 @@ export function TransactionsPage() {
   const [to, setTo] = useState('')
   const [txnOpened, txn] = useDisclosure(false)
   const [transferOpened, transfer] = useDisclosure(false)
+  // операция, чью категорию только что подтвердили, и число похожих на неё
+  const [similar, setSimilar] = useState<{ id: string; count: number } | null>(null)
 
   const { data: accounts } = useQuery({ queryKey: ['accounts', ws], queryFn: () => getAccounts(ws) })
   const { data: categories } = useQuery({ queryKey: ['categories', ws], queryFn: () => getCategories(ws) })
@@ -80,7 +83,15 @@ export function TransactionsPage() {
   const confirmMut = useMutation({
     mutationFn: (t: Transaction) =>
       updateTransaction(ws, t.id, { category_id: t.suggested_category_id ?? undefined }),
-    onSuccess: invalidate,
+    onSuccess: async (_updated, t) => {
+      await invalidate()
+      const { count } = await getSimilarUncategorized(ws, t.id)
+      if (count > 0) setSimilar({ id: t.id, count })
+    },
+  })
+  const applySimilarMut = useMutation({
+    mutationFn: (id: string) => applyCategoryToSimilar(ws, id),
+    onSuccess: async () => { await invalidate(); setSimilar(null) },
   })
   const dismissMut = useMutation({
     mutationFn: (t: Transaction) => dismissSuggestion(ws, t.id),
@@ -204,6 +215,33 @@ export function TransactionsPage() {
           onSubmit={(v) => transferMut.mutate(v)}
           pending={transferMut.isPending}
         />
+      </Modal>
+      {/* правило из подтверждения уже выучено — спрашиваем только про операции,
+          которые к этому моменту уже лежат без категории */}
+      <Modal
+        opened={similar !== null} onClose={() => setSimilar(null)}
+        title="Разложить похожие операции?"
+      >
+        {similar && (
+          <Stack>
+            <Text>{`Операций с тем же описанием и без категории: ${similar.count}`}</Text>
+            <Text size="sm" c="dimmed">
+              Правило уже запомнено: новые такие операции получат эту категорию в любом случае.
+              Вопрос только про те, что уже сохранены.
+            </Text>
+            <Group justify="flex-end">
+              <Button variant="subtle" color="gray" onClick={() => setSimilar(null)}>
+                Не нужно
+              </Button>
+              <Button
+                loading={applySimilarMut.isPending}
+                onClick={() => applySimilarMut.mutate(similar.id)}
+              >
+                Разложить
+              </Button>
+            </Group>
+          </Stack>
+        )}
       </Modal>
     </Stack>
   )

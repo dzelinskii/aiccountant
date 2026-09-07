@@ -128,6 +128,18 @@ class TransactionList(BaseModel):
     total: int
 
 
+class SimilarUncategorizedOut(BaseModel):
+    """Сколько ещё операций без категории описаны так же, как эта."""
+
+    count: int
+
+
+class SimilarAppliedOut(BaseModel):
+    """Сколько операций получили категорию при разборе похожих."""
+
+    applied: int
+
+
 class DashboardAccount(BaseModel):
     id: uuid.UUID
     name: str

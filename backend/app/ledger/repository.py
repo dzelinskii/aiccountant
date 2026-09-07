@@ -2,7 +2,7 @@ import uuid
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -299,6 +299,97 @@ async def list_uncategorized(db: AsyncSession, workspace_id: uuid.UUID) -> list[
         )
     )
     return list(rows.scalars().all())
+
+
+# Потолок выборки кандидатов на разбор. Описания сравниваются уже снаружи
+# запроса, поэтому он тянет и заведомо чужие: на истории за годы это тысячи
+# строк на каждое подтверждение категории. Потолок разбор не ломает —
+# разложенные строки выходят из выборки, и следующее нажатие видит следующие;
+# отбираем свежие, они человеку нужнее.
+SIMILAR_CANDIDATES_LIMIT = 1000
+
+
+async def uncategorized_with_description(
+    db: AsyncSession,
+    workspace_id: uuid.UUID,
+    *,
+    exclude_id: uuid.UUID,
+    amount: Decimal,
+) -> list[Transaction]:
+    """Кандидаты на разбор по описанию: операции с описанием, которым категорию
+    операции-источника проставить можно, кроме неё самой.
+
+    Можно — значит категории нет вовсе и решения человека по ней не было.
+    Отклонённая подсказка помечается подтверждённой (см. dismiss_suggestion),
+    и по одной пустой категории она неотличима от неразобранной: разбор обязан
+    уважать этот отказ так же, как его уважает классификатор.
+
+    Условие участия в статистике — то же, что у пути модели (list_uncategorized):
+    на вопрос «какие операции подлежат категоризации» два запроса обязаны
+    отвечать одинаково.
+
+    Знак: категория берётся у операции-источника, а её направление уже
+    согласовано со знаком её суммы (это стережёт category_matches_amount на всех
+    путях записи). Значит кандидату та же категория подходит ровно при
+    совпадении знака. Иначе возврат по той же точке получил бы расходную
+    категорию, и дальше любая правка этой строки отвечала бы отказом.
+
+    Сравнение описаний остаётся снаружи. Ключ у правил — нормализованное
+    описание (регистр, схлопнутые пробелы, NFC), и в SQL эту нормализацию
+    не выразить, не заведя её второго определения; два определения одного
+    правила рано или поздно разойдутся.
+    """
+    same_sign = Transaction.amount < 0 if amount < 0 else Transaction.amount > 0
+    rows = await db.execute(
+        select(Transaction)
+        .where(
+            Transaction.workspace_id == workspace_id,
+            Transaction.category_id.is_(None),
+            Transaction.category_confirmed.is_(False),
+            counts_in_stats_sql(),
+            same_sign,
+            Transaction.merchant.is_not(None),
+            Transaction.id != exclude_id,
+        )
+        .order_by(Transaction.occurred_at.desc(), Transaction.id.desc())
+        .limit(SIMILAR_CANDIDATES_LIMIT)
+    )
+    return list(rows.scalars().all())
+
+
+async def set_category_for(
+    db: AsyncSession,
+    workspace_id: uuid.UUID,
+    transaction_ids: list[uuid.UUID],
+    category_id: uuid.UUID,
+) -> int:
+    """Проставить категорию перечисленным операциям, у которых её нет; вернуть
+    число задетых строк. Без commit — им распоряжается сервис.
+
+    Фильтр по workspace здесь не лишний, хотя идентификаторы и пришли из запроса
+    с таким же фильтром: запрос обязан стоять на своих ногах, иначе однажды
+    чужого идентификатора в списке окажется достаточно. По той же причине
+    пустоту категории проверяем повторно, а не верим прочитанному: между
+    отбором кандидатов и записью её успевает проставить чужой коммит —
+    фоновая категоризация держит транзакцию открытой на весь проход.
+
+    Подсказку гасим вместе с простановкой: категория есть, и вопрос про неё же
+    закрыт. Правка человеком гасит её так же — иначе остаётся операция
+    с категорией и живой подсказкой, чего в интерфейсе не видно.
+    """
+    if not transaction_ids:
+        return 0
+    rows = await db.execute(
+        update(Transaction)
+        .where(
+            Transaction.workspace_id == workspace_id,
+            Transaction.id.in_(transaction_ids),
+            Transaction.category_id.is_(None),
+        )
+        .values(category_id=category_id, suggested_category_id=None)
+        .returning(Transaction.id)
+    )
+    return len(rows.all())
 
 
 async def recent_confirmed_pairs(

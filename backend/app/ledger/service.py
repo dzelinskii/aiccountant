@@ -227,6 +227,58 @@ async def create_description_rule(
     return rule
 
 
+async def learn_rule_from(
+    db: AsyncSession, workspace_id: uuid.UUID, transaction: Transaction
+) -> None:
+    """Запомнить решение человека: это описание даёт эту категорию.
+
+    Правило, заведённое руками, не трогаем: тот, кто завёл его сам, знал, что
+    делает, и не ждёт, что оно поменяется от правки одной операции. Выученное
+    обновляем свободно — последнее подтверждение и есть текущее намерение.
+
+    Пустой ключ пропускаем: он ловил бы любую операцию с пробельным описанием.
+
+    Своим commit'ом и после того, как правка операции уже сохранена: правило —
+    побочная польза от подтверждения, и провалить из-за него саму правку нельзя.
+    """
+    category_id = transaction.category_id
+    if category_id is None or not transaction.merchant:
+        return
+    normalized = normalize_description(transaction.merchant)
+    if not normalized or len(normalized) > RULE_TEXT_MAX_LENGTH:
+        return
+
+    existing = await repository.find_description_rule(db, workspace_id, normalized)
+    if existing is not None:
+        if existing.source == "manual":
+            return
+        existing.category_id = category_id
+    else:
+        repository.add_description_rule(
+            db,
+            DescriptionRule(
+                workspace_id=workspace_id,
+                normalized_text=normalized,
+                category_id=category_id,
+                source="learned",
+            ),
+        )
+
+    try:
+        await db.commit()
+    except IntegrityError:
+        # обе ветки прикрыты одинаково: то же описание подтвердили одновременно
+        # в другом запросе (проверка выше этого не видит — обе сессии видят
+        # пустоту, видит уникальный индекс), или категория правила исчезла между
+        # чтением и записью. Правило — побочная польза, ронять из-за неё
+        # сохранённую правку операции нельзя
+        await db.rollback()
+        # откат помечает всё прочитанное сессией устаревшим, а операцию ещё
+        # отдавать наружу: перечитываем явно, иначе догрузка полей полезет
+        # из синхронного кода сериализации
+        await db.refresh(transaction)
+
+
 async def list_description_rules(
     db: AsyncSession, workspace_id: uuid.UUID
 ) -> list[DescriptionRule]:
@@ -498,7 +550,76 @@ async def update_transaction(
     if "spending_override" in payload.model_fields_set:
         transaction.spending_override = payload.spending_override
     await db.commit()
+    if payload.category_id is not None:
+        # тот же признак, что и у category_confirmed выше: человек явно выбрал
+        # категорию — значит, есть чему учиться. После commit'а: правка операции
+        # уже сохранена и от судьбы правила не зависит
+        await learn_rule_from(db, workspace_id, transaction)
     return transaction
+
+
+async def _similar_uncategorized(
+    db: AsyncSession, workspace_id: uuid.UUID, transaction: Transaction
+) -> list[Transaction]:
+    """Операции, описанные так же, как заданная, и пригодные под её категорию.
+
+    Пригодность целиком решает запрос (uncategorized_with_description): пустая
+    категория, отсутствие решения человека, участие в статистике и подходящий
+    знак суммы. Здесь остаётся только сравнение описаний.
+
+    «Так же» — по тому же ключу, что и у правил: «КОФЕЙНЯ  У ДОМА» и «Кофейня
+    у дома» для человека одно и то же место, и разбираться они обязаны вместе.
+    Пустой ключ не ищем — он собрал бы в одну кучу все операции с пробельным
+    описанием.
+    """
+    if not transaction.merchant:
+        return []
+    key = normalize_description(transaction.merchant)
+    if not key:
+        return []
+    candidates = await repository.uncategorized_with_description(
+        db, workspace_id, exclude_id=transaction.id, amount=transaction.amount
+    )
+    return [t for t in candidates if t.merchant and normalize_description(t.merchant) == key]
+
+
+async def count_similar_uncategorized(
+    db: AsyncSession, workspace_id: uuid.UUID, transaction_id: uuid.UUID
+) -> int:
+    """Сколько ещё операций без категории описаны так же — это интерфейс
+    спрашивает после подтверждения, прежде чем предложить разбор."""
+    transaction = await repository.get_transaction(db, workspace_id, transaction_id)
+    if transaction is None:
+        raise NotFoundError
+    return len(await _similar_uncategorized(db, workspace_id, transaction))
+
+
+async def apply_category_to_similar(
+    db: AsyncSession, workspace_id: uuid.UUID, transaction_id: uuid.UUID
+) -> int:
+    """Распространить категорию операции на такие же операции без категории.
+
+    Трогаем только пустые, и то не всякую пустоту: отклонённая подсказка — тоже
+    решение человека, и оно остаётся. Ни выбор человека, ни то, что проставила
+    машина, не переписываем — именно это делает согласие на разбор безопасным,
+    худшее последствие которого — заполнится пустота.
+
+    category_confirmed при этом не ставим. Человек подтвердил одну операцию,
+    а остальные глазами не видел; пометив их подтверждёнными, мы отправили бы
+    их в примеры для модели наравне с проверенными и размножили бы ошибку.
+    """
+    transaction = await repository.get_transaction(db, workspace_id, transaction_id)
+    if transaction is None:
+        raise NotFoundError
+    category_id = transaction.category_id
+    if category_id is None:
+        return 0
+    similar = await _similar_uncategorized(db, workspace_id, transaction)
+    applied = await repository.set_category_for(
+        db, workspace_id, [t.id for t in similar], category_id
+    )
+    await db.commit()
+    return applied
 
 
 async def dismiss_suggestion(
