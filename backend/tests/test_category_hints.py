@@ -133,6 +133,44 @@ async def test_salary_marks_parent_instead_of_creating_child(
     assert created is not None
     assert created.name == "Зарплата"
     assert created.parent_id is None
+    assert created.hint == "salary"
+
+
+async def test_renaming_parent_keeps_it_as_target(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Подсказка, севшая в самого родителя, держится той же отметкой: имя
+    родителя человек меняет так же свободно, как имя подкатегории."""
+    ws, _ = await _register(client, ALICE)
+    category_id = await _resolve(db_session, ws, "salary", "5000.00")
+    created = await db_session.get(Category, category_id)
+    assert created is not None
+    created.name = "Оклад"
+    await db_session.flush()
+
+    assert await _resolve(db_session, ws, "salary", "5000.00") == category_id
+
+
+async def test_hint_takes_over_category_the_person_already_made(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Человек завёл «Продукты» сам — подсказка садится в неё, а не заводит
+    вторую с тем же именем под тем же родителем."""
+    ws, _ = await _register(client, ALICE)
+    parent = await ledger_service.find_category_by_name(db_session, uuid.UUID(ws), "Еда")
+    assert parent is not None
+    mine = (
+        await client.post(
+            "/api/categories",
+            params={"workspace_id": ws},
+            json={"name": "Продукты", "kind": "expense", "parent_id": str(parent.id)},
+        )
+    ).json()["id"]
+
+    assert await _resolve(db_session, ws, "groceries", "-100.00") == uuid.UUID(mine)
+
+    listed = (await client.get("/api/categories", params={"workspace_id": ws})).json()
+    assert [c["name"] for c in listed].count("Продукты") == 1
 
 
 async def test_deleted_parent_is_not_resurrected(
