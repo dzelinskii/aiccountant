@@ -21,6 +21,7 @@
 | `backend/app/core/category_hints.py` (создать) | словарь подсказок и раскладка по умолчанию — чистый модуль без БД |
 | `backend/app/ledger/models.py` (править) | `Category.hint` |
 | `backend/alembic/versions/0012_category_hint.py` (создать) | колонка и уникальность в пределах workspace |
+| `backend/tests/test_migrations.py` (править) | схема после миграции: колонка nullable, индекс уникален |
 | `backend/app/ledger/repository.py` (править) | `category_by_hint`, `category_by_name`, свёртка дашборда к родителю |
 | `backend/app/ledger/service.py` (править) | `resolve_hint_category` — найти или завести подкатегорию |
 | `backend/app/imports/schemas.py` (править) | приём `category_hint` на входе |
@@ -284,15 +285,56 @@ def downgrade() -> None:
     op.drop_column("categories", "hint")
 ```
 
-- [ ] **Step 3: Прогнать миграцию на живой базе**
+- [ ] **Step 3: Закрепить схему тестом**
 
-Run: `docker compose up -d db && cd backend && uv run alembic upgrade head`
-Expected: `Running upgrade 0011 -> 0012, Отметка подсказки банка на категории`
+Порт Postgres наружу не проброшен, а миграции накатывает контейнер бэкенда при старте, так что локальный `alembic upgrade` до базы не достучится. Проверяются миграции иначе: `backend/tests/test_migrations.py` смотрит получившуюся схему через `information_schema` на базе от testcontainers, которая поднимается фикстурой `database_url` и прогоняет `alembic upgrade head` сама. Дописать туда, следуя стилю соседних тестов:
 
-- [ ] **Step 4: Проверить обратимость**
+```python
+async def test_migrations_add_category_hint(database_url: str) -> None:
+    engine = create_async_engine(database_url)
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT is_nullable FROM information_schema.columns "
+                "WHERE table_name = 'categories' AND column_name = 'hint'"
+            )
+        )
+        nullable = rows.scalar()
+        indexes = await conn.execute(
+            text("SELECT indexdef FROM pg_indexes WHERE indexname = :name"),
+            {"name": "ix_categories_workspace_hint"},
+        )
+        indexdef = indexes.scalar()
+    await engine.dispose()
+    # отметка обязана быть nullable: категорий без подсказки — большинство
+    assert nullable == "YES"
+    # уникальность именно по паре: одна подсказка — одна категория внутри
+    # workspace, иначе разрешение подсказки перестаёт быть однозначным
+    assert indexdef is not None
+    assert "UNIQUE" in indexdef
+    assert "workspace_id" in indexdef and "hint" in indexdef
+```
 
-Run: `cd backend && uv run alembic downgrade -1 && uv run alembic upgrade head`
-Expected: обе команды без ошибок
+- [ ] **Step 4: Проверить обратимость на одноразовой базе**
+
+Базу владельца не трогаем — поднимаем свою и сносим после:
+
+```bash
+docker run --rm -d --name mr-mig -p 55432:5432 \
+  -e POSTGRES_USER=aiccountant -e POSTGRES_PASSWORD=x -e POSTGRES_DB=aiccountant postgres:16
+```
+
+Дождаться готовности (`docker exec mr-mig pg_isready -U aiccountant`), затем из `backend/`:
+
+```bash
+DATABASE_URL=postgresql+asyncpg://aiccountant:x@localhost:55432/aiccountant uv run alembic upgrade head
+DATABASE_URL=postgresql+asyncpg://aiccountant:x@localhost:55432/aiccountant uv run alembic downgrade -1
+DATABASE_URL=postgresql+asyncpg://aiccountant:x@localhost:55432/aiccountant uv run alembic upgrade head
+```
+
+Expected: три команды без ошибок; в выводе первой — `Running upgrade 0011 -> 0012`. После — `docker rm -f mr-mig`.
+
+`alembic` берёт адрес из настроек (`backend/alembic/env.py:22`), а те читают `DATABASE_URL` из окружения.
 
 - [ ] **Step 5: Линт и типы**
 
@@ -302,7 +344,7 @@ Expected: без замечаний
 - [ ] **Step 6: Коммит**
 
 ```bash
-git add backend/app/ledger/models.py backend/alembic/versions/0012_category_hint.py
+git add backend/app/ledger/models.py backend/alembic/versions/0012_category_hint.py backend/tests/test_migrations.py
 git commit -m "Колонка hint у категории и уникальность в пределах workspace"
 ```
 
