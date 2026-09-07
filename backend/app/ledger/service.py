@@ -360,8 +360,9 @@ async def resolve_hint_category(
     if existing is not None:
         # направление помеченной категории не перепроверяем: отметку ставим
         # только мы и только при совпадении направлений, а сменить kind через
-        # API нельзя (CategoryUpdate — это имя и родитель). Станет направление
-        # редактируемым — проверка понадобится и здесь
+        # API нельзя (CategoryUpdate — это имя и родитель). Проверка понадобится
+        # и здесь, как только отметку станет можно ставить не отсюда: редактируемый
+        # kind или проставление hint руками
         return existing.id
 
     parent = await find_category_by_name(db, workspace_id, target.parent)
