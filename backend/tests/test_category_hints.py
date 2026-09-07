@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 from httpx import AsyncClient
 from pydantic import ValidationError
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.category_hints import CATEGORY_HINTS, HINT_DEFAULTS, HintTarget
@@ -529,3 +530,94 @@ async def test_subcategory_is_created_once_per_batch(client: AsyncClient) -> Non
     assert len(ids) == 1
     # ровно одна «Продукты», а не по одной на операцию
     assert (await _category_names(client, ws)).count("Продукты") == 1
+
+
+async def test_hint_asks_the_database_once_per_hint(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Подсказок в словаре 37, а операций в пачке до 25 000: спрашивать базу
+    на каждую строку — тот же N+1, от которого выше спасает чтение правил разом
+    (см. комментарий в commit_from_import). Считаем запросы к categories с
+    условием на hint (category_by_hint) — "categories.hint =" в WHERE, а не
+    просто наличие столбца hint в SELECT-списке: он есть в любой выборке
+    Category, включая SELECT по id внутри validate_posting, который честно
+    нужен на каждую операцию и здесь не в счёт."""
+    ws, acc = await _register(client, ALICE)
+    seen: list[str] = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):  # type: ignore[no-untyped-def]
+        if "categories" in statement and "categories.hint =" in statement:
+            seen.append(statement)
+
+    engine = db_session.get_bind()
+    sync_engine = getattr(engine, "sync_engine", engine)
+    event.listen(sync_engine, "before_cursor_execute", record)
+    try:
+        await _import(
+            client,
+            ws,
+            acc,
+            *[
+                {
+                    **OP,
+                    "description": f"Магазин {i}",
+                    "external_id": f"op-{i}",
+                    "category_hint": "groceries",
+                }
+                for i in range(20)
+            ],
+        )
+    finally:
+        event.remove(sync_engine, "before_cursor_execute", record)
+
+    # без памятки запросов было бы 20 (по одному на операцию); с ней — не
+    # больше двух на всю пачку с одной подсказкой (первый — проверить, что
+    # категории ещё нет, второй теоретически возможен при повторном чтении)
+    assert len(seen) <= 2, seen
+
+
+async def test_hint_asks_the_database_once_per_hint_even_when_it_never_resolves(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Тест выше проверяет удачный путь, а «groceries» там резолвится в
+    реальную категорию: и key not in hint_categories, и hint_categories.get(key)
+    is None ведут себя одинаково, потому что закешированное значение не None.
+    Разница видна только там, где подсказка не срабатывает раз за разом
+    (здесь — удалённый родитель, как в test_deleted_parent_is_not_resurrected):
+    не кешируя сам None, мы бы снова спрашивали базу на каждую строку —
+    ровно в том случае, где не найденных подсказок больше всего."""
+    ws, acc = await _register(client, ALICE)
+    parent = await ledger_service.find_category_by_name(db_session, uuid.UUID(ws), "Еда")
+    assert parent is not None
+    await db_session.delete(parent)
+    await db_session.flush()
+
+    seen: list[str] = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):  # type: ignore[no-untyped-def]
+        if "categories" in statement and "categories.hint =" in statement:
+            seen.append(statement)
+
+    engine = db_session.get_bind()
+    sync_engine = getattr(engine, "sync_engine", engine)
+    event.listen(sync_engine, "before_cursor_execute", record)
+    try:
+        imported = await _import(
+            client,
+            ws,
+            acc,
+            *[
+                {
+                    **OP,
+                    "description": f"Магазин {i}",
+                    "external_id": f"op-{i}",
+                    "category_hint": "groceries",
+                }
+                for i in range(20)
+            ],
+        )
+    finally:
+        event.remove(sync_engine, "before_cursor_execute", record)
+
+    assert imported == 20
+    assert len(seen) <= 2, seen

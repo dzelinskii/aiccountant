@@ -496,6 +496,12 @@ async def commit_from_import(
     # тысяч, и запрос на строку сделал бы синхронную ручку N+1
     rules = await ledger_service.load_description_rules(db, workspace_id)
 
+    # resolve_hint_category ходит в базу, а операций в пачке до 25 000: без
+    # памятки вышел бы запрос на строку — та же беда, от которой выше спасает
+    # чтение правил разом. Ключ со знаком, потому что расходная подсказка на
+    # приходе намеренно не срабатывает, и один ответ на подсказку был бы неверен
+    hint_categories: dict[tuple[str, bool], uuid.UUID | None] = {}
+
     seen: set[str] = set()
     imported = 0
     for op, eid in zip(statement.operations, ext_ids, strict=True):
@@ -513,9 +519,12 @@ async def commit_from_import(
         # неотличима от подтверждения человека и пережила бы его отмену
         category_id = ledger_service.category_for_description(rules, op.description, op.amount)
         if category_id is None and op.category_hint is not None:
-            category_id = await ledger_service.resolve_hint_category(
-                db, workspace_id, op.category_hint, op.amount
-            )
+            key = (op.category_hint, op.amount < 0)
+            if key not in hint_categories:
+                hint_categories[key] = await ledger_service.resolve_hint_category(
+                    db, workspace_id, op.category_hint, op.amount
+                )
+            category_id = hint_categories[key]
         await ledger_service.post_transaction(
             db,
             workspace_id,
