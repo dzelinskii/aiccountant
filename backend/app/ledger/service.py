@@ -557,6 +557,63 @@ async def update_transaction(
     return transaction
 
 
+async def _similar_uncategorized(
+    db: AsyncSession, workspace_id: uuid.UUID, transaction: Transaction
+) -> list[Transaction]:
+    """Операции без категории, описанные так же, как заданная.
+
+    «Так же» — по тому же ключу, что и у правил: «КОФЕЙНЯ  У ДОМА» и «Кофейня
+    у дома» для человека одно и то же место, и разбираться они обязаны вместе.
+    Пустой ключ не ищем — он собрал бы в одну кучу все операции с пробельным
+    описанием.
+    """
+    if not transaction.merchant:
+        return []
+    key = normalize_description(transaction.merchant)
+    if not key:
+        return []
+    candidates = await repository.uncategorized_with_description(db, workspace_id, transaction.id)
+    return [t for t in candidates if t.merchant and normalize_description(t.merchant) == key]
+
+
+async def count_similar_uncategorized(
+    db: AsyncSession, workspace_id: uuid.UUID, transaction_id: uuid.UUID
+) -> int:
+    """Сколько ещё операций без категории описаны так же — это интерфейс
+    спрашивает после подтверждения, прежде чем предложить разбор."""
+    transaction = await repository.get_transaction(db, workspace_id, transaction_id)
+    if transaction is None:
+        raise NotFoundError
+    return len(await _similar_uncategorized(db, workspace_id, transaction))
+
+
+async def apply_category_to_similar(
+    db: AsyncSession, workspace_id: uuid.UUID, transaction_id: uuid.UUID
+) -> int:
+    """Распространить категорию операции на такие же операции без категории.
+
+    Трогаем только пустые: ни выбор человека, ни то, что проставила машина,
+    не переписываем — именно это делает согласие на разбор безопасным, худшее
+    последствие которого — заполнится пустота.
+
+    category_confirmed при этом не ставим. Человек подтвердил одну операцию,
+    а остальные глазами не видел; пометив их подтверждёнными, мы отправили бы
+    их в примеры для модели наравне с проверенными и размножили бы ошибку.
+    """
+    transaction = await repository.get_transaction(db, workspace_id, transaction_id)
+    if transaction is None:
+        raise NotFoundError
+    category_id = transaction.category_id
+    if category_id is None:
+        return 0
+    similar = await _similar_uncategorized(db, workspace_id, transaction)
+    applied = await repository.set_category_for(
+        db, workspace_id, [t.id for t in similar], category_id
+    )
+    await db.commit()
+    return applied
+
+
 async def dismiss_suggestion(
     db: AsyncSession, workspace_id: uuid.UUID, transaction_id: uuid.UUID
 ) -> Transaction:

@@ -2,7 +2,7 @@ import uuid
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -299,6 +299,53 @@ async def list_uncategorized(db: AsyncSession, workspace_id: uuid.UUID) -> list[
         )
     )
     return list(rows.scalars().all())
+
+
+async def uncategorized_with_description(
+    db: AsyncSession, workspace_id: uuid.UUID, exclude_id: uuid.UUID
+) -> list[Transaction]:
+    """Кандидаты на разбор по описанию: операции без категории и с описанием,
+    кроме той, от которой отталкиваемся.
+
+    Сравнение описаний остаётся снаружи. Ключ у правил — нормализованное
+    описание (регистр, схлопнутые пробелы, NFC), и в SQL эту нормализацию
+    не выразить, не заведя её второго определения; два определения одного
+    правила рано или поздно разойдутся. Отбор в Python обходится дешевле:
+    операций без категории в одном workspace немного.
+    """
+    rows = await db.execute(
+        select(Transaction).where(
+            Transaction.workspace_id == workspace_id,
+            Transaction.category_id.is_(None),
+            Transaction.merchant.is_not(None),
+            Transaction.id != exclude_id,
+        )
+    )
+    return list(rows.scalars().all())
+
+
+async def set_category_for(
+    db: AsyncSession,
+    workspace_id: uuid.UUID,
+    transaction_ids: list[uuid.UUID],
+    category_id: uuid.UUID,
+) -> int:
+    """Проставить категорию перечисленным операциям, вернуть число задетых строк.
+    Без commit — им распоряжается сервис.
+
+    Фильтр по workspace здесь не лишний, хотя идентификаторы и пришли из запроса
+    с таким же фильтром: запрос обязан стоять на своих ногах, иначе однажды
+    чужого идентификатора в списке окажется достаточно.
+    """
+    if not transaction_ids:
+        return 0
+    rows = await db.execute(
+        update(Transaction)
+        .where(Transaction.workspace_id == workspace_id, Transaction.id.in_(transaction_ids))
+        .values(category_id=category_id)
+        .returning(Transaction.id)
+    )
+    return len(rows.all())
 
 
 async def recent_confirmed_pairs(

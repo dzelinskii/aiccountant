@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ledger import repository as ledger_repository
 
 ALICE = {"email": "alice@example.com", "password": "password123"}
+BOB = {"email": "bob@example.com", "password": "password123"}
 
 
 async def _register(client: AsyncClient, credentials: dict[str, str]) -> tuple[str, str]:
@@ -72,6 +73,31 @@ async def _rules(client: AsyncClient, ws: str) -> list[tuple[str, str, str]]:
     resp = await client.get("/api/description-rules", params={"workspace_id": ws})
     assert resp.status_code == 200
     return [(r["normalized_text"], r["category_id"], r["source"]) for r in resp.json()]
+
+
+async def _similar_count(client: AsyncClient, ws: str, transaction_id: str) -> int:
+    resp = await client.get(
+        f"/api/transactions/{transaction_id}/similar-uncategorized", params={"workspace_id": ws}
+    )
+    assert resp.status_code == 200
+    count: int = resp.json()["count"]
+    return count
+
+
+async def _apply_to_similar(client: AsyncClient, ws: str, transaction_id: str) -> int:
+    resp = await client.post(
+        f"/api/transactions/{transaction_id}/apply-category-to-similar",
+        params={"workspace_id": ws},
+    )
+    assert resp.status_code == 200
+    applied: int = resp.json()["applied"]
+    return applied
+
+
+async def _transactions_by_id(client: AsyncClient, ws: str) -> dict[str, dict[str, Any]]:
+    resp = await client.get("/api/transactions", params={"workspace_id": ws})
+    assert resp.status_code == 200
+    return {str(t["id"]): t for t in resp.json()["items"]}
 
 
 async def test_confirmation_learns_rule(client: AsyncClient) -> None:
@@ -191,3 +217,179 @@ async def test_racing_confirmation_does_not_break_the_edit(
     )
     assert stored is not None
     assert str(stored.category_id) == chosen
+
+
+async def test_similar_count_does_not_count_the_transaction_itself(client: AsyncClient) -> None:
+    """Вопрос звучит «нашлось ещё N таких» — «ещё», то есть кроме той операции,
+    от которой отталкиваемся. Пока она сама без категории, её легко посчитать
+    вместе с остальными и предложить разложить на одну больше, чем есть."""
+    ws, acc = await _register(client, ALICE)
+    cat = await _category_id(client, ws, "expense")
+    source = await _add_transaction(client, ws, acc, "Кофейня")
+    await _add_transaction(client, ws, acc, "Кофейня")
+    await _add_transaction(client, ws, acc, "Кофейня")
+    await _add_transaction(client, ws, acc, "Аптека")
+
+    assert await _similar_count(client, ws, source) == 2
+
+    await _confirm_category(client, ws, source, cat)
+
+    assert await _similar_count(client, ws, source) == 2
+
+
+async def test_similar_count_skips_operations_with_a_category(client: AsyncClient) -> None:
+    """Разбор заполняет пустоту, а не переписывает готовое: и выбор человека,
+    и то, что уже проставила машина, остаются как есть — значит, и в подсчёт
+    они не входят."""
+    ws, acc = await _register(client, ALICE)
+    chosen, other = (await _categories(client, ws, "expense"))[:2]
+    source = await _add_transaction(client, ws, acc, "Кофейня")
+    by_hand = await _add_transaction(client, ws, acc, "Кофейня")
+    await _confirm_category(client, ws, by_hand, other)
+    await _add_transaction(client, ws, acc, "Кофейня", category_id=other)  # как от машины
+    await _add_transaction(client, ws, acc, "Кофейня")
+    await _confirm_category(client, ws, source, chosen)
+
+    assert await _similar_count(client, ws, source) == 1
+
+
+async def test_similar_count_matches_by_normalized_description(client: AsyncClient) -> None:
+    """Ключ здесь тот же, что у правил, — нормализованное описание. Банк
+    присылает одну и ту же точку то капсом, то с двойными пробелами, и такие
+    операции человек считает одинаковыми."""
+    ws, acc = await _register(client, ALICE)
+    cat = await _category_id(client, ws, "expense")
+    source = await _add_transaction(client, ws, acc, "Кофейня у дома")
+    await _add_transaction(client, ws, acc, "КОФЕЙНЯ У ДОМА")
+    await _add_transaction(client, ws, acc, "  Кофейня   у   дома  ")
+    await _confirm_category(client, ws, source, cat)
+
+    assert await _similar_count(client, ws, source) == 2
+
+
+async def test_similar_count_is_zero_without_a_key(client: AsyncClient) -> None:
+    """Нет описания — нет ключа, и похожих быть не может. Строка из одних
+    пробелов даёт пустой ключ: по нему в одну кучу собрались бы все операции
+    с пробельным описанием."""
+    ws, acc = await _register(client, ALICE)
+    cat = await _category_id(client, ws, "expense")
+    blank = await _add_transaction(client, ws, acc, "   ")
+    await _add_transaction(client, ws, acc, "   ")
+    source = await _add_transaction(client, ws, acc, None)
+    await _add_transaction(client, ws, acc, None)
+    await _confirm_category(client, ws, source, cat)
+    await _confirm_category(client, ws, blank, cat)
+
+    assert await _similar_count(client, ws, source) == 0
+    assert await _similar_count(client, ws, blank) == 0
+
+
+async def test_similar_count_for_unknown_transaction_is_404(client: AsyncClient) -> None:
+    ws, _acc = await _register(client, ALICE)
+
+    resp = await client.get(
+        f"/api/transactions/{uuid.uuid4()}/similar-uncategorized", params={"workspace_id": ws}
+    )
+    assert resp.status_code == 404
+
+    applied = await client.post(
+        f"/api/transactions/{uuid.uuid4()}/apply-category-to-similar",
+        params={"workspace_id": ws},
+    )
+    assert applied.status_code == 404
+
+
+async def test_applying_fills_only_operations_without_a_category(client: AsyncClient) -> None:
+    ws, acc = await _register(client, ALICE)
+    chosen, other = (await _categories(client, ws, "expense"))[:2]
+    source = await _add_transaction(client, ws, acc, "Кофейня")
+    empty = await _add_transaction(client, ws, acc, "Кофейня")
+    written_differently = await _add_transaction(client, ws, acc, "  КОФЕЙНЯ ")
+    taken = await _add_transaction(client, ws, acc, "Кофейня", category_id=other)
+    stranger = await _add_transaction(client, ws, acc, "Аптека")
+    await _confirm_category(client, ws, source, chosen)
+
+    assert await _apply_to_similar(client, ws, source) == 2
+
+    items = await _transactions_by_id(client, ws)
+    assert items[empty]["category_id"] == chosen
+    assert items[written_differently]["category_id"] == chosen
+    assert items[taken]["category_id"] == other
+    assert items[stranger]["category_id"] is None
+
+
+async def test_applying_does_not_confirm_what_nobody_looked_at(client: AsyncClient) -> None:
+    """Человек подтвердил одну операцию и согласился распространить решение,
+    но остальные глазами не видел. Пометив их подтверждёнными, мы отправили бы
+    их в примеры для модели наравне с проверенными — и ошибка размножилась бы."""
+    ws, acc = await _register(client, ALICE)
+    cat = await _category_id(client, ws, "expense")
+    source = await _add_transaction(client, ws, acc, "Кофейня")
+    spread = await _add_transaction(client, ws, acc, "Кофейня")
+    await _confirm_category(client, ws, source, cat)
+
+    assert await _apply_to_similar(client, ws, source) == 1
+
+    items = await _transactions_by_id(client, ws)
+    assert items[spread]["category_id"] == cat
+    assert items[spread]["category_confirmed"] is False
+    assert items[source]["category_confirmed"] is True
+
+
+async def test_second_applying_finds_nothing(client: AsyncClient) -> None:
+    """Первый разбор уже всё разложил, и разложенное больше не пустое."""
+    ws, acc = await _register(client, ALICE)
+    cat = await _category_id(client, ws, "expense")
+    source = await _add_transaction(client, ws, acc, "Кофейня")
+    await _add_transaction(client, ws, acc, "Кофейня")
+    await _confirm_category(client, ws, source, cat)
+
+    assert await _apply_to_similar(client, ws, source) == 1
+    assert await _apply_to_similar(client, ws, source) == 0
+
+
+async def test_similar_operations_of_another_workspace_are_invisible(client: AsyncClient) -> None:
+    ws_a, acc_a = await _register(client, ALICE)
+    cat = await _category_id(client, ws_a, "expense")
+    source = await _add_transaction(client, ws_a, acc_a, "Кофейня")
+    await _add_transaction(client, ws_a, acc_a, "Кофейня")
+
+    client.cookies.clear()
+    ws_b, acc_b = await _register(client, BOB)
+    theirs = await _add_transaction(client, ws_b, acc_b, "Кофейня")
+
+    client.cookies.clear()
+    await client.post("/api/auth/login", json=ALICE)
+    await _confirm_category(client, ws_a, source, cat)
+
+    assert await _similar_count(client, ws_a, source) == 1
+    assert await _apply_to_similar(client, ws_a, source) == 1
+
+    client.cookies.clear()
+    await client.post("/api/auth/login", json=BOB)
+    assert (await _transactions_by_id(client, ws_b))[theirs]["category_id"] is None
+
+
+async def test_setting_category_never_reaches_another_workspace(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Массовая простановка стоит на своих ногах: даже получив идентификатор
+    чужой операции, она его не тронет. Фильтр по workspace живёт в каждом
+    запросе отдельно — снятый в одном месте, он не должен открывать дверь
+    в другом."""
+    ws_a, _acc_a = await _register(client, ALICE)
+    cat = await _category_id(client, ws_a, "expense")
+
+    client.cookies.clear()
+    ws_b, acc_b = await _register(client, BOB)
+    theirs = await _add_transaction(client, ws_b, acc_b, "Кофейня")
+
+    applied = await ledger_repository.set_category_for(
+        db_session, uuid.UUID(ws_a), [uuid.UUID(theirs)], uuid.UUID(cat)
+    )
+    await db_session.commit()
+
+    assert applied == 0
+    stored = await ledger_repository.get_transaction(db_session, uuid.UUID(ws_b), uuid.UUID(theirs))
+    assert stored is not None
+    assert stored.category_id is None
