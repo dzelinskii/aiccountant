@@ -963,9 +963,13 @@ Expected: FAIL — `Failed to resolve import "./trust-anchor"`
 Создать `collector/src/runner/trust-anchor.ts`:
 
 ```typescript
-import { createHash } from 'node:crypto'
+import { createHash, createPublicKey } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
+// загрузка живёт в src/http, где сетевой доступ разрешён правилом линтера:
+// заводить ради неё второе исключение значило бы разменять проверяемость
+// allowlist на удобство одного модуля
+import { fetchPublicText } from '../http/download'
 
 /**
  * Отпечаток корня УЦ Минцифры зашит в код намеренно. Скачивание — удобство;
@@ -979,39 +983,74 @@ export const ROOT_SPKI_SHA256 = 'ArgiDAcHKNt3HZrFnlRSHE7drSGng7smz98ZwdsPrjc='
 
 const ROOT_URL = 'https://gu-st.ru/content/lending/russian_trusted_root_ca_pem.crt'
 const PEM_BODY = /-----BEGIN CERTIFICATE-----([\s\S]+?)-----END CERTIFICATE-----/
+const PEM_HEADER = /-----BEGIN CERTIFICATE-----/g
 
-export function certificateFingerprint(pem: string): string {
+/**
+ * Байты сертификата, и только они. Файл с более чем одним блоком отвергается,
+ * а не разбирается по первому: `node:https` принимает склеенные PEM-блоки как
+ * НЕСКОЛЬКО доверенных корней сразу. Проверить отпечаток первого блока и
+ * отдать наружу всю строку означало бы сделать доверенным и всё, что к ней
+ * приписано, — то есть обойти весь смысл этого модуля, не подделав ни байта в
+ * настоящем сертификате.
+ */
+function certificateDer(pem: string): Buffer {
+  const blocks = pem.match(PEM_HEADER)?.length ?? 0
+  if (blocks > 1) {
+    throw new Error(`Ожидался один сертификат, в файле их ${blocks} — лишние блоки доверия не получат`)
+  }
   const match = PEM_BODY.exec(pem)
   if (!match?.[1]) throw new Error('Это не PEM-сертификат')
-  const der = Buffer.from(match[1].replace(/\s+/g, ''), 'base64')
-  return createHash('sha256').update(der).digest('hex')
+  return Buffer.from(match[1].replace(/\s+/g, ''), 'base64')
 }
 
-export function verifyCertificate(pem: string): void {
-  const actual = certificateFingerprint(pem)
+export function certificateFingerprint(pem: string): string {
+  return createHash('sha256').update(certificateDer(pem)).digest('hex')
+}
+
+/** Отпечаток открытого ключа — им браузер закрепляет ровно этот УЦ. */
+export function spkiFingerprint(pem: string): string {
+  const spki = createPublicKey(pem).export({ type: 'spki', format: 'der' })
+  return createHash('sha256').update(spki).digest('base64')
+}
+
+/**
+ * Возвращает канонически пересобранный PEM: наружу уходят только проверенные
+ * байты, что бы ни лежало в исходном файле рядом с ними.
+ */
+export function verifyCertificate(pem: string): string {
+  const der = certificateDer(pem)
+  const actual = createHash('sha256').update(der).digest('hex')
   if (actual !== ROOT_SHA256) {
     // значения отпечатков в сообщении нужны: по ним сразу видно, подменённый
     // это файл или УЦ действительно сменил корень
     throw new Error(`Отпечаток корневого сертификата не совпал: ожидали ${ROOT_SHA256}, получили ${actual}`)
   }
+  const body = der.toString('base64').replace(/(.{64})/g, '$1\n')
+  return `-----BEGIN CERTIFICATE-----\n${body}\n-----END CERTIFICATE-----\n`
 }
 
 /**
  * Порядок: кеш → скачивание → проверка. Сети нет и кеша нет — падаем понятно,
  * а не идём в банк без проверки сертификата.
  */
-export async function loadTrustAnchor(cachePath: string, fetchImpl: typeof fetch = fetch): Promise<string> {
+export async function loadTrustAnchor(
+  cachePath: string,
+  download: (url: string) => Promise<string> = fetchPublicText,
+): Promise<string> {
   const cached = await readFile(cachePath, 'utf-8').catch(() => null)
   if (cached) {
-    verifyCertificate(cached)
-    return cached
+    try {
+      return verifyCertificate(cached)
+    } catch (error) {
+      // без пути человек не поймёт, что речь о файле на диске, и не догадается,
+      // что чинится это удалением кеша, а не переустановкой чего-либо
+      throw new Error(`Сертификат в кеше ${cachePath} не прошёл проверку: ${String(error)}. Удалите файл и запустите снова`)
+    }
   }
 
   let downloaded: string
   try {
-    const res = await fetchImpl(ROOT_URL)
-    if (!res.ok) throw new Error(`ответ ${res.status}`)
-    downloaded = await res.text()
+    downloaded = await download(ROOT_URL)
   } catch (error) {
     throw new Error(
       `Не удалось получить корневой сертификат УЦ Минцифры (${String(error)}). ` +
@@ -1019,10 +1058,11 @@ export async function loadTrustAnchor(cachePath: string, fetchImpl: typeof fetch
     )
   }
 
-  verifyCertificate(downloaded)
+  // в кеш кладём уже проверенное и пересобранное, а не то, что пришло по сети
+  const verified = verifyCertificate(downloaded)
   await mkdir(dirname(cachePath), { recursive: true })
-  await writeFile(cachePath, downloaded, 'utf-8')
-  return downloaded
+  await writeFile(cachePath, verified, 'utf-8')
+  return verified
 }
 ```
 
