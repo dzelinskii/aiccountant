@@ -1,7 +1,7 @@
 import type { AllowlistClient } from '../http/allowlist-client'
 import { createTBankClient } from '../plugins/tbank/client'
 import { SessionExpiredError, checkSession, fetchAccounts, fetchOperations } from '../plugins/tbank/index'
-import type { CollectedAccount } from '../plugins/tbank/types'
+import type { CollectedAccount } from '../core/contract'
 import { loadConfig, type CollectorConfig } from './config'
 import { pushOperations } from './push'
 import { reportMissingHints, reportUnknownKinds } from './report'

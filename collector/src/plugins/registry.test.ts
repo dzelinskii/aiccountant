@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { BANK_NAMES, pluginFor } from './registry'
+import { pluginFor } from './registry'
 
 test('плагин находится по имени банка', () => {
   const plugin = pluginFor('tbank')
@@ -12,8 +12,10 @@ test('незнакомое имя банка — понятная ошибка �
   expect(() => pluginFor('unknown-bank')).toThrowError(/tbank/)
 })
 
-test('имя плагина совпадает с ключом реестра', () => {
-  for (const name of BANK_NAMES) {
-    expect(pluginFor(name).name).toBe(name)
-  }
+test('имя из прототипа объекта — та же понятная ошибка, а не функция из Object.prototype', () => {
+  // без проверки на собственное свойство PLUGINS['toString'] вернул бы функцию
+  // toString, а не бросил ошибку — дальше такое имя ушло бы ключом секрета в
+  // хранилище ОС и именем парсера в импорт
+  expect(() => pluginFor('toString')).toThrowError(/toString/)
+  expect(() => pluginFor('constructor')).toThrowError(/constructor/)
 })

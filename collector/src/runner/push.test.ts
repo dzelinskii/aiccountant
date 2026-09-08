@@ -1,6 +1,6 @@
 import { expect, test, vi } from 'vitest'
 import type { FetchImpl } from '../http/allowlist-client'
-import type { CollectedAccount, CollectedOperation } from '../plugins/tbank/types'
+import type { CollectedAccount, CollectedOperation } from '../core/contract'
 import type { CollectorConfig } from './config'
 import { pushOperations } from './push'
 

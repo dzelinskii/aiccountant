@@ -40,7 +40,12 @@ export interface BrowserSession {
 }
 
 export interface LoginPrompt {
-  withBrowser<T>(use: (session: BrowserSession) => Promise<T>): Promise<T>
+  /**
+   * headless: true — окно не показывается (для тихого обновления токена по
+   * уже живой сессии); по умолчанию (или headless: false) окно видимое —
+   * единственный режим, в котором человек может ввести код входа.
+   */
+  withBrowser<T>(use: (session: BrowserSession) => Promise<T>, options?: { headless?: boolean }): Promise<T>
 }
 
 /**
@@ -48,9 +53,15 @@ export interface LoginPrompt {
  * она его хранит и передаёт обратно, но не толкует.
  */
 export interface BankPlugin {
-  /** Имя банка; оно же уезжает в поле parser при отправке импорта. */
+  /** Имя банка; из него собирается поле parser при отправке импорта (`${name}_collector`). */
   readonly name: string
   login(prompt: LoginPrompt): Promise<Credentials>
+  /**
+   * false означает ровно «секрет мёртв» (сессия истекла, нужен новый вход).
+   * Недоступность самого банка (сеть, 5xx, таймаут) — не false, а исключение:
+   * «щедрая» реализация, отвечающая false на любую ошибку, отправит человека
+   * в бесконечный круг повторных входов вместо честного сообщения о сбое.
+   */
   isAlive(credentials: Credentials): Promise<boolean>
   fetchAccounts(credentials: Credentials): Promise<CollectedAccount[]>
   /** since/until — epoch-миллисекунды; в формат банка переводит плагин. */

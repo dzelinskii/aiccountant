@@ -1,5 +1,5 @@
 import { hintFromMcc, type CategoryHint } from '../../core/category-hints'
-import type { CollectedAccount, CollectedOperation } from './types'
+import type { CollectedAccount, CollectedOperation } from '../../core/contract'
 
 /**
  * Отображение ответа Т-Банка в нашу модель. Вход — результат parseLossless,
