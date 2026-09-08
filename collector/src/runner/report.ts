@@ -51,3 +51,24 @@ export function reportUnrefinedIncome(
   if (count === 0) return
   console.log(`счёт ${appAccountId}: приход не разобран у ${count} — банк прислал незнакомую подгруппу`)
 }
+
+/**
+ * Единственный вход для сбора: main.ts зовёт его, а не счётчики поодиночке.
+ *
+ * Причина в том, что проводку счётчиков нечем проверить. main.ts — точка входа,
+ * он запускает сбор прямо при импорте, и тестом оттуда ничего не достать: убрать
+ * вызов счётчика можно было так, что весь набор оставался зелёным. Три места,
+ * где легко забыть, сведены в одно, и это одно закреплено тестом ниже. Осталась
+ * одна непокрытая строка — вызов отсюда в main.ts, — и её стережёт линтер:
+ * импорт без вызова роняет сборку.
+ *
+ * Заводя новый счётчик, добавляй его сюда — иначе он не будет вызван нигде.
+ */
+export function reportCollected(
+  appAccountId: string,
+  operations: readonly CollectedOperation[],
+): void {
+  reportUnknownKinds(appAccountId, operations)
+  reportMissingHints(appAccountId, operations)
+  reportUnrefinedIncome(appAccountId, operations)
+}
