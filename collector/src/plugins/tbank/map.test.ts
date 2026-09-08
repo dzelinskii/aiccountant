@@ -334,6 +334,45 @@ test('незнакомая группа с известной подгруппо
   expect(op?.kind).toBe('unknown')
 })
 
+test('перевод себе тратой не считается', () => {
+  // исходящий перевод своему счёту приходит в той же группе и той же подгруппе,
+  // что и перевод человеку: различает только isInner
+  const [op] = toOperations([
+    baseOperation({ group: 'TRANSFER', subgroup: { id: 'F1', name: 'Переводы' }, isInner: true }),
+  ])
+  expect(op?.kind).toBe('transfer_self')
+})
+
+test('перевод человеку остаётся переводом человеку', () => {
+  const [op] = toOperations([
+    baseOperation({ group: 'TRANSFER', subgroup: { id: 'F1', name: 'Переводы' }, isInner: false }),
+  ])
+  expect(op?.kind).toBe('transfer_person')
+})
+
+test('перевод без признака внутреннего считается переводом человеку', () => {
+  const [op] = toOperations([baseOperation({ group: 'TRANSFER', subgroup: { id: 'F1', name: 'Переводы' } })])
+  expect(op?.kind).toBe('transfer_person')
+})
+
+test('внутренняя покупка остаётся покупкой', () => {
+  // isInner сам по себе «свои деньги» не означает: у покупок Yandex Cloud он
+  // true. Признак работает только в паре с группой, и этот тест стережёт, что
+  // его не начнут применять шире
+  const [op] = toOperations([baseOperation({ group: 'PAY', isInner: true })])
+  expect(op?.kind).toBe('purchase')
+})
+
+test('входящий перевод себе по-прежнему разбирается подгруппой', () => {
+  // на входящей стороне работает подгруппа, и она должна продолжать работать
+  // сама по себе: подменить её на isInner значило бы завязать разбор прихода
+  // на признак, который в других группах значит другое
+  const [op] = toOperations([
+    baseOperation({ group: 'INCOME', subgroup: { id: 'C5', name: 'Пополнения' } }),
+  ])
+  expect(op?.kind).toBe('transfer_self')
+})
+
 test('метка банка становится подсказкой', () => {
   const [op] = toOperations([baseOperation({ spendingCategory: { id: '1', name: 'Супермаркеты' } })])
   expect(op?.category_hint).toBe('groceries')
