@@ -182,7 +182,9 @@ function limitDescription(value: string): string {
 // Единственное место в системе, где живёт словарь Т-Банка. Приложение работает
 // своими терминами и про PAY/INTERNAL не знает: иначе знание об одном банке
 // протекло бы в ядро домена и каждый новый банк правился бы там же.
-const BANK_GROUP_TO_KIND: Record<string, string> = {
+//
+// export — таблицу читает сверка словарей с Python
+export const BANK_GROUP_TO_KIND: Record<string, string> = {
   PAY: 'purchase',
   TRANSFER: 'transfer_person',
   INTERNAL: 'transfer_self',
