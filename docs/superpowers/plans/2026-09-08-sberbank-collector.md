@@ -20,7 +20,7 @@
 | Файл | Ответственность |
 |---|---|
 | `collector/src/http/transport.ts` | узкий интерфейс транспорта и две реализации: на `fetch` и на `node:https` со своим корнем |
-| `collector/src/plugins/contract.ts` | общие типы: `CollectedOperation`, `CollectedAccount`, `Credentials`, `LoginPrompt`, `BankPlugin` |
+| `collector/src/core/contract.ts` | общие типы: `CollectedOperation`, `CollectedAccount`, `Credentials`, `LoginPrompt`, `BankPlugin` |
 | `collector/src/plugins/registry.ts` | реестр «имя банка → плагин» |
 | `collector/src/runner/secret-store.ts` | хранение секрета в средствах ОС |
 | `collector/src/runner/trust-anchor.ts` | получение и проверка корня УЦ Минцифры по зашитому отпечатку |
@@ -445,7 +445,7 @@ git commit -m "Клиент коллектора: метод на эндпоин
 **Зачем.** Сегодня «плагин» — только каталог: раннер импортирует Т-Банк напрямую. Интерфейс нужен до того, как появится второй банк, иначе второй банк будет написан под текущую форму раннера.
 
 **Files:**
-- Create: `collector/src/plugins/contract.ts`
+- Create: `collector/src/core/contract.ts`
 - Create: `collector/src/plugins/registry.ts`
 - Create: `collector/src/plugins/registry.test.ts`
 - Modify: `collector/src/plugins/tbank/types.ts`
@@ -484,7 +484,7 @@ Expected: FAIL — `Failed to resolve import "./registry"`
 
 - [ ] **Step 3: Написать контракт**
 
-Создать `collector/src/plugins/contract.ts`:
+Создать `collector/src/core/contract.ts`:
 
 ```typescript
 export type { Credentials } from '../http/allowlist-client'
@@ -499,6 +499,8 @@ export interface CollectedOperation {
   external_id: string
   /** Вид операции в словаре приложения; словарь банка переводится в плагине. */
   kind: string
+  /** Подсказка о категории в словаре приложения; null — банк не подсказал. */
+  category_hint: string | null
 }
 
 export interface CollectedAccount {
@@ -557,7 +559,7 @@ export interface BankPlugin {
 ```typescript
 // Модель переехала в общий контракт: она одна на все банки. Файл оставлен
 // реэкспортом, чтобы не переписывать импорты внутри плагина.
-export type { CollectedAccount, CollectedOperation } from '../contract'
+export type { CollectedAccount, CollectedOperation } from '../../core/contract'
 ```
 
 - [ ] **Step 5: Обернуть Т-Банк в объект-плагин**
@@ -565,7 +567,7 @@ export type { CollectedAccount, CollectedOperation } from '../contract'
 Дописать в конец `collector/src/plugins/tbank/index.ts`:
 
 ```typescript
-import type { BankPlugin, Credentials, LoginPrompt } from '../contract'
+import type { BankPlugin, Credentials, LoginPrompt } from '../../core/contract'
 import { createTBankClient } from './client'
 import { obtainTBankToken } from './login'
 
@@ -611,7 +613,7 @@ function clientFor(credentials: Credentials) {
 Создать `collector/src/plugins/tbank/login.ts`, перенеся туда логику из `collector/src/runner/session.ts` (`refreshToken`, `logIn`, `waitForAuthorizedRequest`, `readToken`) и переписав её на `BrowserSession` вместо Playwright напрямую:
 
 ```typescript
-import type { BrowserSession, LoginPrompt } from '../contract'
+import type { BrowserSession, LoginPrompt } from '../../core/contract'
 
 const BANK_ORIGIN = 'https://www.tbank.ru'
 const LOGIN_URL = `${BANK_ORIGIN}/login/`
@@ -677,7 +679,7 @@ async function readToken(session: BrowserSession): Promise<string | null> {
 Создать `collector/src/plugins/registry.ts`:
 
 ```typescript
-import type { BankPlugin } from './contract'
+import type { BankPlugin } from '../core/contract'
 import { tbankPlugin } from './tbank'
 
 // Реестр намеренно плоский и явный: список банков виден целиком, без
@@ -737,7 +739,7 @@ cd collector && pnpm add @napi-rs/keyring
 
 ```typescript
 import { expect, test } from 'vitest'
-import type { Credentials } from '../plugins/contract'
+import type { Credentials } from '../core/contract'
 import { memorySecretStore, parseCredentials, serializeCredentials } from './secret-store'
 
 const HEADER_CREDENTIALS: Credentials = { kind: 'header', name: 'Cookie', value: 'UFS-SESSION=a; UFS-TOKEN=b' }
@@ -780,7 +782,7 @@ Expected: FAIL — `Failed to resolve import "./secret-store"`
 
 ```typescript
 import { Entry } from '@napi-rs/keyring'
-import type { Credentials } from '../plugins/contract'
+import type { Credentials } from '../core/contract'
 
 const SERVICE = 'aiccountant-collector'
 
@@ -1094,7 +1096,18 @@ test('расход разбирается: дата, знак, вид, подс�
     description: 'Покупка',
     external_id: 'a1b2c3d4-0000-0000-0000-000000000001',
     kind: 'purchase',
+    category_hint: 'groceries',
   })
+})
+
+test('classificationCode не из четырёх цифр подсказкой не становится', () => {
+  const [op] = toOperations(parse([outcome({ classificationCode: 99997668 })]), 'card:1111111111111111')
+  expect(op?.category_hint).toBeNull()
+})
+
+test('отсутствие classificationCode — не ошибка', () => {
+  const [op] = toOperations(parse([outcome({ classificationCode: undefined })]), 'card:1111111111111111')
+  expect(op?.category_hint).toBeNull()
 })
 
 test('счёт прихода берётся из toResource, а не из fromResource', () => {
@@ -1157,7 +1170,7 @@ Expected: FAIL — `Failed to resolve import "./map"`
 ```typescript
 // Модель одна на все банки; здесь только реэкспорт, чтобы импорты внутри
 // плагина были короткими и симметричными Т-Банку
-export type { CollectedAccount, CollectedOperation } from '../contract'
+export type { CollectedAccount, CollectedOperation } from '../../core/contract'
 ```
 
 - [ ] **Step 4: Написать отображение**
@@ -1165,7 +1178,8 @@ export type { CollectedAccount, CollectedOperation } from '../contract'
 Создать `collector/src/plugins/sber/map.ts`:
 
 ```typescript
-import type { CollectedOperation } from '../contract'
+import { hintFromMcc } from '../../core/category-hints'
+import type { CollectedOperation } from '../../core/contract'
 
 /**
  * Отображение ответа Сбербанка в нашу модель. Вход — результат parseLossless,
@@ -1211,6 +1225,7 @@ function toOperation(item: unknown, accountId: string): CollectedOperation | nul
     description: limitDescription(description && description.length > 0 ? description : (correspondent ?? '')),
     external_id: id,
     kind: resolveKind(item),
+    category_hint: hintFromMcc(getStr(item, 'classificationCode')),
   }
 }
 
@@ -1315,10 +1330,18 @@ function getRecord(record: Record<string, unknown>, key: string): Record<string,
 }
 ```
 
+Про подсказку категории отдельно: `classificationCode` передаётся в общий
+`hintFromMcc` **как есть**, без своей проверки формата. Функция сама отсекает
+всё, что не является четырёхзначным MCC, — а именно так выглядят мусорные
+значения вроде `99997668`, встреченные разведкой. Заводить рядом вторую
+проверку значило бы держать два источника правды об одном словаре: разойдясь,
+они разошлись бы молча, и Сбер с Т-Банком стали бы категоризировать одну и ту
+же покупку по-разному.
+
 - [ ] **Step 5: Прогнать тесты**
 
 Run: `cd collector && pnpm vitest run src/plugins/sber/map.test.ts`
-Expected: PASS (десять тестов)
+Expected: PASS (двенадцать тестов)
 
 - [ ] **Step 6: Коммит**
 
@@ -1407,7 +1430,7 @@ Expected: FAIL — `toAccounts is not exported`
 Добавить в `collector/src/plugins/sber/map.ts`:
 
 ```typescript
-import type { CollectedAccount } from '../contract'
+import type { CollectedAccount } from '../../core/contract'
 
 /** Идентификатор карты в том виде, в каком его принимает фильтр истории. */
 export function cardResourceId(id: string): string {
@@ -1666,7 +1689,7 @@ export function createSberClient(credentials: Credentials, { ca, transport, time
 Создать `collector/src/plugins/sber/login.ts`:
 
 ```typescript
-import type { BrowserSession, LoginPrompt } from '../contract'
+import type { BrowserSession, LoginPrompt } from '../../core/contract'
 
 const LOGIN_URL = 'https://online.sberbank.ru'
 const COOKIE_ORIGIN = 'https://web-node3.online.sberbank.ru'
@@ -1727,7 +1750,7 @@ async function collectCookies(session: BrowserSession): Promise<string> {
 import type { AllowlistClient } from '../../http/allowlist-client'
 import { BankHttpError } from '../../http/allowlist-client'
 import type { Transport } from '../../http/transport'
-import type { BankPlugin, CollectedAccount, CollectedOperation, Credentials, LoginPrompt } from '../contract'
+import type { BankPlugin, CollectedAccount, CollectedOperation, Credentials, LoginPrompt } from '../../core/contract'
 import { createSberClient } from './client'
 import { obtainSberCookies } from './login'
 import { toAccounts, toOperations } from './map'
@@ -1868,7 +1891,7 @@ export function toSberDate(millis: number): string {
 В `collector/src/plugins/registry.ts` добавить Сбербанк. Плагину нужен корень сертификата, поэтому реестр становится функцией от него:
 
 ```typescript
-import type { BankPlugin } from './contract'
+import type { BankPlugin } from '../core/contract'
 import { createSberPlugin } from './sber'
 import { tbankPlugin } from './tbank'
 
@@ -1919,7 +1942,7 @@ git commit -m "Сбербанк: клиент с allowlist, вход, пагин
 import { rm } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { chromium, type BrowserContext } from 'playwright'
-import type { BrowserSession, LoginPrompt } from '../plugins/contract'
+import type { BrowserSession, LoginPrompt } from '../core/contract'
 import { ROOT_SPKI_SHA256 } from './trust-anchor'
 
 /** Профиль на банк: признаки устройства у банков свои и смешивать их незачем. */
@@ -2175,11 +2198,12 @@ test('имя парсера собирается из имени банка', as
 
 ```typescript
 import { fileURLToPath } from 'node:url'
-import type { BankPlugin, CollectedAccount, CollectedOperation, Credentials } from '../plugins/contract'
+import type { BankPlugin, CollectedAccount, Credentials } from '../core/contract'
 import { pluginFor } from '../plugins/registry'
 import { browserPrompt } from './browser'
 import { loadConfig, type CollectorConfig } from './config'
 import { pushOperations } from './push'
+import { reportMissingHints, reportUnknownKinds } from './report'
 import { osSecretStore, type SecretStore } from './secret-store'
 import { loadTrustAnchor } from './trust-anchor'
 
@@ -2240,17 +2264,11 @@ async function collect(
         ? `счёт ${appAccountId}: собрано ${operations.length}, импорт ${result.import_id}`
         : `счёт ${appAccountId}: операций за период нет`,
     )
+    // счётчики незнакомых видов и покупок без подсказки живут в общем report.ts:
+    // они одинаковы для всех банков, и вторая копия разошлась бы с первой
     reportUnknownKinds(appAccountId, operations)
+    reportMissingHints(appAccountId, operations)
   }
-}
-
-// Не ошибка, а повод дополнить словарь в плагине: банк завёл вид, которого мы
-// не знаем. Молчать нельзя — такие операции доедут с видом unknown и тихо
-// исказят картину по видам трат
-function reportUnknownKinds(appAccountId: string, operations: readonly CollectedOperation[]): void {
-  const count = operations.filter((operation) => operation.kind === 'unknown').length
-  if (count === 0) return
-  console.log(`счёт ${appAccountId}: вид операции не распознан у ${count} — банк прислал незнакомое значение`)
 }
 
 // Разовая подсказка человеку на его же машине: идентификаторы счетов банка
@@ -2293,93 +2311,7 @@ git commit -m "Раннер: выбор банка, сессия из храни
 
 ---
 
-## Task 10: Подсказка категории из MCC
-
-**Предусловие.** Эта задача выполняется, **только если поле `category_hint` уже есть в `main`** (этап 2c). Проверить:
-
-```bash
-grep -n "category_hint" backend/app/imports/schemas.py
-```
-
-Пусто — задачу пропустить и вернуться к ней после слияния этапа 2c. Всё остальное от неё не зависит.
-
-**Files:**
-- Modify: `collector/src/plugins/contract.ts`
-- Modify: `collector/src/plugins/sber/map.ts`
-- Modify: `collector/src/plugins/sber/map.test.ts`
-
-- [ ] **Step 1: Написать падающие тесты**
-
-Дописать в `collector/src/plugins/sber/map.test.ts`:
-
-```typescript
-test('четырёхзначный код уходит подсказкой категории', () => {
-  const [op] = toOperations(parse([outcome({ classificationCode: 5411 })]), 'card:1111111111111111')
-  expect(op?.category_hint).toBe('5411')
-})
-
-test('код вне четырёх знаков подсказкой не считается', () => {
-  const [op] = toOperations(parse([outcome({ classificationCode: 99997668 })]), 'card:1111111111111111')
-  expect(op?.category_hint).toBeUndefined()
-})
-
-test('отсутствие кода — не ошибка', () => {
-  const [op] = toOperations(parse([outcome({ classificationCode: undefined })]), 'card:1111111111111111')
-  expect(op?.category_hint).toBeUndefined()
-})
-```
-
-- [ ] **Step 2: Прогнать и убедиться, что падает**
-
-Run: `cd collector && pnpm vitest run src/plugins/sber/map.test.ts`
-Expected: FAIL — `category_hint` отсутствует в результате
-
-- [ ] **Step 3: Добавить поле в контракт**
-
-В `collector/src/plugins/contract.ts`, в `CollectedOperation`:
-
-```typescript
-  /** Подсказка банка о категории; отсутствует, если банк её не дал. */
-  category_hint?: string
-```
-
-- [ ] **Step 4: Заполнить подсказку в отображении**
-
-В `collector/src/plugins/sber/map.ts`, в возвращаемый объект `toOperation` добавить поле и рядом — функцию:
-
-```typescript
-    ...resolveCategoryHint(item),
-
-// Сбербанк кладёт MCC в classificationCode, но не всякое значение там MCC:
-// на живой выборке рядом с 5411 и 3991 попался 99997668. Критерий простой и
-// проверяемый — ровно четыре знака; всё остальное подсказкой не считаем, потому
-// что неверная подсказка хуже отсутствующей: она уводит категоризацию молча
-const MCC = /^\d{4}$/
-
-function resolveCategoryHint(item: Record<string, unknown>): { category_hint?: string } {
-  const raw = item['classificationCode']
-  const code = typeof raw === 'string' ? raw : undefined
-  return code && MCC.test(code) ? { category_hint: code } : {}
-}
-```
-
-Замечание про тип: после `parseLossless` числа приходят строками, поэтому проверка на `string` здесь верна, а ветка для `number` не нужна — она означала бы, что число уже прошло через float.
-
-- [ ] **Step 5: Прогнать тесты**
-
-Run: `cd collector && pnpm test && pnpm lint && pnpm build`
-Expected: зелено
-
-- [ ] **Step 6: Коммит**
-
-```bash
-git add collector/src/plugins
-git commit -m "Сбербанк: подсказка категории из MCC"
-```
-
----
-
-## Task 11: README и живой прогон
+## Task 10: README и живой прогон
 
 **Зачем.** README сейчас описывает один банк и обещает гарантию, которой для Сбербанка нет. И ни один плагин нельзя считать готовым до первого настоящего запуска — у Т-Банка живой прогон сломал три допущения из шести.
 
