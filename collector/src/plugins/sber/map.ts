@@ -9,7 +9,10 @@ import type { CollectedAccount, CollectedOperation } from '../../core/contract'
  * Как и у Т-Банка, запись, которую банк считает нашей операцией, но которую мы
  * не смогли разобрать, не пропускается молча — иначе банк переименует поле, и
  * сбор отрапортует успехом с пустым импортом. Намеренных тихих фильтра два:
- * isFinancial=false (это заявка, а не деньги) и операции чужой карты.
+ * isFinancial=false (это заявка, а не деньги) и операции чужой карты. Если же
+ * счёт не назван банком нигде — ни в fromResource, ни в toResource, — это не
+ * «чужая карта», а неразобранный ответ: такая запись роняет сбор, а не
+ * тихо пропускается по той же ветке.
  */
 export function toOperations(raw: readonly unknown[], accountId: string): CollectedOperation[] {
   const result: CollectedOperation[] = []
@@ -31,7 +34,11 @@ function toOperation(item: unknown, accountId: string): CollectedOperation | nul
   if (!id) throw new Error('У операции банка нет uohId')
   const context = `Операция ${id}`
 
-  if (resourceId(item) !== accountId) return null
+  const match = matchesAccount(item, accountId)
+  if (match === undefined) {
+    throw new Error(`${context}: не удалось определить счёт операции — банк не прислал id ни в fromResource, ни в toResource`)
+  }
+  if (!match) return null
 
   const amount = requireAmount(item, context)
   const currency = requireCurrency(item, context)
@@ -50,16 +57,25 @@ function toOperation(item: unknown, accountId: string): CollectedOperation | nul
 }
 
 /**
- * Счёт операции лежит в разных полях в зависимости от направления: у расхода в
- * fromResource, у прихода в toResource. Правило выведено на живой выборке из
- * 250 операций и выполнялось без исключений.
+ * Обычно счёт операции лежит в одном поле в зависимости от направления: у
+ * расхода в fromResource, у прихода в toResource. Но у перевода между своими
+ * картами (UfsTransferSelf, 21 запись из 250 в разведке) заполнены оба —
+ * банк описывает такую операцию с обеих сторон разом. Поэтому сторону не
+ * выбирают по присутствию поля: операция наша, если запрошенный accountId
+ * совпал хотя бы с одним из двух идентификаторов. Так спека (§7.2) выполняется
+ * буквально независимо от того, что банк заполнил.
+ *
+ * undefined означает не «не наша операция», а «не поняли, чья»: банк не
+ * прислал id ни в одном из полей, и это повод остановиться, а не тихо
+ * пропустить запись — см. заголовок файла.
  */
-function resourceId(item: Record<string, unknown>): string | undefined {
+function matchesAccount(item: Record<string, unknown>, accountId: string): boolean | undefined {
   const from = getRecord(item, 'fromResource')
   const fromId = from ? getStr(from, 'id') : undefined
-  if (fromId) return fromId
   const to = getRecord(item, 'toResource')
-  return to ? getStr(to, 'id') : undefined
+  const toId = to ? getStr(to, 'id') : undefined
+  if (fromId === undefined && toId === undefined) return undefined
+  return fromId === accountId || toId === accountId
 }
 
 // Знак у Сбербанка уже в самой сумме — в отличие от Т-Банка, где направление
@@ -73,6 +89,10 @@ function requireAmount(item: Record<string, unknown>, context: string): string {
   return raw
 }
 
+// Минус в проверке обязателен: у Сбербанка знак уже в сумме (см. requireAmount
+// выше), и банк вправе прислать "-0.00" — численно тот же ноль, что и "0.00",
+// просто с сохранённым знаком. Без "-?" такая запись проскочила бы проверку и
+// упала бы на бэкенде 422-м на всю пачку операций
 function isZeroAmount(value: string): boolean {
   return /^-?0(\.0+)?$/.test(value)
 }
@@ -108,7 +128,17 @@ function limitDescription(value: string): string {
 
 // Единственное место в системе, где живёт словарь Сбербанка. Значения собраны
 // на живой выборке; список заведомо неполон, и это нормально — незнакомое
-// значение даёт unknown и счётчик в выводе, а не остановку сбора
+// значение даёт unknown и счётчик в выводе, а не остановку сбора.
+//
+// ExtCardPaymentRefund (возврат покупки) идёт в purchase, а не в отдельный вид:
+// это содержательный выбор — сумма прихода уменьшает траты в категории, а не
+// раздувает доход, что и требуется от возврата.
+// UfsExtCardFee (комиссия карты) тоже идёт в purchase, но по другой причине —
+// вынужденной: вида «комиссия» в словаре видов операций приложения нет.
+//
+// ExtCardOtherOut (14 записей из 250 в разведке) в словарь намеренно не
+// попал: разведка не раскрыла смысл значения, а unknown со счётчиком в выводе
+// честнее угадывания.
 const BANK_FORM_TO_KIND: Record<string, string> = {
   ExtCardPayment: 'purchase',
   UfsQRSBP: 'purchase',
@@ -172,9 +202,28 @@ function toAccount(item: unknown): CollectedAccount {
 // лимита. Поэтому у кредитки остатком считаются собственные средства —
 // creditOwnSum, поле самой карты, а не вложенный блок creditType: тот приходит
 // только с отдельной ручки cardInfo (детали конкретной карты), которую этот
-// коллектор не вызывает
+// коллектор не вызывает.
+//
+// Сравнение регистронезависимое, а незнакомое значение type не считается ни
+// кредитным, ни дебетовым — в отличие от tbank/map.ts (BLOCKED_CARD_STATUS),
+// где нарочно проверяется известное нерабочее значение, чтобы новый статус
+// банка не спрятал молча рабочую карту. Здесь риск обратный: поле выбирает
+// между двумя разными по смыслу суммами, и creditOwnSum приходит у карт
+// обоих типов — значит, само его наличие ничего не различает. Догадка на
+// незнакомом значении type один раз подставила бы в остаток заёмные деньги,
+// поэтому единственный безопасный выбор для незнакомого значения — не
+// выбирать ничего.
+function cardTypeKind(item: Record<string, unknown>): 'credit' | 'debit' | 'unknown' {
+  const type = (getStr(item, 'type') ?? '').toLowerCase()
+  if (type === 'credit') return 'credit'
+  if (type === 'debit') return 'debit'
+  return 'unknown'
+}
+
 function balanceSource(item: Record<string, unknown>): Record<string, unknown> | undefined {
-  return getRecord(item, getStr(item, 'type') === 'credit' ? 'creditOwnSum' : 'availableLimit')
+  const kind = cardTypeKind(item)
+  if (kind === 'unknown') return undefined
+  return getRecord(item, kind === 'credit' ? 'creditOwnSum' : 'availableLimit')
 }
 
 function cardBalance(item: Record<string, unknown>): string | null {
@@ -182,9 +231,17 @@ function cardBalance(item: Record<string, unknown>): string | null {
   return source ? (getStr(source, 'amount') ?? null) : null
 }
 
+// Валюта — свойство карты, а не поля, выбранного под остаток: у кредитки без
+// creditOwnSum (см. balanceSource) остаток честно уходит в null, но валюта у
+// карты никуда не делась — она видна в availableLimit.currency. Поэтому здесь
+// проверяются оба денежных блока карты, а не только тот, что достался под
+// остаток.
 function cardCurrency(item: Record<string, unknown>): string | null {
-  const source = balanceSource(item)
-  const currency = source ? getRecord(source, 'currency') : undefined
+  return blockCurrency(getRecord(item, 'availableLimit')) ?? blockCurrency(getRecord(item, 'creditOwnSum'))
+}
+
+function blockCurrency(block: Record<string, unknown> | undefined): string | null {
+  const currency = block ? getRecord(block, 'currency') : undefined
   const code = currency ? getStr(currency, 'code') : undefined
   return code && ALPHA3_CURRENCY.test(code) ? code.toUpperCase() : null
 }
