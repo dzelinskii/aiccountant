@@ -8,7 +8,7 @@ from sqlalchemy.orm import aliased
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.core.operation_kinds import IN_STATS_KINDS, counts_in_stats
-from app.ledger.models import Account, Category, DescriptionRule, Transaction
+from app.ledger.models import Account, Category, Counterparty, DescriptionRule, Transaction
 
 
 def counts_in_stats_sql() -> ColumnElement[bool]:
@@ -184,19 +184,35 @@ async def description_rule_targets(
     """Ключ правила, его категория и направление категории — для применения
     правил к пачке операций без запроса на каждую строку.
 
+    Правило ведёт либо прямо в категорию, либо в контрагента, у которого
+    категория своя; берём ту, что нашлась. Контрагент без категории — законный
+    случай (он может быть просто именем), и такое правило в выборку не попадает:
+    подставлять из него нечего.
+
     Категорию присоединяем с тем же фильтром по workspace: правило и категория
     чужого workspace связаны только друг с другом, и одна снятая проверка
-    не должна открывать вторую.
+    не должна открывать вторую. Контрагента — по той же причине.
     """
+    own = aliased(Category)
+    via = aliased(Category)
+    counterparty = aliased(Counterparty)
+    category_id = func.coalesce(own.id, via.id)
+    kind = func.coalesce(own.kind, via.kind)
     rows = await db.execute(
-        select(DescriptionRule.normalized_text, DescriptionRule.category_id, Category.kind)
-        .join(Category, Category.id == DescriptionRule.category_id)
-        .where(
-            DescriptionRule.workspace_id == workspace_id,
-            Category.workspace_id == workspace_id,
+        select(DescriptionRule.normalized_text, category_id, kind)
+        .outerjoin(
+            own,
+            (own.id == DescriptionRule.category_id) & (own.workspace_id == workspace_id),
         )
+        .outerjoin(
+            counterparty,
+            (counterparty.id == DescriptionRule.counterparty_id)
+            & (counterparty.workspace_id == workspace_id),
+        )
+        .outerjoin(via, (via.id == counterparty.category_id) & (via.workspace_id == workspace_id))
+        .where(DescriptionRule.workspace_id == workspace_id, category_id.is_not(None))
     )
-    return [(text, category_id, kind) for text, category_id, kind in rows.all()]
+    return [(text, cid, k) for text, cid, k in rows.all()]
 
 
 async def get_description_rule(
