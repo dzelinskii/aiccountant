@@ -58,7 +58,10 @@ export const CATEGORY_HINTS: readonly CategoryHint[] = [
 
 // Коды, которые встречаются в быту. Полный список MCC — около тысячи значений,
 // и переписывать его целиком незачем: незнакомый код просто не даёт подсказки.
-const MCC_TO_HINT: Record<string, CategoryHint> = {
+// export — ради сторожа задвоенных ключей: он считает коды в исходнике и
+// сверяет их число с этим объектом. Без сверки с объектом сторож не отличил бы
+// «дублей нет» от «разобрал не всю таблицу»
+export const MCC_TO_HINT: Record<string, CategoryHint> = {
   // еда
   '5411': 'groceries', '5412': 'groceries', '5422': 'groceries', '5441': 'groceries',
   '5451': 'groceries', '5462': 'groceries', '5499': 'groceries',
