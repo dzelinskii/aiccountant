@@ -2019,7 +2019,6 @@ import { rm } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { chromium, type BrowserContext } from 'playwright'
 import type { BrowserSession, LoginPrompt } from '../core/contract'
-import { ROOT_SPKI_SHA256 } from './trust-anchor'
 
 /** Профиль на банк: признаки устройства у банков свои и смешивать их незачем. */
 export function profileDir(bank: string): string {
