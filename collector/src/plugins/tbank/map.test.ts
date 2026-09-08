@@ -278,6 +278,80 @@ test('вид операции берётся из группы банка по �
   expect(op4?.kind).toBe('transfer_person')
 })
 
+test('метка банка становится подсказкой', () => {
+  const [op] = toOperations([baseOperation({ spendingCategory: { id: '1', name: 'Супермаркеты' } })])
+  expect(op?.category_hint).toBe('groceries')
+})
+
+test('без метки подсказка берётся из MCC', () => {
+  const [op] = toOperations([baseOperation({ mcc: '5812' })])
+  expect(op?.category_hint).toBe('dining')
+})
+
+test('метка банка приоритетнее MCC', () => {
+  // банк выводит метку из MCC плюс знания о самой точке — она информативнее
+  const [op] = toOperations([baseOperation({ spendingCategory: { id: '1', name: 'Такси' }, mcc: '5812' })])
+  expect(op?.category_hint).toBe('taxi')
+})
+
+test('игнорируемая метка к MCC не проваливается', () => {
+  // «Переводы» — решение, а не пробел: MCC у перевода всё равно заглушка
+  const [op] = toOperations([baseOperation({ spendingCategory: { id: '1', name: 'Переводы' }, mcc: '5812' })])
+  expect(op?.category_hint).toBeNull()
+})
+
+test('незнакомая метка проваливается к MCC', () => {
+  const [op] = toOperations([baseOperation({ spendingCategory: { id: '1', name: 'Криптолавка' }, mcc: '5812' })])
+  expect(op?.category_hint).toBe('dining')
+})
+
+test('без метки и без MCC подсказки нет', () => {
+  const [op] = toOperations([baseOperation()])
+  expect(op?.category_hint).toBeNull()
+})
+
+// Неразрывный пробел — так эти имена пишет сам банк. Через константу, а не
+// живым символом в строке: живой символ однажды «починят» в обычный пробел,
+// и тест станет пустой проверкой
+const NBSP = String.fromCharCode(0x00a0)
+
+test('метка с неразрывным пробелом находится в таблице', () => {
+  // так это имя стоит в справочнике банка, а поток операций одинакового
+  // написания не обещает — поэтому имя ищется нормализованным
+  const [op] = toOperations([baseOperation({ spendingCategory: { name: `Ремонт и${NBSP}мебель` } })])
+  expect(op?.category_hint).toBe('home')
+})
+
+test('игнорируемая метка узнаётся при другом написании пробела', () => {
+  // нормализация нужна обоим поискам, а не только переводу в подсказку: без неё
+  // такая метка сойдёт за незнакомую и подсказка приедет из заглушечного MCC
+  const [op] = toOperations([
+    baseOperation({ spendingCategory: { name: `Эл. кошельки и${NBSP}переводы` }, mcc: '5812' }),
+  ])
+  expect(op?.category_hint).toBeNull()
+})
+
+test('имя из прототипа в метке не становится подсказкой', () => {
+  // таблица подсказок — обычный объект, и поиск по нему без проверки на
+  // собственное свойство вернул бы функцию из прототипа вместо подсказки
+  const [op] = toOperations([baseOperation({ spendingCategory: { name: 'toString' } })])
+  expect(op?.category_hint).toBeNull()
+})
+
+test('нестроковая метка не роняет разбор', () => {
+  const [op] = toOperations([baseOperation({ spendingCategory: { name: 42 }, mcc: '5812' })])
+  expect(op?.category_hint).toBe('dining')
+})
+
+test('подсказка считается по всей пачке', () => {
+  // в фикстуре mcc приходит числом, как и у банка: подсказка обязана
+  // получаться из того же parseLossless, что и на боевом пути
+  const [op1, op2, op4] = toOperations(operationsPayload())
+  expect(op1?.category_hint).toBe('dining')
+  expect(op2?.category_hint).toBeNull()
+  expect(op4?.category_hint).toBeNull()
+})
+
 test('toAccounts приводит счета к нашей модели', () => {
   const accounts = toAccounts(accountsPayload())
   expect(accounts).toEqual([

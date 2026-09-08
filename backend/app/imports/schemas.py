@@ -6,6 +6,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.core.category_hints import CategoryHint
 from app.core.money import MoneyStr
 from app.core.operation_kinds import OperationKind
 
@@ -89,6 +90,9 @@ class ParsedOperationIn(BaseModel):
     # вид операции в нашем словаре; словарь конкретного банка переводит коннектор.
     # unknown по умолчанию — источники без классификации (PDF-выписка) валидны
     kind: OperationKind = "unknown"
+    # подсказка банка о категории в нашем словаре; слова банка переводит
+    # коннектор. None — источник о категории ничего не сообщил (PDF-выписка)
+    category_hint: CategoryHint | None = None
 
     @field_validator("amount", mode="before")
     @classmethod

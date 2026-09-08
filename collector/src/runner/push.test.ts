@@ -1,6 +1,6 @@
 import { expect, test, vi } from 'vitest'
 import type { FetchImpl } from '../http/allowlist-client'
-import type { CollectedAccount } from '../plugins/tbank/types'
+import type { CollectedAccount, CollectedOperation } from '../plugins/tbank/types'
 import type { CollectorConfig } from './config'
 import { pushOperations } from './push'
 
@@ -12,7 +12,9 @@ const CONFIG: CollectorConfig = {
   days: 30,
 }
 
-const OPERATIONS = [
+// Тип указан явно: новое поле операции тогда обнаружится здесь, в одном месте,
+// а не семью одинаковыми ошибками на вызовах pushOperations
+const OPERATIONS: CollectedOperation[] = [
   {
     occurred_at: '2026-07-05',
     amount: '-1150.50',
@@ -20,6 +22,7 @@ const OPERATIONS = [
     description: 'Кофейня',
     external_id: 'op-1',
     kind: 'purchase',
+    category_hint: 'dining',
   },
 ]
 
@@ -58,6 +61,21 @@ test('операции уходят с токеном в заголовке и �
   // вид операции — часть договора с бэкендом: без него импорт молча вернётся
   // к unknown, и переводы снова попадут в расходы
   expect(String(init?.body)).toContain('"kind":"purchase"')
+})
+
+test('подсказка о категории уезжает вместе с операцией', async () => {
+  // стык, на котором поле легко потерять: тело запроса собирается из объекта
+  // операции, и без подсказки категории снова ждали бы языковую модель
+  const fetchImpl = vi.fn<FetchImpl>(async () => jsonResponse({ import_id: 'imp-1', status: 'ready' }, 201))
+
+  const withoutHint: CollectedOperation = { ...OPERATIONS[0]!, external_id: 'op-2', category_hint: null }
+
+  await pushOperations(CONFIG, 'acc-app', [...OPERATIONS, withoutHint], undefined, fetchImpl)
+
+  const operations = sentBody(fetchImpl)['operations'] as Array<Record<string, unknown>>
+  expect(operations[0]?.['category_hint']).toBe('dining')
+  // null уезжает полем, а не выпадает из тела: для бэкенда это «банк не подсказал»
+  expect(operations[1]).toHaveProperty('category_hint', null)
 })
 
 test('остаток и метки карт уходят блоком про счёт', async () => {

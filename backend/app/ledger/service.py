@@ -7,6 +7,7 @@ from typing import NamedTuple
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.category_hints import HINT_DEFAULTS
 from app.core.operation_kinds import OperationKind, kind_from_amount
 from app.ledger import repository
 from app.ledger.balance import adjustment_for, visible_balance
@@ -329,6 +330,74 @@ def category_for_description(
     if target is None or not category_matches_amount(target.kind, amount):
         return None
     return target.category_id
+
+
+async def find_category_by_name(
+    db: AsyncSession, workspace_id: uuid.UUID, name: str
+) -> Category | None:
+    """Категория верхнего уровня по имени — родитель для подсказки."""
+    return await repository.category_by_name(db, workspace_id, name, None)
+
+
+async def resolve_hint_category(
+    db: AsyncSession, workspace_id: uuid.UUID, hint: str, amount: Decimal
+) -> uuid.UUID | None:
+    """Категория, в которую садится подсказка банка; None — подсказка не сработала.
+
+    Заводит подкатегорию при первой же операции с такой подсказкой: дерево
+    пополняется только тем, на что человек действительно тратит.
+
+    Не срабатывает молча в четырёх случаях, и все четыре — не ошибка:
+    подсказки нет в словаре (разошлись версии коннектора и приложения),
+    знак суммы не совпал с направлением категории, родителя удалили,
+    имя занято категорией с другим направлением.
+    """
+    target = HINT_DEFAULTS.get(hint)
+    if target is None or not category_matches_amount(target.kind, amount):
+        return None
+
+    existing = await repository.category_by_hint(db, workspace_id, hint)
+    if existing is not None:
+        # направление помеченной категории не перепроверяем: отметку ставим
+        # только мы и только при совпадении направлений, а сменить kind через
+        # API нельзя (CategoryUpdate — это имя и родитель). Проверка понадобится
+        # и здесь, как только отметку станет можно ставить не отсюда: редактируемый
+        # kind или проставление hint руками
+        return existing.id
+
+    parent = await find_category_by_name(db, workspace_id, target.parent)
+    if parent is None:
+        # человек удалил родителя — воскрешать его подсказкой не наше дело
+        return None
+    if target.sub is None:
+        # подсказка садится в самого родителя: помечаем его и не плодим уровень.
+        # Категорию с другим направлением не захватываем: операция с ней
+        # не проведётся, а импорт этот отказ не ловит и упал бы всей пачкой
+        # из-за одной строки
+        if parent.kind != target.kind:
+            return None
+        parent.hint = hint
+        await db.flush()
+        return parent.id
+
+    # имя могло быть занято своей категорией человека — тогда берём её и
+    # помечаем, а не заводим вторую с тем же именем под тем же родителем.
+    # Направление сверяем по той же причине, что и у родителя: доходные
+    # «Продукты» под расходной «Едой» человек завести волен
+    child = await repository.category_by_name(db, workspace_id, target.sub, parent.id)
+    if child is None:
+        child = Category(
+            workspace_id=workspace_id,
+            parent_id=parent.id,
+            name=target.sub,
+            kind=target.kind,
+        )
+        repository.add_category(db, child)
+    elif child.kind != target.kind:
+        return None
+    child.hint = hint
+    await db.flush()
+    return child.id
 
 
 class SignMismatchError(Exception):

@@ -82,6 +82,7 @@ def _statement_to_payload(statement: ParsedStatement, warnings: list[str]) -> di
                 "currency": op.currency,
                 "description": op.description,
                 "kind": op.kind,
+                "category_hint": op.category_hint,
             }
             for op in statement.operations
         ],
@@ -89,6 +90,13 @@ def _statement_to_payload(statement: ParsedStatement, warnings: list[str]) -> di
         "total_expense": None if statement.total_expense is None else str(statement.total_expense),
         "warnings": warnings,
     }
+
+
+def _optional_str(value: object) -> str | None:
+    """Строка из JSONB или None. Отдельная функция, потому что str(None) даёт
+    "None" — строку, которая ни одной подсказке не соответствует, но выглядит
+    как значение."""
+    return None if value is None else str(value)
 
 
 def _finite_decimal(raw: object) -> Decimal:
@@ -179,6 +187,9 @@ def _payload_to_statement(payload: dict[str, object]) -> ParsedStatement:
                 description="" if op.get("description") is None else str(op["description"]),
                 # у импортов, созданных до появления вида, ключа нет — это не порча
                 kind=str(op.get("kind", "unknown")),
+                # у импортов, созданных до появления подсказки, ключа нет —
+                # это не порча, а прежняя версия payload
+                category_hint=_optional_str(op.get("category_hint")),
             )
             for op in raw_ops
         ]
@@ -252,6 +263,7 @@ async def create_parsed_import(
                 currency=op.currency,
                 description=op.description,
                 kind=op.kind,
+                category_hint=op.category_hint,
             )
             for op in operations
         ],
@@ -484,6 +496,12 @@ async def commit_from_import(
     # тысяч, и запрос на строку сделал бы синхронную ручку N+1
     rules = await ledger_service.load_description_rules(db, workspace_id)
 
+    # resolve_hint_category ходит в базу, а операций в пачке до 25 000: без
+    # памятки вышел бы запрос на строку — та же беда, от которой выше спасает
+    # чтение правил разом. Ключ со знаком, потому что расходная подсказка на
+    # приходе намеренно не срабатывает, и один ответ на подсказку был бы неверен
+    hint_categories: dict[tuple[str, bool], uuid.UUID | None] = {}
+
     seen: set[str] = set()
     imported = 0
     for op, eid in zip(statement.operations, ext_ids, strict=True):
@@ -493,14 +511,26 @@ async def commit_from_import(
         # правило «описание → категория» применяем только здесь: при ручном вводе
         # человек выбирает категорию сам, подставлять за него нечего. Флаг
         # category_confirmed при этом не ставим — человек подтвердил правило,
-        # а не эту конкретную операцию
-        rule_category_id = ledger_service.category_for_description(rules, op.description, op.amount)
+        # а не эту конкретную операцию.
+        # Порядок конвейера: решение человека сильнее подсказки банка, подсказка
+        # банка сильнее догадки модели (она отработает позже, уже по остаткам).
+        # Подсказка не ставит category_confirmed по той же причине, что и правило,
+        # и не заводит выученного правила: иначе машинная догадка стала бы
+        # неотличима от подтверждения человека и пережила бы его отмену
+        category_id = ledger_service.category_for_description(rules, op.description, op.amount)
+        if category_id is None and op.category_hint is not None:
+            key = (op.category_hint, op.amount < 0)
+            if key not in hint_categories:
+                hint_categories[key] = await ledger_service.resolve_hint_category(
+                    db, workspace_id, op.category_hint, op.amount
+                )
+            category_id = hint_categories[key]
         await ledger_service.post_transaction(
             db,
             workspace_id,
             user_id,
             account_id=imp.account_id,
-            category_id=rule_category_id,
+            category_id=category_id,
             amount=op.amount,
             occurred_at=op.occurred_at,
             source="import",

@@ -145,3 +145,28 @@ async def test_migrations_create_api_tokens(database_url: str) -> None:
         columns = {name for (name,) in rows.all()}
     await engine.dispose()
     assert {"id", "workspace_id", "name", "token_hash", "revoked_at"} <= columns
+
+
+async def test_migrations_add_category_hint(database_url: str) -> None:
+    engine = create_async_engine(database_url)
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT is_nullable FROM information_schema.columns "
+                "WHERE table_name = 'categories' AND column_name = 'hint'"
+            )
+        )
+        nullable = rows.scalar()
+        indexes = await conn.execute(
+            text("SELECT indexdef FROM pg_indexes WHERE indexname = :name"),
+            {"name": "ix_categories_workspace_hint"},
+        )
+        indexdef = indexes.scalar()
+    await engine.dispose()
+    # отметка обязана быть nullable: категорий без подсказки — большинство
+    assert nullable == "YES"
+    # уникальность именно по паре: одна подсказка — одна категория внутри
+    # workspace, иначе разрешение подсказки перестаёт быть однозначным
+    assert indexdef is not None
+    assert "UNIQUE" in indexdef
+    assert "workspace_id" in indexdef and "hint" in indexdef
