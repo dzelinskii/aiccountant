@@ -422,3 +422,28 @@ async def test_a_rule_of_another_workspace_does_not_hide_a_signature(
     assert await _unknown_signatures(client, ws_alice) == [
         {"text": "денис з.", "operations": 1, "sent": 1, "received": 0}
     ]
+
+
+async def test_rules_listing_survives_a_counterparty_rule(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Правило через контрагента категории не имеет, и выдача правил обязана
+    это пережить: объяви схема категорию обязательной — ручка отвечала бы
+    пятисоткой на проверке собственного ответа."""
+    ws, _ = await _register(client, ALICE)
+    cp = _add_counterparty(db_session, ws, "Денис", None)
+    await db_session.flush()
+    _add_signature(db_session, ws, "денис з.", cp.id)
+    await db_session.flush()
+
+    resp = await client.get("/api/description-rules", params={"workspace_id": ws})
+    assert resp.status_code == 200
+    assert resp.json() == [
+        {
+            "id": resp.json()[0]["id"],
+            "normalized_text": "денис з.",
+            "category_id": None,
+            "counterparty_id": str(cp.id),
+            "source": "manual",
+        }
+    ]

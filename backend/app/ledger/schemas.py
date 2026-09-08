@@ -66,7 +66,12 @@ class DescriptionRuleOut(BaseModel):
     # и человек должен видеть тот ключ, который реально сработает
     id: uuid.UUID
     normalized_text: str
-    category_id: uuid.UUID
+    # ровно одно из двух непусто: правило ведёт либо прямо в категорию, либо в
+    # контрагента, у которого категория своя (ограничение в БД это и требует).
+    # Объяви category_id обязательным — первое же правило через контрагента
+    # уронило бы выдачу правил пятисоткой на проверке схемы
+    category_id: uuid.UUID | None
+    counterparty_id: uuid.UUID | None
     source: str
 
 
