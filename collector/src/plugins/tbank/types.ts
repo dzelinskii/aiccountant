@@ -7,6 +7,8 @@ export interface CollectedOperation {
   external_id: string
   /** Вид операции в словаре приложения; словарь банка переводится здесь, в плагине. */
   kind: string
+  /** Подсказка о категории в словаре приложения; null — банк не подсказал. */
+  category_hint: string | null
 }
 
 export interface CollectedAccount {

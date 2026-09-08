@@ -1,3 +1,4 @@
+import { hintFromMcc, type CategoryHint } from '../../core/category-hints'
 import type { CollectedAccount, CollectedOperation } from './types'
 
 /**
@@ -60,6 +61,7 @@ function toOperation(item: unknown): CollectedOperation | null {
     description: limitDescription(description && description.length > 0 ? description : (merchantName ?? '')),
     external_id: id,
     kind: resolveKind(item),
+    category_hint: resolveHint(item),
   }
 }
 
@@ -200,6 +202,158 @@ function resolveKind(item: Record<string, unknown>): string {
   // и группа вроде "toString" достала бы из прототипа функцию вместо вида
   if (!Object.hasOwn(BANK_GROUP_TO_KIND, group)) return 'unknown'
   return BANK_GROUP_TO_KIND[group] ?? 'unknown'
+}
+
+// Имя категории у банка сравнивается не побайтово. Причина в типографике: в
+// трёх названиях справочника («Ремонт и мебель», «Книги и канцтовары»,
+// «Гаджеты и техника») после союза стоит неразрывный пробел, а не обычный.
+// Справочник и поток операций — разные ответы банка, и одинакового написания
+// там никто не обещает; побайтовое сравнение потеряло бы такую категорию молча:
+// подсказки просто не стало бы, а невидимый символ в исходнике не объяснил бы
+// почему. Тот же приём и по той же причине — normalize_description
+// в backend/app/ledger/service.py.
+//
+// Регистр не трогаем: справочник банка — фиксированный список с осмысленным
+// регистром, приведение к нижнему только мешало бы читать таблицу.
+export function normalizeBankCategoryName(name: string): string {
+  return name.normalize('NFC').replace(/\s+/g, ' ').trim()
+}
+
+// Второе — и последнее — место, где живёт словарь Т-Банка. Справочник банка
+// (90 значений, ручка operations_category_list_bank) сжимается в наши 37
+// подсказок: перевод один к одному завёл бы в дереве человека «Duty Free» и
+// «Металлы в слитках», то есть словарь банка в чужом интерфейсе.
+//
+// Ключ — имя, а не id: таблицу правит человек, и она должна читаться.
+// Переименование у банка соответствие порвёт, но не тихо — такая операция
+// приедет без подсказки и попадёт в счётчик при сборе. Ключи пишутся сразу
+// в каноническом виде (обычные пробелы, по одному), а искать по таблице надо
+// через normalizeBankCategoryName — так и таблица читаема, и на каждое
+// обращение ничего не перестраивается.
+export const BANK_CATEGORY_TO_HINT: Record<string, CategoryHint> = {
+  Супермаркеты: 'groceries',
+  'Онлайн-супермаркеты': 'groceries',
+  Булочные: 'groceries',
+  Рестораны: 'dining',
+  Фастфуд: 'dining',
+  Такси: 'taxi',
+  'Местный транспорт': 'transit',
+  Транспорт: 'transit',
+  Заправки: 'fuel',
+  'Зарядка электромобилей': 'fuel',
+  Парковки: 'parking',
+  'Платные дороги': 'parking',
+  Автомойки: 'car',
+  Автоуслуги: 'car',
+  Автосалоны: 'car',
+  'Аренда авто': 'car_rental',
+  Каршеринг: 'car_rental',
+  Самокаты: 'car_rental',
+  Авиабилеты: 'travel',
+  'Ж/д билеты': 'travel',
+  Турагентства: 'travel',
+  Отели: 'travel',
+  'Duty Free': 'travel',
+  ЖКХ: 'utilities',
+  'Ремонт и мебель': 'home',
+  Охрана: 'home',
+  'Мобильная связь': 'mobile',
+  Телефония: 'mobile',
+  Связь: 'mobile',
+  Интернет: 'internet',
+  Телевидение: 'internet',
+  Развлечения: 'entertainment',
+  Искусство: 'entertainment',
+  Лотереи: 'entertainment',
+  Соцсети: 'entertainment',
+  Кино: 'cinema',
+  'Онлайн-кинотеатры': 'cinema',
+  Музыка: 'music',
+  'Цифровые товары': 'music',
+  Тренировки: 'sports',
+  Спорттовары: 'sports',
+  Аптеки: 'pharmacy',
+  Медицина: 'medical',
+  Красота: 'beauty',
+  Косметика: 'beauty',
+  'Одежда и обувь': 'clothing',
+  'Одежда и обувь онлайн': 'clothing',
+  'Ювелирные изделия и часы': 'jewelry',
+  'Гаджеты и техника': 'electronics',
+  'Интернет-магазины': 'marketplace',
+  Маркетплейсы: 'marketplace',
+  'Различные товары': 'marketplace',
+  Животные: 'pets',
+  'Детские товары': 'kids',
+  Подарки: 'gifts',
+  'Подарки и творчество': 'gifts',
+  Цветы: 'gifts',
+  Образование: 'education',
+  'Книги и канцтовары': 'education',
+  Канцтовары: 'education',
+  Благотворительность: 'charity',
+  НКО: 'charity',
+  Налоги: 'taxes',
+  Штрафы: 'taxes',
+  Госуслуги: 'taxes',
+  'Услуги банка': 'bank_fees',
+  Комиссия: 'bank_fees',
+  'Различные услуги': 'services',
+  Сервис: 'services',
+  'Нотариальные услуги': 'services',
+  'Фото и копицентры': 'services',
+  'Сетевой маркетинг': 'services',
+  'Экосистема Сбер': 'ecosystem',
+  'Экосистема Яндекс': 'ecosystem',
+  Зарплата: 'salary',
+  'Соцвыплаты и пенсии': 'benefits',
+  Проценты: 'interest',
+  'Дивиденды и купоны': 'interest',
+  Бонусы: 'cashback',
+}
+
+// Значения справочника, которым подсказка не назначается намеренно. Список
+// явный, а не «всё остальное»: молчаливый пропуск неотличим от забытой строки.
+export const IGNORED_BANK_CATEGORIES: ReadonlySet<string> = new Set([
+  // виды операций — разобраны resolveKind, категорией не являются
+  'Переводы',
+  'Наличные',
+  'Пополнения',
+  'Эл. кошельки и переводы',
+  // перекладывание денег, а не трата
+  'Вклады',
+  'Инвестиции',
+  'Металлы',
+  'Металлы в слитках',
+  'Финансы',
+  // отдельный скоуп кредитных счетов
+  'Кредиты',
+  // бессодержательно по построению: у владельца этим помечены 167 операций из 167
+  'Другое',
+])
+
+/**
+ * Подсказка о категории: сперва собственная метка банка, затем MCC.
+ *
+ * Метка первая, потому что информативнее: банк выводит её из MCC плюс знания о
+ * торговой точке, и на живых данных покрывает 163 операции из 167 против 26 у
+ * MCC. Явно игнорируемая метка к MCC не проваливается: это решение, а не
+ * пробел, и MCC у таких операций всё равно заглушка.
+ *
+ * Незнакомая метка — не повод останавливаться: банк вправе завести значение в
+ * любой момент. Операция приедет без подсказки и попадёт в счётчик при сборе.
+ */
+function resolveHint(item: Record<string, unknown>): CategoryHint | null {
+  const spending = getRecord(item, 'spendingCategory')
+  const rawName = spending ? getStr(spending, 'name') : undefined
+  if (rawName !== undefined) {
+    const name = normalizeBankCategoryName(rawName)
+    // проверка на собственное свойство обязательна: таблица — обычный объект,
+    // и метка вроде "toString" достала бы из прототипа функцию вместо подсказки
+    if (Object.hasOwn(BANK_CATEGORY_TO_HINT, name)) return BANK_CATEGORY_TO_HINT[name] ?? null
+    if (IGNORED_BANK_CATEGORIES.has(name)) return null
+  }
+  return hintFromMcc(getStr(item, 'mcc'))
 }
 
 const ALPHA3_CURRENCY = /^[A-Za-z]{3}$/

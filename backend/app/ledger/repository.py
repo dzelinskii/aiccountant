@@ -4,6 +4,7 @@ from decimal import Decimal
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.core.operation_kinds import IN_STATS_KINDS, counts_in_stats
@@ -110,6 +111,37 @@ async def get_category(
 ) -> Category | None:
     category: Category | None = await db.scalar(
         select(Category).where(Category.id == category_id, Category.workspace_id == workspace_id)
+    )
+    return category
+
+
+async def category_by_hint(db: AsyncSession, workspace_id: uuid.UUID, hint: str) -> Category | None:
+    category: Category | None = await db.scalar(
+        select(Category).where(Category.workspace_id == workspace_id, Category.hint == hint)
+    )
+    return category
+
+
+async def category_by_name(
+    db: AsyncSession, workspace_id: uuid.UUID, name: str, parent_id: uuid.UUID | None
+) -> Category | None:
+    """Категория с таким именем под таким родителем (parent_id = None — верхний
+    уровень).
+
+    Имена категорий ничем не ограничены, и одноимённых под одним родителем может
+    оказаться несколько; берём самую раннюю. Без порядка выбирал бы план запроса,
+    и та же подсказка садилась бы то в одну категорию, то в другую — «вчера
+    работало иначе» без единой правки. id — тай-брейк: created_at берётся из
+    func.now() и у категорий, созданных в одной транзакции, совпадает.
+    """
+    category: Category | None = await db.scalar(
+        select(Category)
+        .where(
+            Category.workspace_id == workspace_id,
+            Category.name == name,
+            Category.parent_id == parent_id,
+        )
+        .order_by(Category.created_at, Category.id)
     )
     return category
 
@@ -253,10 +285,27 @@ async def delete_transaction(db: AsyncSession, transaction: Transaction) -> None
 async def month_expenses_by_category(
     db: AsyncSession, workspace_id: uuid.UUID, month_start: date, next_month_start: date
 ) -> list[tuple[uuid.UUID | None, str | None, Decimal]]:
+    """Расходы месяца по категориям верхнего уровня.
+
+    Подкатегории сворачиваются в родителя: итоги на дашборде считаются по
+    верхнему уровню — он стабилен и задан человеком, — а детализация, которую
+    приносит банк, видна в ленте операций. Без свёртки первый же сбор с
+    подсказками опустошил бы «Еду», разложив её по «Продуктам» и «Кафе».
+
+    Дерево в спеке двухуровневое, и свёртка поднимает ровно на один уровень:
+    у категории третьего уровня родитель — подкатегория, в неё она и сложится.
+    """
     total = func.sum(-Transaction.amount)
+    # COALESCE, а не JOIN на родителя: у категории верхнего уровня parent_id
+    # пуст, и она должна считаться сама по себе. У операции без категории пусты
+    # обе стороны — она остаётся отдельной строкой без имени, как и была
+    top_id = func.coalesce(Category.parent_id, Category.id)
+    parent = aliased(Category)
+    top_name = func.coalesce(parent.name, Category.name)
     rows = await db.execute(
-        select(Transaction.category_id, Category.name, total)
+        select(top_id, top_name, total)
         .outerjoin(Category, Category.id == Transaction.category_id)
+        .outerjoin(parent, parent.id == Category.parent_id)
         .where(
             Transaction.workspace_id == workspace_id,
             Transaction.amount < 0,
@@ -264,7 +313,7 @@ async def month_expenses_by_category(
             Transaction.occurred_at >= month_start,
             Transaction.occurred_at < next_month_start,
         )
-        .group_by(Transaction.category_id, Category.name)
+        .group_by(top_id, top_name)
         .order_by(total.desc())
     )
     return [(cid, name, Decimal(t)) for cid, name, t in rows.all()]

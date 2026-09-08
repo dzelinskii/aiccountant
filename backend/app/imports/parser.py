@@ -27,6 +27,9 @@ class ParsedOperation:
     description: str
     # значение по умолчанию — чтобы парсеры PDF и LLM не менялись: они вида не знают
     kind: str = "unknown"
+    # None — источник о категории не сообщил; тип str, а не CategoryHint, по той
+    # же причине, что и у kind: словарём значение становится на входе в ledger
+    category_hint: str | None = None
 
 
 @dataclass
