@@ -1442,7 +1442,7 @@ function creditCard(overrides: Record<string, unknown> = {}): Record<string, unk
     state: 'active',
     number: '4276 55** **** 9876',
     availableLimit: { amount: '90000.00', currency: { code: 'RUB' } },
-    creditType: { creditOwnSum: { amount: '250.00', currency: { code: 'RUB' } } },
+    creditOwnSum: { amount: '250.00', currency: { code: 'RUB' } },
     ...overrides,
   }
 }
@@ -1524,17 +1524,16 @@ function toAccount(item: unknown): CollectedAccount {
  * у кредитки берём собственные средства.
  */
 function cardBalance(item: Record<string, unknown>): string | null {
-  if (getStr(item, 'type') === 'credit') {
-    const creditType = getRecord(item, 'creditType')
-    const ownSum = creditType ? getRecord(creditType, 'creditOwnSum') : undefined
-    return ownSum ? (getStr(ownSum, 'amount') ?? null) : null
-  }
-  const limit = getRecord(item, 'availableLimit')
-  return limit ? (getStr(limit, 'amount') ?? null) : null
+  // Оба поля лежат на самой карте, плоско: так их отдаёт section/meta, откуда
+  // берётся список счетов. Вложенный creditType с теми же именами существует,
+  // но в ответе другой ручки (cardInfo), которой в allowlist нет и которую
+  // коллектор не вызывает — перепутать их значит читать пустоту
+  const source = getRecord(item, getStr(item, 'type') === 'credit' ? 'creditOwnSum' : 'availableLimit')
+  return source ? (getStr(source, 'amount') ?? null) : null
 }
 
 function cardCurrency(item: Record<string, unknown>): string | null {
-  const source = getStr(item, 'type') === 'credit' ? getRecord(getRecord(item, 'creditType') ?? {}, 'creditOwnSum') : getRecord(item, 'availableLimit')
+  const source = getRecord(item, getStr(item, 'type') === 'credit' ? 'creditOwnSum' : 'availableLimit')
   const currency = source ? getRecord(source, 'currency') : undefined
   const code = currency ? getStr(currency, 'code') : undefined
   return code && ALPHA3_CURRENCY.test(code) ? code.toUpperCase() : null
