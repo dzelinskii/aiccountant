@@ -8,7 +8,8 @@
     "lint": "oxlint --deny-warnings",
     "build": "tsc --noEmit",
     "collect": "tsx src/runner/main.ts",
-    "forget": "tsx src/runner/forget.ts"
+    "forget": "tsx src/runner/forget.ts",
+    "docs": "tsx scripts/gen-reference.ts"
   },
   "devDependencies": {
     "@types/node": "^22",

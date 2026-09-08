@@ -124,7 +124,10 @@ export const MCC_TO_HINT: Record<string, CategoryHint> = {
 
 // Диапазоны, где у каждой компании свой код: перечислять сотни авиалиний и
 // гостиничных сетей поимённо смысла нет
-const MCC_RANGES: ReadonlyArray<{ from: number; to: number; hint: CategoryHint }> = [
+//
+// export — диапазоны входят в справочник: без них таблица кодов выглядит
+// полной, хотя ею не является
+export const MCC_RANGES: ReadonlyArray<{ from: number; to: number; hint: CategoryHint }> = [
   { from: 3000, to: 3299, hint: 'travel' }, // авиакомпании
   { from: 3500, to: 3999, hint: 'travel' }, // гостиничные сети
 ]
