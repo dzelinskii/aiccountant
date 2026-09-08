@@ -1,6 +1,9 @@
+import { readFileSync } from 'node:fs'
+import { createServer } from 'node:https'
+import { fileURLToPath } from 'node:url'
 import { expect, test, vi } from 'vitest'
 import { AllowlistClient, BankHttpError, NotAllowedError } from './allowlist-client'
-import { fetchTransport } from './transport'
+import { fetchTransport, httpsTransport } from './transport'
 import type { Transport } from './transport'
 
 const ALLOWED = [{ path: '/api/common/v1/session_status', method: 'GET' as const }]
@@ -104,7 +107,13 @@ test('запрос сопровождается сигналом отмены', 
 })
 
 test(
-  'таймаут прерывает зависшее тело ответа, а не только фазу заголовков',
+  // название описывает не то, что здесь проверяется: обрыв чтения тела при
+  // срабатывании сигнала здесь реализует сам фейковый fetchImpl (см. его
+  // обработчик abort ниже), а не транспорт под проверкой. Тест на деле
+  // подтверждает, что таймер AllowlistClient (см. комментарий у fetchText)
+  // не гасится к моменту чтения тела, а продолжает действовать и после
+  // получения заголовков
+  'сигнал таймаута AllowlistClient остаётся рабочим и во время чтения тела, не только до получения заголовков',
   async () => {
     // заголовки пришли (fetchImpl уже зарезолвился), а тело — нет: банк
     // "задумался" на середине выписки или мобильная сеть оборвалась.
@@ -233,6 +242,36 @@ test('сетевые сбои различимы и для транспорта 
   await expect(client.getJson('/api/common/v1/session_status')).rejects.toSatisfy(
     (e: Error) => e.message.includes('Error') && e.message.includes('ECONNREFUSED'),
   )
+})
+
+test('таймаут httpsTransport доходит до текста ошибки клиента как ETIMEDOUT, а не безымянной "(Error)"', async () => {
+  // сквозной сценарий через настоящий TLS-сервер: без кода на ошибке таймаута
+  // (см. abortError в transport.ts) describeCause показал бы голое "(Error)" —
+  // самый частый отказ банка остался бы единственным нечитаемым в списке
+  // остальных (ECONNREFUSED, ENOTFOUND, недоверенный сертификат)
+  const cert = readFileSync(fileURLToPath(new URL('../../tests/fixtures/https-test-cert.pem', import.meta.url)), 'utf-8')
+  const key = readFileSync(fileURLToPath(new URL('../../tests/fixtures/https-test-key.pem', import.meta.url)), 'utf-8')
+  const server = createServer({ cert, key }, (_req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    // тело намеренно не закрываем — банк "задумался"
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  if (address === null || typeof address === 'string') throw new Error('не удалось поднять тестовый сервер')
+
+  try {
+    const client = new AllowlistClient({
+      baseUrl: `https://127.0.0.1:${address.port}`,
+      allowed: ALLOWED,
+      credentials: CREDENTIALS,
+      transport: httpsTransport(cert),
+      timeoutMs: 50,
+    })
+    await expect(client.getJson('/api/common/v1/session_status')).rejects.toThrow(/ETIMEDOUT/)
+  } finally {
+    server.closeAllConnections()
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  }
 })
 
 test('текст ответа не пробрасывается при ошибке разбора', async () => {

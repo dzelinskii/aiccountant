@@ -168,6 +168,43 @@ test(
   5000,
 )
 
+test(
+  'httpsTransport: у ошибки таймаута есть код ETIMEDOUT, а не голое "Error"',
+  async () => {
+    const url = await startServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/plain' })
+      res.write('заголовки пришли, тело — никогда')
+    })
+
+    const transport = httpsTransport(SERVER_CERT)
+    await expect(
+      transport.send(url, { method: 'GET', headers: {}, signal: AbortSignal.timeout(50) }),
+    ).rejects.toMatchObject({ code: 'ETIMEDOUT' })
+  },
+  5000,
+)
+
+test(
+  'httpsTransport: уже отменённый сигнал реджектит сразу, не отправляя запрос',
+  async () => {
+    let hit = false
+    const url = await startServer((_req, res) => {
+      hit = true
+      res.writeHead(200)
+      res.end('{"ok":true}')
+    })
+
+    const transport = httpsTransport(SERVER_CERT)
+    const controller = new AbortController()
+    controller.abort()
+    await expect(
+      transport.send(url, { method: 'GET', headers: {}, signal: controller.signal }),
+    ).rejects.toThrow()
+    expect(hit).toBe(false)
+  },
+  1000,
+)
+
 test('httpsTransport: отказ соединения — понятная ошибка, а не зависание', async () => {
   // порт получаем у реального сервера и тут же освобождаем — соединяться
   // будем туда, где заведомо никто не слушает
@@ -215,4 +252,38 @@ test('httpsTransport: ответ 302 возвращается статусом, 
   expect(res.ok).toBe(false)
   // статус вне 2xx — тело сливается (res.resume()), а не копится в памяти
   expect(await res.text()).toBe('')
+})
+
+test('httpsTransport: редирект — это доказанное свойство, а не сторож за строкой "manual": по Location реально не ходим', async () => {
+  // предыдущие редирект-тесты гоняют поддельный fetch, который сам никуда не
+  // переходит — они сторожат литерал 'manual', а не поведение. Здесь второй
+  // сервер настоящий: если бы httpsTransport (или сам node:https) пошёл по
+  // Location, это отразилось бы в его счётчике попаданий
+  let secondServerHits = 0
+  const second = createServer({ cert: SERVER_CERT, key: SERVER_KEY }, (_req, res) => {
+    secondServerHits += 1
+    res.writeHead(200)
+    res.end('{"этот ответ клиент получить не должен":true}')
+  })
+  await new Promise<void>((resolve) => second.listen(0, '127.0.0.1', resolve))
+  const secondAddress = second.address()
+  if (secondAddress === null || typeof secondAddress === 'string') {
+    throw new Error('не удалось поднять второй тестовый сервер')
+  }
+
+  try {
+    const url = await startServer((_req, res) => {
+      res.writeHead(302, { Location: `https://127.0.0.1:${secondAddress.port}/` })
+      res.end()
+    })
+
+    const transport = httpsTransport(SERVER_CERT)
+    const res = await transport.send(url, { method: 'GET', headers: {}, signal: AbortSignal.timeout(2000) })
+
+    expect(res.status).toBe(302)
+    expect(secondServerHits).toBe(0)
+  } finally {
+    second.closeAllConnections()
+    await new Promise<void>((resolve) => second.close(() => resolve()))
+  }
 })
