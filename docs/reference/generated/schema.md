@@ -51,6 +51,9 @@
 - `hint` · `VARCHAR(30)` · может быть пустой
 - `created_at` · `TIMESTAMP WITH TIME ZONE` · обязательна · по умолчанию `now()`
 
+Индексы:
+- `ix_categories_workspace_hint` (уникальный): `workspace_id`, `hint`
+
 ## `memberships`
 
 - `user_id` · `UUID` · обязательна · первичный ключ · → `users.id`
