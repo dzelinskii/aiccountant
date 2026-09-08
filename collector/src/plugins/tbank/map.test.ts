@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { expect, test } from 'vitest'
 import { parseLossless } from '../../http/lossless-json'
-import { toAccounts, toOperations } from './map'
+import { BANK_SUBGROUP_TO_KIND, toAccounts, toOperations } from './map'
 
 // Фикстуры — это то, что реально отдаёт банк по сети: текст. Прогоняем его
 // через тот же parseLossless, что и боевой AllowlistClient, — иначе тест
@@ -533,4 +533,12 @@ test('нераспознанная валюта операции остаётс�
   expect(() =>
     toOperations([baseOperation({ accountAmount: { value: '100', currency: {} } })]),
   ).toThrow(/валют/)
+})
+
+test('ни одна подгруппа не ведёт обратно в доход', () => {
+  // на этом стоит счётчик в report.ts: он считает оставшиеся income, полагая,
+  // что доходом остались ровно нераспознанные подгруппы. Появись здесь
+  // отображение в income (например, когда найдём код зарплаты) — счётчик
+  // начнёт врать, и чинить надо будет его, а не этот тест
+  expect(Object.values(BANK_SUBGROUP_TO_KIND)).not.toContain('income')
 })

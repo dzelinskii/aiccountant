@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from 'vitest'
 import type { CollectedOperation } from '../plugins/tbank/types'
-import { reportMissingHints, reportUnknownKinds } from './report'
+import { reportMissingHints, reportUnknownKinds, reportUnrefinedIncome } from './report'
 
 function operation(overrides: Partial<CollectedOperation> = {}): CollectedOperation {
   return {
@@ -81,4 +81,48 @@ test('когда все виды операций распознаны, счёт
   reportUnknownKinds('acc-app', [operation()])
 
   expect(log.lines()).toEqual([])
+})
+
+test('счётчик называет приходы, оставшиеся доходом', () => {
+  const log = captureLog()
+
+  reportUnrefinedIncome('acc-app', [
+    operation({ external_id: 'op-1', kind: 'income' }),
+    operation({ external_id: 'op-2', kind: 'income' }),
+    operation({ external_id: 'op-3', kind: 'transfer_person' }),
+    operation({ external_id: 'op-4' }),
+  ])
+
+  expect(log.lines()).toEqual([
+    'счёт acc-app: приход не разобран у 2 — банк прислал незнакомую подгруппу',
+  ])
+})
+
+test('счётчик молчит, когда все приходы разобраны', () => {
+  // молчание — нормальное состояние: доходом остаются только те, чью подгруппу
+  // мы не знаем, и в обычный день таких нет
+  const log = captureLog()
+
+  reportUnrefinedIncome('acc-app', [
+    operation({ external_id: 'op-1', kind: 'transfer_person' }),
+    operation({ external_id: 'op-2', kind: 'cash' }),
+  ])
+
+  expect(log.lines()).toEqual([])
+})
+
+test('в выводе счётчика нет сумм и описаний', () => {
+  const log = captureLog()
+
+  reportUnrefinedIncome('acc-app', [
+    operation({
+      external_id: 'op-1',
+      kind: 'income',
+      amount: '9999.99',
+      description: 'Зарплата за август',
+    }),
+  ])
+
+  expect(log.lines().join(' ')).not.toContain('9999')
+  expect(log.lines().join(' ')).not.toContain('Зарплата')
 })

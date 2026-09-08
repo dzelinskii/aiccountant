@@ -4,7 +4,7 @@ import { SessionExpiredError, checkSession, fetchAccounts, fetchOperations } fro
 import type { CollectedAccount } from '../plugins/tbank/types'
 import { loadConfig, type CollectorConfig } from './config'
 import { pushOperations } from './push'
-import { reportMissingHints, reportUnknownKinds } from './report'
+import { reportMissingHints, reportUnknownKinds, reportUnrefinedIncome } from './report'
 import { obtainSessionToken } from './session'
 
 const DAY_MS = 86_400_000
@@ -58,6 +58,7 @@ async function collect(config: CollectorConfig, client: AllowlistClient, account
     )
     reportUnknownKinds(appAccountId, operations)
     reportMissingHints(appAccountId, operations)
+    reportUnrefinedIncome(appAccountId, operations)
   }
 }
 

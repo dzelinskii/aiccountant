@@ -32,3 +32,22 @@ export function reportMissingHints(appAccountId: string, operations: readonly Co
   if (count === 0) return
   console.log(`счёт ${appAccountId}: категория не определена у ${count} трат из ${purchases.length}`)
 }
+
+// Таблица подгрупп закрывает то, что видели в живых данных владельца. Банк
+// заведёт новый код — операция останется доходом, и узнать об этом можно только
+// здесь: тесты сверяются с нашей таблицей, а не с тем, что банк присылает
+// сегодня.
+//
+// Считаем оставшиеся income, а не «незнакомые подгруппы»: ни одна строка
+// таблицы не ведёт в income (это закреплено тестом в map.test.ts), поэтому
+// доходом остаются ровно нераспознанные. Считать «все незнакомые подгруппы»
+// было бы неверно: подгруппы оплат и снятий в таблицу не входят намеренно, и
+// счётчик показывал бы сотню при нулевой проблеме.
+export function reportUnrefinedIncome(
+  appAccountId: string,
+  operations: readonly CollectedOperation[],
+): void {
+  const count = operations.filter((operation) => operation.kind === 'income').length
+  if (count === 0) return
+  console.log(`счёт ${appAccountId}: приход не разобран у ${count} — банк прислал незнакомую подгруппу`)
+}
