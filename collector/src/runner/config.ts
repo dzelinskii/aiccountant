@@ -1,3 +1,5 @@
+import { BANK_NAMES } from '../plugins/registry'
+
 export interface CollectorConfig {
   /** Адрес приложения: сегодня localhost, завтра — сервер. Меняется здесь и только здесь. */
   apiBaseUrl: string
@@ -7,10 +9,13 @@ export interface CollectorConfig {
   accountMap: Record<string, string>
   /** За сколько дней забирать операции при обычном запуске. */
   days: number
+  /** Какой банк собираем в этом запуске. */
+  bank: string
 }
 
 const DEFAULT_URL = 'http://localhost:8000'
 const DEFAULT_DAYS = 30
+const DEFAULT_BANK = 'tbank'
 
 /**
  * Здесь лежит токен нашего приложения — токен банка в конфиг не попадает
@@ -21,13 +26,30 @@ const DEFAULT_DAYS = 30
  * уже не видна. Значение самого токена в сообщения не попадает.
  */
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): CollectorConfig {
+  const bank = parseBank(env['COLLECT_BANK'])
   return {
     apiBaseUrl: parseUrl(env['AICCOUNTANT_URL']),
     apiToken: required(env, 'AICCOUNTANT_TOKEN'),
     workspaceId: required(env, 'AICCOUNTANT_WORKSPACE'),
-    accountMap: parseAccountMap(env['AICCOUNTANT_ACCOUNTS']),
+    accountMap: parseAccountMap(accountsRaw(env, bank)),
     days: parseDays(env['COLLECT_DAYS']),
+    bank,
   }
+}
+
+function parseBank(raw: string | undefined): string {
+  if (!raw || raw.trim() === '') return DEFAULT_BANK
+  if (!BANK_NAMES.includes(raw)) {
+    throw new Error(`COLLECT_BANK: неизвестный банк "${raw}". Известные: ${BANK_NAMES.join(', ')}`)
+  }
+  return raw
+}
+
+// Пер-банковская переменная важнее общей: у банков разные идентификаторы
+// счетов, и один список на двоих означал бы, что при смене банка коллектор
+// молча не найдёт ни одного счёта
+function accountsRaw(env: NodeJS.ProcessEnv, bank: string): string | undefined {
+  return env[`AICCOUNTANT_ACCOUNTS_${bank.toUpperCase()}`] ?? env['AICCOUNTANT_ACCOUNTS']
 }
 
 function required(env: NodeJS.ProcessEnv, name: string): string {

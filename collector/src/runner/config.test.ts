@@ -16,6 +16,7 @@ test('без необязательных переменных берутся з
     workspaceId: 'ws-1',
     accountMap: {},
     days: 30,
+    bank: 'tbank',
   })
 })
 
@@ -91,4 +92,24 @@ test('AICCOUNTANT_URL меняет адрес приложения', () => {
 
 test('не-адрес в AICCOUNTANT_URL — ошибка с именем переменной', () => {
   expect(() => loadConfig(env({ AICCOUNTANT_URL: 'localhost:8000' }))).toThrow(/AICCOUNTANT_URL/)
+})
+
+test('банк по умолчанию — Т-Банк, чтобы прежние запуски не сломались', () => {
+  const config = loadConfig(env())
+  expect(config.bank).toBe('tbank')
+})
+
+test('незнакомый банк отвергается со списком известных', () => {
+  expect(() => loadConfig(env({ COLLECT_BANK: 'alfa' }))).toThrow(/alfa/)
+})
+
+test('пер-банковский список счетов важнее общего', () => {
+  const config = loadConfig(
+    env({
+      COLLECT_BANK: 'sber',
+      AICCOUNTANT_ACCOUNTS: '{"общий":"a"}',
+      AICCOUNTANT_ACCOUNTS_SBER: '{"card:1":"b"}',
+    }),
+  )
+  expect(config.accountMap).toEqual({ 'card:1': 'b' })
 })
