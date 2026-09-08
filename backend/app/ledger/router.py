@@ -28,6 +28,7 @@ from app.ledger.schemas import (
     TransactionOut,
     TransactionUpdate,
     TransferCreate,
+    UnknownSignatureOut,
 )
 
 router = APIRouter(prefix="/api")
@@ -167,6 +168,19 @@ async def delete_description_rule(
         await service.delete_description_rule(db, workspace_id, rule_id)
     except service.NotFoundError:
         raise HTTPException(status_code=404, detail="Правило не найдено") from None
+
+
+@router.get("/counterparties/unknown-signatures")
+async def list_unknown_signatures(
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> list[UnknownSignatureOut]:
+    rows = await service.unknown_transfer_signatures(db, workspace_id)
+    return [
+        UnknownSignatureOut(text=text, operations=total, sent=sent, received=received)
+        for text, total, sent, received in rows
+    ]
 
 
 def _transaction_out(t: Transaction) -> TransactionOut:

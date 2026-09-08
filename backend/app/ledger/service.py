@@ -332,6 +332,13 @@ def category_for_description(
     return target.category_id
 
 
+async def unknown_transfer_signatures(
+    db: AsyncSession, workspace_id: uuid.UUID
+) -> list[tuple[str, int, int, int]]:
+    """Из чего человеку выбирать, заводя контрагента."""
+    return await repository.unknown_transfer_signatures(db, workspace_id)
+
+
 async def find_category_by_name(
     db: AsyncSession, workspace_id: uuid.UUID, name: str
 ) -> Category | None:

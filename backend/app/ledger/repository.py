@@ -2,7 +2,7 @@ import uuid
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import func, select, update
+from sqlalchemy import SQLColumnExpression, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 from sqlalchemy.sql.elements import ColumnElement
@@ -213,6 +213,97 @@ async def description_rule_targets(
         .where(DescriptionRule.workspace_id == workspace_id, category_id.is_not(None))
     )
     return [(text, cid, k) for text, cid, k in rows.all()]
+
+
+# Пробел в понимании Python: str.split() режет по str.isspace(), и SQL обязан
+# резать по тому же набору. Готовый класс [[:space:]] не подходит — его состав
+# зависит от локали базы, и неразрывный пробел в него, как правило, не входит,
+# а банки им разделяют слова. Совпадение набора с Python закреплено тестом.
+WHITESPACE_CODEPOINTS: tuple[int, ...] = (
+    0x09,
+    0x0A,
+    0x0B,
+    0x0C,
+    0x0D,
+    0x1C,
+    0x1D,
+    0x1E,
+    0x1F,
+    0x20,
+    0x85,
+    0xA0,
+    0x1680,
+    *range(0x2000, 0x200B),
+    0x2028,
+    0x2029,
+    0x202F,
+    0x205F,
+    0x3000,
+)
+_WHITESPACE_CLASS = "[" + "".join(rf"\u{code:04x}" for code in WHITESPACE_CODEPOINTS) + "]+"
+
+
+def normalized_description_sql(column: SQLColumnExpression[str | None]) -> ColumnElement[str]:
+    """Ключ правила «описание → категория» выражением SQL.
+
+    Повторяет service.normalize_description шаг в шаг: схлопнуть пробелы,
+    обрезать края, привести регистр, привести к NFC. Порядок тот же — NFC после
+    регистра, — потому что разложенная буква приводится к одной форме уже после
+    того, как её основа сменила регистр.
+
+    Второе определение одного правила — цена за группировку в базе, и держится
+    оно на тесте, который сверяет обе реализации на одних и тех же строках.
+    """
+    collapsed = func.regexp_replace(column, _WHITESPACE_CLASS, " ", "g")
+    return func.normalize(func.btrim(func.lower(collapsed), " "), text("NFC"))
+
+
+async def unknown_transfer_signatures(
+    db: AsyncSession, workspace_id: uuid.UUID
+) -> list[tuple[str, int, int, int]]:
+    """Описания переводов, про которые ещё не решили: ключ, сколько операций,
+    сколько отдано, сколько получено. Из этого человек и выбирает, заводя
+    контрагента.
+
+    Ключ — то же нормализованное описание, по которому ищется правило: разойдись
+    нормализации, и человек завёл бы контрагента на подпись, которая правилу не
+    соответствует, а она осталась бы неопознанной навсегда.
+
+    Берём только переводы людям: покупки в контрагенты не заводим, категории для
+    них приходят подсказкой банка.
+
+    Фильтр по workspace стоит дважды, и вторая его роль не в том, чтобы не
+    отдать чужие операции. В присоединении он стережёт обратное направление:
+    без него чужое правило с тем же текстом опознало бы мою подпись, и она молча
+    пропала бы из списка.
+    """
+    signature = normalized_description_sql(Transaction.merchant)
+    operations = func.count()
+    sent = func.count().filter(Transaction.amount < 0)
+    received = func.count().filter(Transaction.amount > 0)
+    rows = await db.execute(
+        select(signature, operations, sent, received)
+        .select_from(Transaction)
+        .outerjoin(
+            DescriptionRule,
+            (DescriptionRule.normalized_text == signature)
+            & (DescriptionRule.workspace_id == workspace_id),
+        )
+        .where(
+            Transaction.workspace_id == workspace_id,
+            Transaction.operation_kind == "transfer_person",
+            Transaction.merchant.is_not(None),
+            # описание из одних пробелов даёт пустой ключ, а правило с пустым
+            # ключом завести нельзя: предложить такую подпись — предложить тупик
+            signature != "",
+            DescriptionRule.id.is_(None),
+        )
+        .group_by(signature)
+        # частые подписи наверх, дальше по алфавиту: без порядка список
+        # переставлялся бы от запроса к запросу
+        .order_by(operations.desc(), signature)
+    )
+    return [(key, total, out, back) for key, total, out, back in rows.all()]
 
 
 async def get_description_rule(

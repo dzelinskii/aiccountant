@@ -70,6 +70,16 @@ class DescriptionRuleOut(BaseModel):
     source: str
 
 
+class UnknownSignatureOut(BaseModel):
+    """Подпись переводов, про которую ещё не решили. Сумм здесь нет намеренно:
+    для узнавания человека довольно счётчиков."""
+
+    text: str
+    operations: int
+    sent: int
+    received: int
+
+
 class TransactionCreate(BaseModel):
     account_id: uuid.UUID
     category_id: uuid.UUID | None = None

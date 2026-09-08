@@ -1,9 +1,11 @@
 import uuid
 from decimal import Decimal
+from typing import Any
 
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ledger import repository as ledger_repository
 from app.ledger import service as ledger_service
 from app.ledger.models import Counterparty, DescriptionRule
 
@@ -221,3 +223,202 @@ async def test_counterparty_does_not_take_a_category_of_another_workspace(
 
     rules = await ledger_service.load_description_rules(db_session, uuid.UUID(ws_bob))
     assert rules == {}
+
+
+async def _import_transfer(client: AsyncClient, ws: str, acc: str, text: str, amount: str) -> None:
+    started = await client.post(
+        "/api/imports/parsed",
+        params={"workspace_id": ws, "account_id": acc},
+        json={
+            "parser": "test_collector",
+            "operations": [
+                {
+                    "occurred_at": "2026-09-01",
+                    "amount": amount,
+                    "currency": "RUB",
+                    "description": text,
+                    "external_id": f"op-{text}-{amount}",
+                    "kind": "transfer_person",
+                }
+            ],
+        },
+    )
+    assert started.status_code == 201
+    committed = await client.post(
+        f"/api/imports/{started.json()['import_id']}/commit", params={"workspace_id": ws}
+    )
+    assert committed.status_code == 200
+
+
+async def _unknown_signatures(client: AsyncClient, ws: str) -> list[dict[str, Any]]:
+    resp = await client.get("/api/counterparties/unknown-signatures", params={"workspace_id": ws})
+    assert resp.status_code == 200
+    items: list[dict[str, Any]] = resp.json()
+    return items
+
+
+async def test_unknown_signatures_count_both_directions(client: AsyncClient) -> None:
+    ws, acc = await _register(client, ALICE)
+    await _import_transfer(client, ws, acc, "Денис З.", "-100.00")
+    await _import_transfer(client, ws, acc, "Денис З.", "-200.00")
+    await _import_transfer(client, ws, acc, "Денис З.", "300.00")
+
+    assert await _unknown_signatures(client, ws) == [
+        {"text": "денис з.", "operations": 3, "sent": 2, "received": 1}
+    ]
+
+
+async def test_signature_with_a_plain_rule_is_not_offered(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Подпись, про которую уже решили, предлагать незачем."""
+    ws, acc = await _register(client, ALICE)
+    category = await _expense_category(client, ws)
+    await _import_transfer(client, ws, acc, "Денис З.", "-100.00")
+    await ledger_service.create_description_rule(
+        db_session, uuid.UUID(ws), "Денис З.", uuid.UUID(category)
+    )
+    await db_session.flush()
+
+    assert await _unknown_signatures(client, ws) == []
+
+
+async def test_signature_bound_to_counterparty_is_not_offered(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Подпись, привязанная к контрагенту, тоже опознана — даже если у
+    контрагента нет категории."""
+    ws, acc = await _register(client, ALICE)
+    await _import_transfer(client, ws, acc, "Денис З.", "-100.00")
+    cp = _add_counterparty(db_session, ws, "Денис", None)
+    await db_session.flush()
+    _add_signature(db_session, ws, "денис з.", cp.id)
+    await db_session.flush()
+
+    assert await _unknown_signatures(client, ws) == []
+
+
+async def test_only_person_transfers_are_offered(client: AsyncClient) -> None:
+    """Покупки в контрагенты не заводим: категории для них приходят подсказкой
+    банка, и вручную их называть незачем."""
+    ws, acc = await _register(client, ALICE)
+    started = await client.post(
+        "/api/imports/parsed",
+        params={"workspace_id": ws, "account_id": acc},
+        json={
+            "parser": "test_collector",
+            "operations": [
+                {
+                    "occurred_at": "2026-09-01",
+                    "amount": "-100.00",
+                    "currency": "RUB",
+                    "description": "Пятёрочка",
+                    "external_id": "op-1",
+                    "kind": "purchase",
+                }
+            ],
+        },
+    )
+    assert started.status_code == 201
+    await client.post(
+        f"/api/imports/{started.json()['import_id']}/commit", params={"workspace_id": ws}
+    )
+
+    assert await _unknown_signatures(client, ws) == []
+
+
+async def test_sql_normalization_matches_python(client: AsyncClient) -> None:
+    """Ключ из ручки обязан совпасть с ключом, по которому ищется правило.
+    Две реализации одного правила — в SQL и в Python — разойтись не должны:
+    иначе человек заведёт контрагента на подпись, которая правилу не
+    соответствует, и она останется неопознанной навсегда."""
+    ws, acc = await _register(client, ALICE)
+    await _import_transfer(client, ws, acc, "  ДЕНИС   З.  ", "-100.00")
+
+    signatures = await _unknown_signatures(client, ws)
+    assert [s["text"] for s in signatures] == [
+        ledger_service.normalize_description("  ДЕНИС   З.  ")
+    ]
+
+
+async def test_sql_normalization_matches_python_on_unicode_spaces(client: AsyncClient) -> None:
+    """Тот же ключ, но пробелы не только обычные: банки разделяют слова
+    неразрывным пробелом, а класс [[:space:]] у Postgres его пробелом
+    не считает. Python (str.split) — считает."""
+    # неразрывный, длинный, узкий неразрывный и идеографический пробелы
+    raw = " ДЕНИС  З.　"
+    ws, acc = await _register(client, ALICE)
+    await _import_transfer(client, ws, acc, raw, "-100.00")
+
+    assert [s["text"] for s in await _unknown_signatures(client, ws)] == [
+        ledger_service.normalize_description(raw)
+    ]
+    assert ledger_service.normalize_description(raw) == "денис з."
+
+
+def test_sql_whitespace_class_covers_python_whitespace() -> None:
+    """Набор пробельных символов для SQL — тот же, по которому режет str.split().
+
+    Тремя строками выше проверены только те пробелы, которые пришли в голову;
+    здесь набор сверяется с определением Python целиком, чтобы недостающий
+    символ нашёлся здесь, а не на живой подписи.
+    """
+    assert set(ledger_repository.WHITESPACE_CODEPOINTS) == {
+        code for code in range(0x110000) if chr(code).isspace()
+    }
+
+
+async def test_sql_normalization_matches_python_on_decomposed_letters(
+    client: AsyncClient,
+) -> None:
+    """«й» из «и» с надстрочным знаком обязана дать тот же ключ, что и «й» одним
+    кодпоинтом, — иначе правило, заведённое руками, молча не совпадёт.
+
+    В raw ниже «й» записана разложенной: «и» и отдельный надстрочный знак."""
+    raw = "Андрей З."
+    ws, acc = await _register(client, ALICE)
+    await _import_transfer(client, ws, acc, raw, "-100.00")
+
+    assert [s["text"] for s in await _unknown_signatures(client, ws)] == [
+        ledger_service.normalize_description(raw)
+    ]
+    assert ledger_service.normalize_description(raw) == "андрей з."
+
+
+async def test_blank_signature_is_not_offered(client: AsyncClient) -> None:
+    """Описание из одних пробелов даёт пустой ключ, а правило с пустым ключом
+    завести нельзя — предлагать такую подпись значит предлагать тупик."""
+    ws, acc = await _register(client, ALICE)
+    await _import_transfer(client, ws, acc, "   ", "-100.00")
+
+    assert await _unknown_signatures(client, ws) == []
+
+
+async def test_unknown_signatures_do_not_leak_between_workspaces(client: AsyncClient) -> None:
+    ws_alice, acc_alice = await _register(client, ALICE)
+    await _import_transfer(client, ws_alice, acc_alice, "Денис З.", "-100.00")
+    ws_bob, _ = await _register(client, BOB)
+
+    assert await _unknown_signatures(client, ws_bob) == []
+
+
+async def test_a_rule_of_another_workspace_does_not_hide_a_signature(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Чужое правило не должно опознавать мою подпись.
+
+    Фильтр по workspace нужен именно в условии присоединения: в where он ловит
+    обратную утечку (чужие операции), а эту — нет. Без него подпись, про которую
+    решил кто-то другой, молча пропала бы из моего списка.
+    """
+    ws_bob, _ = await _register(client, BOB)
+    bob_category = await _expense_category(client, ws_bob)
+    _add_plain_rule(db_session, ws_bob, "денис з.", bob_category)
+    await db_session.flush()
+
+    ws_alice, acc_alice = await _register(client, ALICE)
+    await _import_transfer(client, ws_alice, acc_alice, "Денис З.", "-100.00")
+
+    assert await _unknown_signatures(client, ws_alice) == [
+        {"text": "денис з.", "operations": 1, "sent": 1, "received": 0}
+    ]
