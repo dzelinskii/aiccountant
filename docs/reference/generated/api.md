@@ -2,45 +2,45 @@
 
 # Ручки API
 
-API **не версионирован**: все пути живут под `/api`, префикса версии нет.
+API **не версионирован**: все пути живут под `/api`, префикса версии нет. Кроме них приложение отдаёт служебные `/docs`, `/redoc` и `/openapi.json` — в схему OpenAPI они не входят (`include_in_schema=False`), поэтому в этот список не попадают.
 
-- `GET /api/accounts` — List Accounts
-- `POST /api/accounts` — Create Account
-- `PATCH /api/accounts/{account_id}` — Update Account
-- `POST /api/auth/login` — Login
-- `POST /api/auth/logout` — Logout
-- `POST /api/auth/register` — Register
-- `GET /api/categories` — List Categories
-- `POST /api/categories` — Create Category
-- `PATCH /api/categories/{category_id}` — Update Category
-- `GET /api/dashboard` — Dashboard
-- `GET /api/description-rules` — List Description Rules
-- `POST /api/description-rules` — Create Description Rule
-- `DELETE /api/description-rules/{rule_id}` — Delete Description Rule
-- `GET /api/health` — Health
-- `GET /api/imports` — List Pending Imports
-- `POST /api/imports` — Start Import
-- `POST /api/imports/parsed` — Create Parsed Import
-- `GET /api/imports/{import_id}` — Import Status
-- `POST /api/imports/{import_id}/commit` — Commit Import
-- `GET /api/me` — Me
-- `GET /api/recurring` — List Rules
-- `POST /api/recurring` — Create Rule
-- `GET /api/recurring/occurrences` — List Occurrences
-- `POST /api/recurring/occurrences/{occurrence_id}/confirm` — Confirm Occurrence
-- `POST /api/recurring/occurrences/{occurrence_id}/skip` — Skip Occurrence
-- `DELETE /api/recurring/{rule_id}` — Delete Rule
-- `PATCH /api/recurring/{rule_id}` — Update Rule
-- `GET /api/tokens` — List Tokens
-- `POST /api/tokens` — Create Token
-- `DELETE /api/tokens/{token_id}` — Revoke Token
-- `GET /api/transactions` — List Transactions
-- `POST /api/transactions` — Create Transaction
-- `POST /api/transactions/categorize` — Categorize Transactions
-- `POST /api/transactions/transfer` — Create Transfer
-- `DELETE /api/transactions/{transaction_id}` — Delete Transaction
-- `PATCH /api/transactions/{transaction_id}` — Update Transaction
-- `POST /api/transactions/{transaction_id}/apply-category-to-similar` — Apply Category To Similar
-- `POST /api/transactions/{transaction_id}/dismiss-suggestion` — Dismiss Suggestion
-- `GET /api/transactions/{transaction_id}/similar-uncategorized` — Similar Uncategorized
-- `POST /api/workspaces/{workspace_id}/members` — Add Member
+- `GET /api/accounts`
+- `POST /api/accounts` — принимает `AccountCreate`, отвечает `AccountOut`
+- `PATCH /api/accounts/{account_id}` — принимает `AccountUpdate`, отвечает `AccountOut`
+- `POST /api/auth/login` — принимает `LoginIn`, отвечает `UserOut`
+- `POST /api/auth/logout`
+- `POST /api/auth/register` — принимает `RegisterIn`, отвечает `UserOut`
+- `GET /api/categories`
+- `POST /api/categories` — принимает `CategoryCreate`, отвечает `CategoryOut`
+- `PATCH /api/categories/{category_id}` — принимает `CategoryUpdate`, отвечает `CategoryOut`
+- `GET /api/dashboard` — отвечает `DashboardOut`
+- `GET /api/description-rules`
+- `POST /api/description-rules` — принимает `DescriptionRuleCreate`, отвечает `DescriptionRuleOut`
+- `DELETE /api/description-rules/{rule_id}`
+- `GET /api/health`
+- `GET /api/imports`
+- `POST /api/imports`
+- `POST /api/imports/parsed` — принимает `ParsedImportIn`, отвечает `ImportStartedOut`
+- `GET /api/imports/{import_id}` — отвечает `ImportStatusOut`
+- `POST /api/imports/{import_id}/commit` — отвечает `ImportResultOut`
+- `GET /api/me` — отвечает `MeOut`
+- `GET /api/recurring`
+- `POST /api/recurring` — принимает `RuleCreate`, отвечает `RuleOut`
+- `GET /api/recurring/occurrences`
+- `POST /api/recurring/occurrences/{occurrence_id}/confirm` — принимает `OccurrenceConfirm`, отвечает `OccurrenceOut`
+- `POST /api/recurring/occurrences/{occurrence_id}/skip` — отвечает `OccurrenceOut`
+- `DELETE /api/recurring/{rule_id}`
+- `PATCH /api/recurring/{rule_id}` — принимает `RuleUpdate`, отвечает `RuleOut`
+- `GET /api/tokens`
+- `POST /api/tokens` — принимает `ApiTokenCreate`, отвечает `ApiTokenCreated`
+- `DELETE /api/tokens/{token_id}`
+- `GET /api/transactions` — отвечает `TransactionList`
+- `POST /api/transactions` — принимает `TransactionCreate`, отвечает `TransactionOut`
+- `POST /api/transactions/categorize`
+- `POST /api/transactions/transfer` — принимает `TransferCreate`, отвечает `TransactionList`
+- `DELETE /api/transactions/{transaction_id}`
+- `PATCH /api/transactions/{transaction_id}` — принимает `TransactionUpdate`, отвечает `TransactionOut`
+- `POST /api/transactions/{transaction_id}/apply-category-to-similar` — отвечает `SimilarAppliedOut`
+- `POST /api/transactions/{transaction_id}/dismiss-suggestion` — отвечает `TransactionOut`
+- `GET /api/transactions/{transaction_id}/similar-uncategorized` — отвечает `SimilarUncategorizedOut`
+- `POST /api/workspaces/{workspace_id}/members` — принимает `MemberIn`

@@ -80,6 +80,34 @@ def test_api_says_it_is_unversioned() -> None:
     assert "не версионирован" in render_all()["api.md"]
 
 
+def test_api_names_request_and_response_schemas() -> None:
+    """Summary — автозаголовок FastAPI, пользы в нём нет. Имена схем ведут прямо
+    к определению в коде, поэтому строку сверяем целиком: «где-то есть слово
+    ParsedImportIn» осталась бы зелёной и при перепутанных запросе с ответом."""
+    api = render_all()["api.md"]
+    assert (
+        "- `POST /api/imports/parsed` — принимает `ParsedImportIn`, отвечает `ImportStartedOut`"
+        in api
+    )
+
+
+def test_api_omits_missing_schema_instead_of_writing_none() -> None:
+    """Мутация-находка: `None` в справочнике выглядит как настоящее имя схемы,
+    агент пойдёт искать класс `None` в коде. У GET-ручки без тела запроса схему
+    для него подставлять нельзя — только пропускать."""
+    api = render_all()["api.md"]
+    assert "- `GET /api/dashboard` — отвечает `DashboardOut`" in api
+    assert "None" not in api
+
+
+def test_api_mentions_service_paths() -> None:
+    """Пути схемы OpenAPI начинаются с /api, но приложение отдаёт ещё /docs,
+    /redoc и /openapi.json — агент, ищущий, где взять openapi.json, должен
+    найти о нём хоть слово, а не решить, что его не существует."""
+    api = render_all()["api.md"]
+    assert "openapi.json" in api
+
+
 def test_vocabularies_cover_operation_kinds() -> None:
     from app.core.operation_kinds import OPERATION_KINDS
 

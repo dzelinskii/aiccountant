@@ -15,7 +15,6 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import Table
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.engine import Dialect
 
@@ -53,7 +52,7 @@ WARNING = (
 PG_DIALECT: Dialect = postgresql.dialect()  # type: ignore[no-untyped-call]
 
 
-def _column_line(table: Table, column: Any) -> str:
+def _column_line(column: Any) -> str:
     parts = [f"`{column.name}`", f"`{column.type.compile(dialect=PG_DIALECT)}`"]
     parts.append("обязательна" if not column.nullable else "может быть пустой")
     if column.primary_key:
@@ -71,7 +70,7 @@ def render_schema() -> str:
         lines.append(f"## `{table.name}`")
         lines.append("")
         for column in table.columns:
-            lines.append(f"- {_column_line(table, column)}")
+            lines.append(f"- {_column_line(column)}")
         indexes = sorted(table.indexes, key=lambda i: i.name or "")
         if indexes:
             lines.append("")
@@ -84,6 +83,47 @@ def render_schema() -> str:
     return "\n".join(lines)
 
 
+def _schema_ref_name(schema: dict[str, Any] | None) -> str | None:
+    """Достаёт имя схемы из `$ref` вида `#/components/schemas/ParsedImportIn`.
+
+    Pydantic заворачивает часть ссылок в `allOf`/`anyOf` (например, когда у
+    поля есть описание) — тогда `$ref` лежит на уровень глубже, но ведёт к
+    той же схеме, и её тоже стоит найти.
+    """
+    if schema is None:
+        return None
+    ref = schema.get("$ref")
+    if isinstance(ref, str):
+        return ref.rsplit("/", 1)[-1]
+    for branch in (*schema.get("allOf", []), *schema.get("anyOf", [])):
+        name = _schema_ref_name(branch)
+        if name is not None:
+            return name
+    return None
+
+
+def _json_schema(container: dict[str, Any]) -> dict[str, Any] | None:
+    content = container.get("content", {})
+    body = content.get("application/json", {})
+    result = body.get("schema")
+    return result if isinstance(result, dict) else None
+
+
+def _request_schema_name(operation: dict[str, Any]) -> str | None:
+    request_body = operation.get("requestBody")
+    if request_body is None:
+        return None
+    return _schema_ref_name(_json_schema(request_body))
+
+
+def _response_schema_name(operation: dict[str, Any]) -> str | None:
+    responses = operation.get("responses", {})
+    response = responses.get("200") or responses.get("201")
+    if response is None:
+        return None
+    return _schema_ref_name(_json_schema(response))
+
+
 def render_api() -> str:
     from app.main import app
 
@@ -93,14 +133,29 @@ def render_api() -> str:
         "",
         "# Ручки API",
         "",
-        "API **не версионирован**: все пути живут под `/api`, префикса версии нет.",
+        "API **не версионирован**: все пути живут под `/api`, префикса версии нет. "
+        "Кроме них приложение отдаёт служебные `/docs`, `/redoc` и `/openapi.json` — "
+        "в схему OpenAPI они не входят (`include_in_schema=False`), поэтому в этот "
+        "список не попадают.",
         "",
     ]
     for path in sorted(schema.get("paths", {})):
         for method in sorted(schema["paths"][path]):
             operation = schema["paths"][path][method]
-            summary = operation.get("summary", "")
-            lines.append(f"- `{method.upper()} {path}` — {summary}")
+            # Автозаголовок FastAPI («List Accounts») не несёт смысла сверх пути
+            # и метода. Полезнее назвать схемы запроса и ответа — по ним читатель
+            # найдёт определение в коде. Схемы может не быть (например, у GET нет
+            # тела запроса, а у 204-ответа — тела вовсе): тогда просто не пишем её,
+            # а не подставляем пустое значение, которое выглядело бы как имя.
+            parts = []
+            request_name = _request_schema_name(operation)
+            if request_name is not None:
+                parts.append(f"принимает `{request_name}`")
+            response_name = _response_schema_name(operation)
+            if response_name is not None:
+                parts.append(f"отвечает `{response_name}`")
+            suffix = f" — {', '.join(parts)}" if parts else ""
+            lines.append(f"- `{method.upper()} {path}`{suffix}")
     lines.append("")
     return "\n".join(lines)
 
