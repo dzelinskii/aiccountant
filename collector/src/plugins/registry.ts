@@ -1,21 +1,26 @@
 import type { BankPlugin } from '../core/contract'
+import { createSberPlugin } from './sber'
 import { tbankPlugin } from './tbank'
 
-// Реестр намеренно плоский и явный: список банков виден целиком, без
-// автозагрузки каталогов и магии по именам файлов
-const PLUGINS: Record<string, BankPlugin> = {
-  [tbankPlugin.name]: tbankPlugin,
+export interface RegistryDeps {
+  /**
+   * Корень УЦ Минцифры добывается лениво и только тем банком, которому он
+   * нужен. Требовать его заранее нельзя: тогда сбор по Т-Банку, которому чужой
+   * УЦ не нужен вовсе, падал бы при недоступности точки раздачи сертификата.
+   */
+  loadCa: () => Promise<string>
 }
 
-export const BANK_NAMES: readonly string[] = Object.keys(PLUGINS)
+// Реестр намеренно плоский и явный: список банков виден целиком, без
+// автозагрузки каталогов и магии по именам файлов. Выбор через if/else, а не
+// через объект-словарь: Сбербанку нужен асинхронно добытый корень
+// сертификата, и лишний слой объекта с именем банка ключом снова открыл бы
+// дорогу prototype pollution (см. историю этого файла и registry.test.ts) —
+// здесь же имя банка нигде не используется как ключ доступа к чему-либо
+export const BANK_NAMES: readonly string[] = [tbankPlugin.name, 'sber']
 
-export function pluginFor(name: string): BankPlugin {
-  // проверка на собственное свойство обязательна: PLUGINS — обычный объект, и
-  // имя вроде "toString" или "__proto__" достало бы значение из прототипа
-  // вместо честного отказа — а дальше такое имя уйдёт ключом секрета в
-  // хранилище ОС и именем парсера в импорт
-  if (!Object.hasOwn(PLUGINS, name)) {
-    throw new Error(`Неизвестный банк "${name}". Известные: ${BANK_NAMES.join(', ')}`)
-  }
-  return PLUGINS[name]!
+export async function pluginFor(name: string, deps: RegistryDeps): Promise<BankPlugin> {
+  if (name === tbankPlugin.name) return tbankPlugin
+  if (name === 'sber') return createSberPlugin({ ca: await deps.loadCa() })
+  throw new Error(`Неизвестный банк "${name}". Известные: ${BANK_NAMES.join(', ')}`)
 }
