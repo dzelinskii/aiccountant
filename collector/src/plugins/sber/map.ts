@@ -1,5 +1,5 @@
 import { hintFromMcc } from '../../core/category-hints'
-import type { CollectedOperation } from '../../core/contract'
+import type { CollectedAccount, CollectedOperation } from '../../core/contract'
 
 /**
  * Отображение ответа Сбербанка в нашу модель. Вход — результат parseLossless,
@@ -133,6 +133,72 @@ function resolveKind(item: Record<string, unknown>): string {
   // и форма вроде "toString" достала бы из прототипа функцию вместо вида
   if (!Object.hasOwn(BANK_FORM_TO_KIND, form)) return 'unknown'
   return BANK_FORM_TO_KIND[form] ?? 'unknown'
+}
+
+/** Идентификатор карты в том виде, в каком его принимает фильтр истории. */
+export function cardResourceId(id: string): string {
+  return `card:${id}`
+}
+
+/**
+ * Единица счёта для Сбербанка — карта: история привязана к ней, а накопительные
+ * счета из блока accounts своих операций не имеют вовсе. Как и у Т-Банка, список
+ * счетов справочный, поэтому нераспознанная валюта или отсутствующий остаток
+ * здесь дают null, а не останавливают сбор: иначе одна экзотическая карта
+ * лишила бы человека подсказки с идентификаторами по всем остальным.
+ */
+export function toAccounts(raw: readonly unknown[]): CollectedAccount[] {
+  return raw.map(toAccount)
+}
+
+function toAccount(item: unknown): CollectedAccount {
+  if (!isRecord(item)) throw new Error('Карта в ответе банка пришла не объектом')
+  const id = getStr(item, 'id')
+  if (!id) throw new Error('У карты банка нет id')
+
+  return {
+    id: cardResourceId(id),
+    name: getStr(item, 'name') ?? '',
+    type: getStr(item, 'type') ?? '',
+    currency: cardCurrency(item),
+    balance: cardBalance(item),
+    cardMasks: cardMask(item),
+  }
+}
+
+// У дебетовой карты остаток — доступные средства (availableLimit). У кредитной
+// он включает заёмные деньги и остатком в личных финансах не является: показать
+// его как «сколько у меня есть» значило бы соврать на величину кредитного
+// лимита. Поэтому у кредитки остатком считаются собственные средства —
+// creditOwnSum, поле самой карты, а не вложенный блок creditType: тот приходит
+// только с отдельной ручки cardInfo (детали конкретной карты), которую этот
+// коллектор не вызывает
+function balanceSource(item: Record<string, unknown>): Record<string, unknown> | undefined {
+  return getRecord(item, getStr(item, 'type') === 'credit' ? 'creditOwnSum' : 'availableLimit')
+}
+
+function cardBalance(item: Record<string, unknown>): string | null {
+  const source = balanceSource(item)
+  return source ? (getStr(source, 'amount') ?? null) : null
+}
+
+function cardCurrency(item: Record<string, unknown>): string | null {
+  const source = balanceSource(item)
+  const currency = source ? getRecord(source, 'currency') : undefined
+  const code = currency ? getStr(currency, 'code') : undefined
+  return code && ALPHA3_CURRENCY.test(code) ? code.toUpperCase() : null
+}
+
+const FOUR_DIGIT_MASK = /^\d{4}$/
+
+// Номер банк отдаёт уже замаскированным (2202 20** **** 1234); четыре цифры —
+// ровно то, что принимает бэкенд в card_masks, и одна негодная метка ответила
+// бы 422 на весь импорт вместе с операциями
+function cardMask(item: Record<string, unknown>): string[] {
+  const number = getStr(item, 'number')
+  if (!number) return []
+  const mask = number.replace(/\s/g, '').slice(-4)
+  return FOUR_DIGIT_MASK.test(mask) ? [mask] : []
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

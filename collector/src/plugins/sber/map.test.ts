@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 import { parseLossless } from '../../http/lossless-json'
-import { toOperations } from './map'
+import { toAccounts, toOperations } from './map'
 
 // Фикстуры банка приходят текстом, поэтому синтетику тоже прогоняем через
 // parseLossless: только так числа станут строками, как в бою
@@ -116,4 +116,70 @@ test('операция без uohId — остановка, дедуп на не
 test('непонятная дата — остановка, а не молчаливое сегодня', () => {
   const badDate = outcome({ date: '2026-09-08 11:23:45' })
   expect(() => toOperations(parse([badDate]), 'card:1111111111111111')).toThrowError(/дат/i)
+})
+
+function debitCard(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: 1200010304635762,
+    name: 'Дебетовая карта',
+    type: 'debit',
+    state: 'active',
+    number: '2202 20** **** 1234',
+    availableLimit: { amount: '1500.55', currency: { code: 'RUB' } },
+    ...overrides,
+  }
+}
+
+function creditCard(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: 3300131089810779,
+    name: 'Кредитная карта',
+    type: 'credit',
+    state: 'active',
+    number: '4276 55** **** 9876',
+    // доступный лимит включает заёмные деньги — намеренно отличается от
+    // остатка, чтобы тест ловил использование не того поля
+    availableLimit: { amount: '90000.00', currency: { code: 'RUB' } },
+    // поле самой карты (section/meta → cardsInWallet), а не вложенный блок
+    // creditType — тот приходит только с отдельной ручки cardInfo, которую
+    // коллектор не вызывает
+    creditOwnSum: { amount: '250.00', currency: { code: 'RUB' } },
+    ...overrides,
+  }
+}
+
+test('карта превращается в счёт с идентификатором вида card:<id>', () => {
+  const [account] = toAccounts(parse([debitCard()]) as Record<string, unknown>[])
+  expect(account).toEqual({
+    id: 'card:1200010304635762',
+    name: 'Дебетовая карта',
+    type: 'debit',
+    currency: 'RUB',
+    balance: '1500.55',
+    cardMasks: ['1234'],
+  })
+})
+
+test('у кредитной карты остаток — собственные средства, а не доступный лимит', () => {
+  const [account] = toAccounts(parse([creditCard()]) as Record<string, unknown>[])
+  expect(account?.balance).toBe('250.00')
+})
+
+test('шестнадцатизначный идентификатор не теряет точность', () => {
+  // id собирается в тексте JSON, а не через объектный литерал: число
+  // 9999999999999999 движок JS округлил бы до 10000000000000000 ещё при
+  // разборе исходника этого теста, до всякого parseLossless и toAccounts.
+  // Тест через объект был бы красным при любой реализации и не проверял бы
+  // ничего — тот же урок, что и с суммой выше
+  const raw =
+    '[{"id":9999999999999999,"name":"Дебетовая карта","type":"debit",' +
+    '"number":"2202 20** **** 1234",' +
+    '"availableLimit":{"amount":"1500.55","currency":{"code":"RUB"}}}]'
+  const [account] = toAccounts(parseLossless(raw) as unknown[])
+  expect(account?.id).toBe('card:9999999999999999')
+})
+
+test('карта без остатка не роняет список — остаток просто отсутствует', () => {
+  const [account] = toAccounts(parse([debitCard({ availableLimit: undefined })]) as Record<string, unknown>[])
+  expect(account?.balance).toBeNull()
 })
