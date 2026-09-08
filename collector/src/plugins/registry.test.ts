@@ -38,3 +38,23 @@ test('выбор Т-Банка не трогает корень сертифик
   // по Т-Банку при недоступности точки раздачи сертификата Сбербанка
   await expect(pluginFor('tbank', { loadCa: refusingLoadCa() })).resolves.toBeDefined()
 })
+
+test('выбор Сбербанка вызывает загрузку корня ровно один раз и использует её результат', async () => {
+  let calls = 0
+  const loadCa = async (): Promise<string> => {
+    calls += 1
+    return 'зашитый-корень-для-теста'
+  }
+
+  const plugin = await pluginFor('sber', { loadCa })
+
+  expect(calls).toBe(1)
+  expect(plugin.name).toBe('sber')
+})
+
+test('провал загрузки корня для Сбербанка не проглатывается — результат действительно ожидается', async () => {
+  // если бы plugFor не использовал (не await-ил) результат loadCa, отказ
+  // загрузки не помешал бы получить плагин
+  const failure = new Error('корень недоступен')
+  await expect(pluginFor('sber', { loadCa: () => Promise.reject(failure) })).rejects.toBe(failure)
+})

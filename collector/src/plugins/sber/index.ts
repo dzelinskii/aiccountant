@@ -2,12 +2,9 @@ import type { AllowlistClient } from '../../http/allowlist-client'
 import { BankHttpError } from '../../http/allowlist-client'
 import type { Transport } from '../../http/transport'
 import type { BankPlugin, CollectedAccount, CollectedOperation, Credentials, LoginPrompt } from '../../core/contract'
-import { createSberClient } from './client'
+import { createSberClient, OPERATIONS_PATH, PRODUCTS_PATH } from './client'
 import { obtainSberCookies } from './login'
 import { toAccounts, toOperations } from './map'
-
-const OPERATIONS_PATH = '/uoh-bh/v1/operations/list'
-const PRODUCTS_PATH = '/main-screen/rest/v2/m1/web/section/meta'
 
 // Проверено разведкой: 250 проходит, 300 даёт 500. Берём подтверждённый предел
 const PAGE_SIZE = 250
