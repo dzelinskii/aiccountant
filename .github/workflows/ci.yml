@@ -119,7 +119,11 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           changed=$(git diff --name-only "$BASE_SHA"...HEAD)
-          contract=$(echo "$changed" | grep -E '^(backend/app/[^/]+/service\.py|backend/app/core/|collector/src/core/|collector/src/plugins/[^/]+/map\.ts)' || true)
+          # Тесты отсеиваем отдельным шагом: коллектор держит их рядом с кодом,
+          # и без этого правка collector/src/core/*.test.ts требовала бы правки
+          # справочника. Ложные срабатывания опаснее пропусков — от них ворота
+          # начинают обходить бессмысленной правкой документа
+          contract=$(echo "$changed" | grep -E '^(backend/app/[^/]+/service\.py|backend/app/core/|collector/src/core/|collector/src/plugins/[^/]+/map\.ts)' | grep -vE '\.test\.ts$' || true)
           touched_docs=$(echo "$changed" | grep -E '^docs/reference/' || true)
           if [ -n "$contract" ] && [ -z "$touched_docs" ]; then
             echo "Изменились файлы, несущие контракт:"
