@@ -1266,7 +1266,12 @@ function toOperation(item: unknown, accountId: string): CollectedOperation | nul
   if (!id) throw new Error('У операции банка нет uohId')
   const context = `Операция ${id}`
 
-  if (resourceId(item) !== accountId) return null
+  const ids = sides(item)
+  // «не поняли, чей это» и «это чужая карта» — разные вещи. Первое означает,
+  // что банк сменил форму ответа, и молчать об этом нельзя: иначе сбор
+  // отрапортует успехом с пустым импортом. Второе — обычный фильтр
+  if (ids.length === 0) throw new Error(`${context}: не удалось определить счёт операции`)
+  if (!ids.includes(accountId)) return null
 
   const amount = requireAmount(item, context)
   const currency = requireCurrency(item, context)
@@ -1286,15 +1291,21 @@ function toOperation(item: unknown, accountId: string): CollectedOperation | nul
 
 /**
  * Счёт операции лежит в разных полях в зависимости от направления: у расхода в
- * fromResource, у прихода в toResource. Правило выведено на живой выборке из
- * 250 операций и выполнялось без исключений.
+ * fromResource, у прихода в toResource.
+ *
+ * Сверяем обе стороны с запрошенным счётом, а не берём первую заполненную:
+ * у перевода между своими картами заполнены ОБА идентификатора, и правило
+ * «первый непустой» отдало бы карту-отправителя. При сборе по карте-получателю
+ * приход тогда молча исчезал бы — без ошибки и без счётчика.
  */
-function resourceId(item: Record<string, unknown>): string | undefined {
-  const from = getRecord(item, 'fromResource')
-  const fromId = from ? getStr(from, 'id') : undefined
-  if (fromId) return fromId
-  const to = getRecord(item, 'toResource')
-  return to ? getStr(to, 'id') : undefined
+function sides(item: Record<string, unknown>): string[] {
+  const ids: string[] = []
+  for (const key of ['fromResource', 'toResource']) {
+    const block = getRecord(item, key)
+    const id = block ? getStr(block, 'id') : undefined
+    if (id) ids.push(id)
+  }
+  return ids
 }
 
 // Знак у Сбербанка уже в самой сумме — в отличие от Т-Банка, где направление
@@ -1465,7 +1476,11 @@ test('у кредитной карты остаток — собственные
 })
 
 test('шестнадцатизначный идентификатор не теряет точность', () => {
-  const [account] = toAccounts(parse([debitCard({ id: 9999999999999999 })]) as Record<string, unknown>[])
+  // как и в тесте на сумму: объектный литерал округлился бы движком ещё при
+  // разборе исходника (9999999999999999 стало бы 10000000000000000), и тест
+  // краснел бы при любой правильной реализации, ничего не проверяя
+  const raw = '[{"id":9999999999999999,"name":"Карта","type":"debit","number":"2202 20** **** 1234"}]'
+  const [account] = toAccounts(parseLossless(raw) as Record<string, unknown>[])
   expect(account.id).toBe('card:9999999999999999')
 })
 
