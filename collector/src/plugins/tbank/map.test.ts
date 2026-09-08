@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { expect, test } from 'vitest'
 import { parseLossless } from '../../http/lossless-json'
-import { toAccounts, toOperations } from './map'
+import { BANK_SUBGROUP_TO_KIND, toAccounts, toOperations } from './map'
 
 // Фикстуры — это то, что реально отдаёт банк по сети: текст. Прогоняем его
 // через тот же parseLossless, что и боевой AllowlistClient, — иначе тест
@@ -278,6 +278,62 @@ test('вид операции берётся из группы банка по �
   expect(op4?.kind).toBe('transfer_person')
 })
 
+test('перевод от человека по телефону приходом не считается', () => {
+  // банк присылает на него group=INCOME, хотя это перевод: подгруппа различает
+  const [op] = toOperations([
+    baseOperation({ group: 'INCOME', subgroup: { id: 'C10', name: 'Пополнение по номеру телефона' } }),
+  ])
+  expect(op?.kind).toBe('transfer_person')
+})
+
+test('перевод между своими счетами приходом не считается', () => {
+  const [op] = toOperations([baseOperation({ group: 'INCOME', subgroup: { id: 'C5', name: 'Пополнения' } })])
+  expect(op?.kind).toBe('transfer_self')
+})
+
+test('внесение наличных приходом не считается', () => {
+  const [op] = toOperations([baseOperation({ group: 'INCOME', subgroup: { id: 'C3', name: 'Пополнения' } })])
+  expect(op?.kind).toBe('cash')
+})
+
+test('перевод от человека другим каналом тоже не приход', () => {
+  const [op] = toOperations([baseOperation({ group: 'INCOME', subgroup: { id: 'C4', name: 'Пополнения' } })])
+  expect(op?.kind).toBe('transfer_person')
+})
+
+test('незнакомая подгруппа оставляет вид по группе', () => {
+  // банк вправе завести новый код в любой момент; терять из-за этого операцию
+  // нельзя, и «доход» тут — честная деградация, а не догадка
+  const [op] = toOperations([baseOperation({ group: 'INCOME', subgroup: { id: 'C2', name: 'Пополнения' } })])
+  expect(op?.kind).toBe('income')
+})
+
+test('операция без подгруппы разбирается по группе', () => {
+  const [op] = toOperations([baseOperation({ group: 'INCOME' })])
+  expect(op?.kind).toBe('income')
+})
+
+test('подгруппа не перекрывает группу там, где группа права', () => {
+  // подгруппы оплат и снятий в таблицу не входят намеренно: заводить для них
+  // записи значило бы завести второй источник истины о том же самом
+  const pay = toOperations([baseOperation({ group: 'PAY', subgroup: { id: 'A1', name: '' } })])
+  expect(pay[0]?.kind).toBe('purchase')
+  const cash = toOperations([baseOperation({ group: 'CASH', subgroup: { id: 'B1', name: 'Снятия наличных' } })])
+  expect(cash[0]?.kind).toBe('cash')
+})
+
+test('подгруппа из прототипа видом не становится', () => {
+  const [op] = toOperations([baseOperation({ group: 'INCOME', subgroup: { id: 'toString', name: '' } })])
+  expect(op?.kind).toBe('income')
+})
+
+test('незнакомая группа с известной подгруппой остаётся нераспознанной', () => {
+  // подгруппа уточняет группу, а не заменяет её: про операцию из группы,
+  // которой мы не знаем, мы не знаем ничего
+  const [op] = toOperations([baseOperation({ group: 'НОВОЕ', subgroup: { id: 'C5', name: 'Пополнения' } })])
+  expect(op?.kind).toBe('unknown')
+})
+
 test('метка банка становится подсказкой', () => {
   const [op] = toOperations([baseOperation({ spendingCategory: { id: '1', name: 'Супермаркеты' } })])
   expect(op?.category_hint).toBe('groceries')
@@ -477,4 +533,12 @@ test('нераспознанная валюта операции остаётс�
   expect(() =>
     toOperations([baseOperation({ accountAmount: { value: '100', currency: {} } })]),
   ).toThrow(/валют/)
+})
+
+test('ни одна подгруппа не ведёт обратно в доход', () => {
+  // на этом стоит счётчик в report.ts: он считает оставшиеся income, полагая,
+  // что доходом остались ровно нераспознанные подгруппы. Появись здесь
+  // отображение в income (например, когда найдём код зарплаты) — счётчик
+  // начнёт врать, и чинить надо будет его, а не этот тест
+  expect(Object.values(BANK_SUBGROUP_TO_KIND)).not.toContain('income')
 })
