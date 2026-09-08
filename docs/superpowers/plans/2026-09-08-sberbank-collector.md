@@ -529,7 +529,13 @@ export interface BrowserSession {
 }
 
 export interface LoginPrompt {
-  withBrowser<T>(use: (session: BrowserSession) => Promise<T>): Promise<T>
+  /**
+   * `headless: true` — окно не показывается. Это не оптимизация: у Т-Банка
+   * обновление токена идёт молча, и только настоящий вход открывает видимое
+   * окно, куда человек вводит код. Без этого различия обычный сбор по живой
+   * сессии распахивал бы браузер при каждом запуске.
+   */
+  withBrowser<T>(use: (session: BrowserSession) => Promise<T>, options?: { headless?: boolean }): Promise<T>
 }
 
 /**
@@ -1895,21 +1901,28 @@ import type { BankPlugin } from '../core/contract'
 import { createSberPlugin } from './sber'
 import { tbankPlugin } from './tbank'
 
-export interface RegistryOptions {
-  /** Корень УЦ Минцифры: нужен банкам, чьего УЦ нет в системе. */
-  ca: string
+export interface RegistryDeps {
+  /**
+   * Корень УЦ Минцифры добывается **лениво** и только тем банком, которому он
+   * нужен. Требовать его заранее нельзя: тогда сбор по Т-Банку, которому чужой
+   * УЦ не нужен вовсе, падал бы при недоступности точки раздачи сертификата.
+   */
+  loadCa: () => Promise<string>
 }
 
 export const BANK_NAMES: readonly string[] = ['tbank', 'sber']
 
-export function pluginFor(name: string, options: RegistryOptions): BankPlugin {
+export async function pluginFor(name: string, deps: RegistryDeps): Promise<BankPlugin> {
   if (name === 'tbank') return tbankPlugin
-  if (name === 'sber') return createSberPlugin({ ca: options.ca })
+  if (name === 'sber') return createSberPlugin({ ca: await deps.loadCa() })
   throw new Error(`Неизвестный банк "${name}". Известные: ${BANK_NAMES.join(', ')}`)
 }
 ```
 
-Соответственно поправить `collector/src/plugins/registry.test.ts`: вызовы становятся `pluginFor('tbank', { ca: '' })`, а в тест про совпадение имён добавляется Сбербанк.
+Соответственно поправить `collector/src/plugins/registry.test.ts`: вызовы становятся
+`await pluginFor('tbank', { loadCa: async () => '' })`, а в тест про совпадение
+имён добавляется Сбербанк. Добавить отдельный тест: **выбор Т-Банка не трогает
+`loadCa` вовсе** — иначе ленивость останется на словах.
 
 - [ ] **Step 7: Прогнать тесты**
 
@@ -1967,14 +1980,26 @@ export async function forgetProfile(bank: string): Promise<void> {
  * COLLECTOR_BROWSER задаёт свой браузер — например, Яндекс.Браузер, который
  * несёт корень внутри. Тогда закрепление не нужно.
  */
-export function browserPrompt(bank: string): LoginPrompt {
+interface PromptOptions {
+  /**
+   * Отпечаток ключа УЦ, который надо закрепить в браузере, или `undefined`,
+   * если банку это не нужно. Закрепление расширяет доверие — пусть узко и
+   * только на время запуска, — поэтому оно применяется адресно, а не ко всем
+   * банкам подряд. Т-Банку чужой УЦ не нужен, и получать его он не должен.
+   */
+  pinnedSpki?: string
+}
+
+export function browserPrompt(bank: string, { pinnedSpki }: PromptOptions = {}): LoginPrompt {
   return {
-    async withBrowser<T>(use: (session: BrowserSession) => Promise<T>): Promise<T> {
+    async withBrowser<T>(use: (session: BrowserSession) => Promise<T>, options: { headless?: boolean } = {}): Promise<T> {
       const executablePath = process.env['COLLECTOR_BROWSER']
+      // свой браузер (Яндекс.Браузер, Atom) несёт корень внутри, закреплять нечего
+      const args = !executablePath && pinnedSpki ? [`--ignore-certificate-errors-spki-list=${pinnedSpki}`] : []
       const context = await chromium.launchPersistentContext(profileDir(bank), {
-        headless: false,
+        headless: options.headless ?? false,
         ...(executablePath ? { executablePath } : {}),
-        args: executablePath ? [] : [`--ignore-certificate-errors-spki-list=${ROOT_SPKI_SHA256}`],
+        args,
       })
       try {
         return await use(sessionOf(context))
@@ -2205,18 +2230,28 @@ import { loadConfig, type CollectorConfig } from './config'
 import { pushOperations } from './push'
 import { reportMissingHints, reportUnknownKinds } from './report'
 import { osSecretStore, type SecretStore } from './secret-store'
-import { loadTrustAnchor } from './trust-anchor'
+import { ROOT_SPKI_SHA256, loadTrustAnchor } from './trust-anchor'
 
 const DAY_MS = 86_400_000
 const CA_CACHE = fileURLToPath(new URL('../../profile/russian_trusted_root_ca.pem', import.meta.url))
 
 async function main(): Promise<void> {
   const config = loadConfig()
-  const ca = await loadTrustAnchor(CA_CACHE)
-  const plugin = pluginFor(config.bank, { ca })
+  // сертификат добывается лениво: банку, чей УЦ известен системе, он не нужен,
+  // и падать из-за недоступности точки раздачи сертификата такой сбор не должен.
+  // Побочно это же и определяет, надо ли закреплять ключ УЦ в окне входа: пин
+  // получает ровно тот банк, который попросил корень, — без списка банков в
+  // оболочке и без расширения доверия там, где оно не нужно
+  let pinnedSpki: string | undefined
+  const plugin = await pluginFor(config.bank, {
+    loadCa: async () => {
+      pinnedSpki = ROOT_SPKI_SHA256
+      return loadTrustAnchor(CA_CACHE)
+    },
+  })
   const store = osSecretStore()
 
-  const credentials = await connect(plugin, store)
+  const credentials = await connect(plugin, store, pinnedSpki)
   const accounts = await plugin.fetchAccounts(credentials)
 
   if (Object.keys(config.accountMap).length === 0) {
@@ -2233,11 +2268,13 @@ async function main(): Promise<void> {
  * хранилище, и без этой проверки каждый запуск доставал бы его заново, падал
  * посреди сбора и советовал «попробуйте ещё раз» — до бесконечности.
  */
-async function connect(plugin: BankPlugin, store: SecretStore): Promise<Credentials> {
+async function connect(plugin: BankPlugin, store: SecretStore, pinnedSpki: string | undefined): Promise<Credentials> {
   const saved = await store.read(plugin.name)
   if (saved && (await plugin.isAlive(saved))) return saved
 
-  const fresh = await plugin.login(browserPrompt(plugin.name))
+  // повторную попытку внутри входа делает сам плагин: только он знает, что у
+  // его банка есть дешёвая фаза обновления и когда она бесполезна
+  const fresh = await plugin.login(browserPrompt(plugin.name, { pinnedSpki }))
   if (!(await plugin.isAlive(fresh))) {
     throw new Error('Вход выполнен, но банк не признал полученную сессию')
   }
