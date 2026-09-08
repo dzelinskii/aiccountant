@@ -9,7 +9,7 @@
     "build": "tsc --noEmit",
     "collect": "tsx src/runner/main.ts",
     "forget": "tsx src/runner/forget.ts",
-    "docs": "tsx scripts/gen-reference.ts"
+    "reference": "tsx scripts/gen-reference.ts"
   },
   "devDependencies": {
     "@types/node": "^22",

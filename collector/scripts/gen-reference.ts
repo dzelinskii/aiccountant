@@ -5,7 +5,11 @@
  * закоммиченным, и любая нестабильность превратит её в шум, который научатся
  * игнорировать.
  *
- * Запуск: cd collector && pnpm docs
+ * Запуск: cd collector && pnpm reference
+ *
+ * Скрипт назван не `docs` намеренно: в pnpm есть встроенная команда `pnpm docs
+ * <пакет>` (открыть документацию npm-пакета), и она перекрыла бы одноимённый
+ * скрипт — `pnpm docs` молча делал бы не то, а в CI падал бы с чужой ошибкой.
  */
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
