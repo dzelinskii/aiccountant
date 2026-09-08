@@ -57,8 +57,9 @@ AI-помощник по личным финансам: чтение финан�
 
 - `backend/` — FastAPI, модульный монолит (Python 3.12, uv)
 - `frontend/` — React 19 + TypeScript + Vite (pnpm), PWA
-- `collector/` — сбор операций из личного кабинета Т-Банка (Node + TypeScript),
-  запускается на машине пользователя, см. [collector/README.md](collector/README.md)
+- `collector/` — сбор операций из личного кабинета банка (Node + TypeScript):
+  Т-Банк и Сбербанк, запускается на машине пользователя, см.
+  [collector/README.md](collector/README.md)
 - `infra/` — docker-compose, Caddy, деплой
 
 ## Запуск локально
