@@ -1,15 +1,32 @@
 import { expect, test, vi } from 'vitest'
 import { AllowlistClient, NotAllowedError } from './allowlist-client'
+import { fetchTransport } from './transport'
+import type { Transport } from './transport'
 
-const ALLOWED = ['/api/common/v1/session_status']
+const ALLOWED = [{ path: '/api/common/v1/session_status', method: 'GET' as const }]
+const CREDENTIALS = { kind: 'query' as const, name: 'sessionid', value: 'token' }
 
 function clientWith(fetchImpl: typeof fetch) {
   return new AllowlistClient({
     baseUrl: 'https://bank.example',
-    allowedPaths: ALLOWED,
-    token: 'token',
-    fetchImpl,
+    allowed: ALLOWED,
+    credentials: CREDENTIALS,
+    transport: fetchTransport(fetchImpl),
   })
+}
+
+function recordingTransport(body = '{"ok":true}'): {
+  transport: Transport
+  calls: { url: string; method: string; headers: Record<string, string>; body?: string }[]
+} {
+  const calls: { url: string; method: string; headers: Record<string, string>; body?: string }[] = []
+  const transport: Transport = {
+    async send(url, options) {
+      calls.push({ url: url.toString(), method: options.method, headers: options.headers, body: options.body })
+      return { status: 200, ok: true, text: async () => body }
+    },
+  }
+  return { transport, calls }
 }
 
 test('разрешённый путь уходит в сеть', async () => {
@@ -44,15 +61,15 @@ test('проверка origin реально отрабатывает, а не �
   const fetchImpl = vi.fn()
   const client = new AllowlistClient({
     baseUrl: 'https://bank.example',
-    allowedPaths: ['//evil.example/x'],
-    token: 'token',
-    fetchImpl: fetchImpl as unknown as typeof fetch,
+    allowed: [{ path: '//evil.example/x', method: 'GET' }],
+    credentials: CREDENTIALS,
+    transport: fetchTransport(fetchImpl as unknown as typeof fetch),
   })
   await expect(client.getJson('//evil.example/x')).rejects.toBeInstanceOf(NotAllowedError)
   expect(fetchImpl).not.toHaveBeenCalled()
 })
 
-test('у клиента нет методов записи', () => {
+test('у клиента нет методов записи мимо postJson', () => {
   const client = clientWith(vi.fn() as unknown as typeof fetch)
   const asRecord = client as unknown as Record<string, unknown>
   expect(asRecord.post).toBeUndefined()
@@ -107,9 +124,9 @@ test(
     })
     const client = new AllowlistClient({
       baseUrl: 'https://bank.example',
-      allowedPaths: ALLOWED,
-      token: 'token',
-      fetchImpl: fetchImpl as unknown as typeof fetch,
+      allowed: ALLOWED,
+      credentials: CREDENTIALS,
+      transport: fetchTransport(fetchImpl as unknown as typeof fetch),
       timeoutMs: 20,
     })
     await expect(client.getJson('/api/common/v1/session_status')).rejects.toThrow()
@@ -119,7 +136,7 @@ test(
 
 test('редирект на чужой хост не превращается в ответ — клиент падает, а не переходит', async () => {
   // симулируем самое опасное: банк отвечает 302 с Location на чужой origin.
-  // даже если бы fetchImpl (например, инструментированный) не уважал
+  // даже если бы транспорт (например, инструментированный) не уважал
   // redirect: 'error' и вернул такой ответ как есть, клиент не должен
   // трактовать его как успех
   const fetchImpl = vi.fn(
@@ -150,9 +167,9 @@ test('токен не попадает в текст ошибки при not-ok 
   const TOKEN = 'SEKRET-SESSION-VALUE-DO-NOT-LEAK'
   const client = new AllowlistClient({
     baseUrl: 'https://bank.example',
-    allowedPaths: ALLOWED,
-    token: TOKEN,
-    fetchImpl: vi.fn(async () => new Response('nope', { status: 500 })) as unknown as typeof fetch,
+    allowed: ALLOWED,
+    credentials: { kind: 'query', name: 'sessionid', value: TOKEN },
+    transport: fetchTransport(vi.fn(async () => new Response('nope', { status: 500 })) as unknown as typeof fetch),
   })
   await expect(client.getJson('/api/common/v1/session_status')).rejects.toSatisfy(
     (e: Error) => !e.message.includes(TOKEN) && !(e.stack ?? '').includes(TOKEN),
@@ -160,7 +177,7 @@ test('токен не попадает в текст ошибки при not-ok 
 })
 
 test('ошибка самого fetchImpl не пробрасывается как есть', async () => {
-  // fetchImpl — публичный параметр конструктора; инструментированная
+  // транспорт — публичный параметр конструктора; инструментированная
   // реализация может положить URL (с токеном в query) в текст своей ошибки
   const TOKEN = 'SEKRET-SESSION-VALUE-DO-NOT-LEAK'
   const fetchImpl = vi.fn(async () => {
@@ -168,9 +185,9 @@ test('ошибка самого fetchImpl не пробрасывается ка
   })
   const client = new AllowlistClient({
     baseUrl: 'https://bank.example',
-    allowedPaths: ALLOWED,
-    token: TOKEN,
-    fetchImpl: fetchImpl as unknown as typeof fetch,
+    allowed: ALLOWED,
+    credentials: { kind: 'query', name: 'sessionid', value: TOKEN },
+    transport: fetchTransport(fetchImpl as unknown as typeof fetch),
   })
   await expect(client.getJson('/api/common/v1/session_status')).rejects.toSatisfy(
     (e: Error) => !e.message.includes(TOKEN),
@@ -199,4 +216,33 @@ test('текст ответа не пробрасывается при ошиб�
   await expect(client.getJson('/api/common/v1/session_status')).rejects.toSatisfy(
     (e: Error) => !e.message.includes('сессия истекла') && !e.message.includes('12345'),
   )
+})
+
+test('секрет-заголовок уходит в заголовках, а не в адресе', async () => {
+  const { transport, calls } = recordingTransport()
+  const client = new AllowlistClient({
+    baseUrl: 'https://bank.test',
+    allowed: [{ path: '/data', method: 'POST' }],
+    credentials: { kind: 'header', name: 'Cookie', value: 'SESSION=secret' },
+    transport,
+  })
+
+  await client.postJson('/data', { page: 1 })
+
+  expect(calls[0]?.headers['Cookie']).toBe('SESSION=secret')
+  expect(calls[0]?.url).not.toContain('secret')
+  expect(calls[0]?.body).toBe('{"page":1}')
+})
+
+test('POST по пути, разрешённому только для GET, не отправляется', async () => {
+  const { transport, calls } = recordingTransport()
+  const client = new AllowlistClient({
+    baseUrl: 'https://bank.test',
+    allowed: [{ path: '/data', method: 'GET' }],
+    credentials: { kind: 'header', name: 'Cookie', value: 'SESSION=secret' },
+    transport,
+  })
+
+  await expect(client.postJson('/data', {})).rejects.toBeInstanceOf(NotAllowedError)
+  expect(calls).toHaveLength(0)
 })

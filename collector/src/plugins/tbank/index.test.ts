@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { expect, test, vi } from 'vitest'
 import { NotAllowedError, type FetchImpl } from '../../http/allowlist-client'
+import { fetchTransport } from '../../http/transport'
 import { createTBankClient, TBANK_ALLOWED } from './client'
 import { checkSession, fetchAccounts, fetchOperations, SessionExpiredError } from './index'
 
@@ -16,7 +17,7 @@ function jsonResponse(body: string): Response {
 
 test('fetchAccounts приводит счета к нашей модели', async () => {
   const fetchImpl = vi.fn(async () => jsonResponse(readFixtureText('accounts.json')))
-  const client = createTBankClient('token', { fetchImpl: fetchImpl as unknown as FetchImpl })
+  const client = createTBankClient('token', { transport: fetchTransport(fetchImpl as unknown as FetchImpl) })
 
   const accounts = await fetchAccounts(client)
 
@@ -37,14 +38,14 @@ test('fetchAccounts бросает, если payload от банка не мас
   // тихая подмена не-массива на [] на транспортном уровне неотличима от
   // «банк и правда прислал 0 счетов»
   const fetchImpl = vi.fn(async () => jsonResponse('{"resultCode":"OK","payload":"не массив"}'))
-  const client = createTBankClient('token', { fetchImpl: fetchImpl as unknown as FetchImpl })
+  const client = createTBankClient('token', { transport: fetchTransport(fetchImpl as unknown as FetchImpl) })
 
   await expect(fetchAccounts(client)).rejects.toThrow(/payload/)
 })
 
 test('fetchOperations приводит операции к нашей модели', async () => {
   const fetchImpl = vi.fn(async () => jsonResponse(readFixtureText('operations.json')))
-  const client = createTBankClient('token', { fetchImpl: fetchImpl as unknown as FetchImpl })
+  const client = createTBankClient('token', { transport: fetchTransport(fetchImpl as unknown as FetchImpl) })
 
   const operations = await fetchOperations(client, 'acc-1', 1783200000000, 1783700000000)
 
@@ -58,7 +59,7 @@ test('сумма с числом значащих цифр за пределам
   // подмену parseLossless на обычный JSON.parse. Здесь проходит полный путь:
   // фикстура-текст → AllowlistClient → parseLossless → toOperations
   const fetchImpl = vi.fn(async () => jsonResponse(readFixtureText('operations.json')))
-  const client = createTBankClient('token', { fetchImpl: fetchImpl as unknown as FetchImpl })
+  const client = createTBankClient('token', { transport: fetchTransport(fetchImpl as unknown as FetchImpl) })
 
   const operations = await fetchOperations(client, 'acc-1', 1783200000000, 1783700000000)
 
@@ -68,7 +69,7 @@ test('сумма с числом значащих цифр за пределам
 
 test('fetchOperations передаёт account, start и end в запрос', async () => {
   const fetchImpl = vi.fn<FetchImpl>(async () => jsonResponse(readFixtureText('operations.json')))
-  const client = createTBankClient('token', { fetchImpl })
+  const client = createTBankClient('token', { transport: fetchTransport(fetchImpl) })
 
   await fetchOperations(client, 'acc-1', 1783200000000, 1783600000000)
 
@@ -80,7 +81,7 @@ test('fetchOperations передаёт account, start и end в запрос', a
 
 test('AUTHENTICATION_FAILED превращается в SessionExpiredError', async () => {
   const fetchImpl = vi.fn(async () => jsonResponse('{"resultCode":"AUTHENTICATION_FAILED"}'))
-  const client = createTBankClient('token', { fetchImpl: fetchImpl as unknown as FetchImpl })
+  const client = createTBankClient('token', { transport: fetchTransport(fetchImpl as unknown as FetchImpl) })
 
   await expect(checkSession(client)).rejects.toBeInstanceOf(SessionExpiredError)
 })
@@ -89,14 +90,14 @@ test('SESSION_IS_ABSENT превращается в SessionExpiredError', async 
   // именно этот код банк отдаёт на живом прогоне, когда токен уже прочитан,
   // но сессией ещё не стал: лечится повторным входом, а не падением
   const fetchImpl = vi.fn(async () => jsonResponse('{"resultCode":"SESSION_IS_ABSENT"}'))
-  const client = createTBankClient('token', { fetchImpl: fetchImpl as unknown as FetchImpl })
+  const client = createTBankClient('token', { transport: fetchTransport(fetchImpl as unknown as FetchImpl) })
 
   await expect(checkSession(client)).rejects.toBeInstanceOf(SessionExpiredError)
 })
 
 test('иной resultCode даёт обычную ошибку, а не SessionExpiredError', async () => {
   const fetchImpl = vi.fn(async () => jsonResponse('{"resultCode":"UNKNOWN_ERROR"}'))
-  const client = createTBankClient('token', { fetchImpl: fetchImpl as unknown as FetchImpl })
+  const client = createTBankClient('token', { transport: fetchTransport(fetchImpl as unknown as FetchImpl) })
 
   await expect(checkSession(client)).rejects.not.toBeInstanceOf(SessionExpiredError)
 })
@@ -105,7 +106,7 @@ test('checkSession принимает живую сессию, когда пол
   const fetchImpl = vi.fn(
     async () => jsonResponse('{"resultCode":"OK","millisLeft":3600000,"accessLevel":"FULL"}'),
   )
-  const client = createTBankClient('token', { fetchImpl: fetchImpl as unknown as FetchImpl })
+  const client = createTBankClient('token', { transport: fetchTransport(fetchImpl as unknown as FetchImpl) })
 
   await expect(checkSession(client)).resolves.toBeUndefined()
 })
@@ -118,7 +119,7 @@ test('анонимная сессия не считается живой, хот
     async () =>
       jsonResponse('{"resultCode":"OK","payload":{"accessLevel":"ANONYMOUS","millisLeft":659622}}'),
   )
-  const client = createTBankClient('token', { fetchImpl: fetchImpl as unknown as FetchImpl })
+  const client = createTBankClient('token', { transport: fetchTransport(fetchImpl as unknown as FetchImpl) })
 
   await expect(checkSession(client)).rejects.toBeInstanceOf(SessionExpiredError)
 })
@@ -130,7 +131,7 @@ test('незнакомый уровень доступа живой сессии
     async () =>
       jsonResponse('{"resultCode":"OK","payload":{"accessLevel":"PREMIUM","millisLeft":3600000}}'),
   )
-  const client = createTBankClient('token', { fetchImpl: fetchImpl as unknown as FetchImpl })
+  const client = createTBankClient('token', { transport: fetchTransport(fetchImpl as unknown as FetchImpl) })
 
   await expect(checkSession(client)).resolves.toBeUndefined()
 })
@@ -141,7 +142,7 @@ test('checkSession принимает живую сессию, когда пол
   const fetchImpl = vi.fn(
     async () => jsonResponse('{"resultCode":"OK","payload":{"millisLeft":3600000,"accessLevel":"FULL"}}'),
   )
-  const client = createTBankClient('token', { fetchImpl: fetchImpl as unknown as FetchImpl })
+  const client = createTBankClient('token', { transport: fetchTransport(fetchImpl as unknown as FetchImpl) })
 
   await expect(checkSession(client)).resolves.toBeUndefined()
 })
@@ -152,7 +153,7 @@ test('checkSession бросает SessionExpiredError, если millisLeft <= 0 
   const fetchImpl = vi.fn(
     async () => jsonResponse('{"resultCode":"OK","millisLeft":0,"accessLevel":"FULL"}'),
   )
-  const client = createTBankClient('token', { fetchImpl: fetchImpl as unknown as FetchImpl })
+  const client = createTBankClient('token', { transport: fetchTransport(fetchImpl as unknown as FetchImpl) })
 
   await expect(checkSession(client)).rejects.toBeInstanceOf(SessionExpiredError)
 })
@@ -161,7 +162,7 @@ test('checkSession видит истёкший millisLeft и в payload', async 
   const fetchImpl = vi.fn(
     async () => jsonResponse('{"resultCode":"OK","payload":{"millisLeft":-1,"accessLevel":"FULL"}}'),
   )
-  const client = createTBankClient('token', { fetchImpl: fetchImpl as unknown as FetchImpl })
+  const client = createTBankClient('token', { transport: fetchTransport(fetchImpl as unknown as FetchImpl) })
 
   await expect(checkSession(client)).rejects.toBeInstanceOf(SessionExpiredError)
 })
@@ -171,7 +172,7 @@ test('ответ session_status неожиданной формы — обычн
   // истёкшая сессия. SessionExpiredError здесь означал бы бесконечный круг
   // «живая кука → не нашли поле → окно входа → тот же ответ → окно входа»
   const fetchImpl = vi.fn(async () => jsonResponse('{"resultCode":"OK","payload":{"status":"ACTIVE"}}'))
-  const client = createTBankClient('token', { fetchImpl: fetchImpl as unknown as FetchImpl })
+  const client = createTBankClient('token', { transport: fetchTransport(fetchImpl as unknown as FetchImpl) })
 
   await expect(checkSession(client)).rejects.toThrow(Error)
   await expect(checkSession(client)).rejects.not.toBeInstanceOf(SessionExpiredError)
@@ -179,25 +180,25 @@ test('ответ session_status неожиданной формы — обычн
 
 test('нечисловой millisLeft — обычная ошибка, а не SessionExpiredError', async () => {
   const fetchImpl = vi.fn(async () => jsonResponse('{"resultCode":"OK","millisLeft":"скоро"}'))
-  const client = createTBankClient('token', { fetchImpl: fetchImpl as unknown as FetchImpl })
+  const client = createTBankClient('token', { transport: fetchTransport(fetchImpl as unknown as FetchImpl) })
 
   await expect(checkSession(client)).rejects.not.toBeInstanceOf(SessionExpiredError)
 })
 
 test('клиент отказывается ходить по неразрешённому пути — allowlist реально ограничивает', async () => {
   const fetchImpl = vi.fn()
-  const client = createTBankClient('token', { fetchImpl: fetchImpl as unknown as FetchImpl })
+  const client = createTBankClient('token', { transport: fetchTransport(fetchImpl as unknown as FetchImpl) })
 
   await expect(client.getJson('/api/common/v1/transfer')).rejects.toBeInstanceOf(NotAllowedError)
   expect(fetchImpl).not.toHaveBeenCalled()
 })
 
-test('TBANK_ALLOWED содержит ровно пять задокументированных путей', () => {
+test('TBANK_ALLOWED содержит ровно пять задокументированных адресов, все на чтение', () => {
   expect(TBANK_ALLOWED).toEqual([
-    '/api/common/v1/accounts_light_ib',
-    '/api/common/v1/session_status',
-    '/mybank/api/operations/timeline/public/legacy/v1/operations',
-    '/mybank/api/operations/timeline/public/legacy/v1/operations_category_list_bank',
-    '/mybank/api/operations/timeline/public/legacy/v1/operations_category_list_user',
+    { path: '/api/common/v1/accounts_light_ib', method: 'GET' },
+    { path: '/api/common/v1/session_status', method: 'GET' },
+    { path: '/mybank/api/operations/timeline/public/legacy/v1/operations', method: 'GET' },
+    { path: '/mybank/api/operations/timeline/public/legacy/v1/operations_category_list_bank', method: 'GET' },
+    { path: '/mybank/api/operations/timeline/public/legacy/v1/operations_category_list_user', method: 'GET' },
   ])
 })
