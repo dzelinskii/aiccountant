@@ -229,7 +229,7 @@ function resolveKind(item: Record<string, unknown>): string {
   if (!Object.hasOwn(BANK_GROUP_TO_KIND, group)) return 'unknown'
   // подгруппа уточняет группу, а не заменяет её: до сюда доходят только
   // операции из групп, которые мы знаем
-  return refineBySubgroup(item) ?? BANK_GROUP_TO_KIND[group] ?? 'unknown'
+  return refineBySubgroup(item) ?? refineOwnTransfer(item, group) ?? BANK_GROUP_TO_KIND[group] ?? 'unknown'
 }
 
 function refineBySubgroup(item: Record<string, unknown>): string | undefined {
@@ -237,6 +237,19 @@ function refineBySubgroup(item: Record<string, unknown>): string | undefined {
   const id = subgroup ? getStr(subgroup, 'id') : undefined
   if (id === undefined || !Object.hasOwn(BANK_SUBGROUP_TO_KIND, id)) return undefined
   return BANK_SUBGROUP_TO_KIND[id]
+}
+
+// Перевод себе банк кладёт в ту же группу TRANSFER и ту же подгруппу F1, что и
+// перевод человеку: подгруппа здесь не различает ничего, в отличие от входящей
+// стороны. Различает isInner — на живых данных владельца он true у всех девяти
+// «Между своими счетами» и false у всех переводов людям.
+//
+// Но сам по себе isInner «свои деньги» не означает: у покупок Yandex Cloud он
+// тоже true. Поэтому смотрим его только в той группе, где он меняет смысл, —
+// доверять признаку в отрыве от группы нельзя.
+function refineOwnTransfer(item: Record<string, unknown>, group: string): string | undefined {
+  if (group !== 'TRANSFER' || item['isInner'] !== true) return undefined
+  return 'transfer_self'
 }
 
 // Имя категории у банка сравнивается не побайтово. Причина в типографике: в
