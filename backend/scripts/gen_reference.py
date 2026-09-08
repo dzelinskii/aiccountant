@@ -127,12 +127,19 @@ def _request_schema_name(operation: dict[str, Any]) -> tuple[str, bool] | None:
     return _schema_ref_name(_json_schema(request_body))
 
 
+# 202 наравне с 200 и 201: им отвечают ручки, ставящие работу в фоновую очередь
+# (загрузка выписки, категоризация). Забудь мы этот код — справочник умолчал бы
+# про их ответ, и читатель решил бы, что ручка не отвечает ничем
+SUCCESS_CODES = ("200", "201", "202")
+
+
 def _response_schema_name(operation: dict[str, Any]) -> tuple[str, bool] | None:
     responses = operation.get("responses", {})
-    response = responses.get("200") or responses.get("201")
-    if response is None:
-        return None
-    return _schema_ref_name(_json_schema(response))
+    for code in SUCCESS_CODES:
+        response = responses.get(code)
+        if response is not None:
+            return _schema_ref_name(_json_schema(response))
+    return None
 
 
 def _schema_label(name_and_is_list: tuple[str, bool]) -> str:

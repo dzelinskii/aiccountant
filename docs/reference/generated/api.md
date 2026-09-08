@@ -19,7 +19,7 @@ API **не версионирован**: все пути живут под `/api
 - `DELETE /api/description-rules/{rule_id}`
 - `GET /api/health`
 - `GET /api/imports` — отвечает списком `ImportListItemOut`
-- `POST /api/imports`
+- `POST /api/imports` — отвечает `ImportStartedOut`
 - `POST /api/imports/parsed` — принимает `ParsedImportIn`, отвечает `ImportStartedOut`
 - `GET /api/imports/{import_id}` — отвечает `ImportStatusOut`
 - `POST /api/imports/{import_id}/commit` — отвечает `ImportResultOut`

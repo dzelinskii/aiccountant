@@ -172,3 +172,11 @@ def test_boundaries_mention_allowed_exceptions() -> None:
 def test_generated_files_warn_against_hand_editing() -> None:
     for text in render_all().values():
         assert "не правьте руками" in text
+
+
+def test_api_covers_accepted_responses() -> None:
+    """Ручки, ставящие работу в очередь, отвечают 202. Проверяй бы генератор
+    только 200 и 201 — справочник умолчал бы про их ответ, и читатель решил бы,
+    что ручка не отвечает ничем."""
+    api = render_all()["api.md"]
+    assert "- `POST /api/imports` — отвечает `ImportStartedOut`" in api
