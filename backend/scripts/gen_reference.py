@@ -83,22 +83,33 @@ def render_schema() -> str:
     return "\n".join(lines)
 
 
-def _schema_ref_name(schema: dict[str, Any] | None) -> str | None:
-    """Достаёт имя схемы из `$ref` вида `#/components/schemas/ParsedImportIn`.
+def _schema_ref_name(schema: dict[str, Any] | None) -> tuple[str, bool] | None:
+    """Достаёт имя схемы из `$ref` вида `#/components/schemas/ParsedImportIn`
+    вместе с признаком «это список».
 
     Pydantic заворачивает часть ссылок в `allOf`/`anyOf` (например, когда у
     поля есть описание) — тогда `$ref` лежит на уровень глубже, но ведёт к
-    той же схеме, и её тоже стоит найти.
+    той же схеме, и её тоже стоит найти. У ручек-списков схема — не `$ref`,
+    а `{"type": "array", "items": {"$ref": ...}}`: не разворачивая `items`,
+    справочник решил бы, что схемы нет вовсе, хотя она есть — просто ответ
+    не один объект, а список таких объектов.
     """
     if schema is None:
         return None
     ref = schema.get("$ref")
     if isinstance(ref, str):
-        return ref.rsplit("/", 1)[-1]
+        return ref.rsplit("/", 1)[-1], False
+    if schema.get("type") == "array":
+        items = schema.get("items")
+        nested = _schema_ref_name(items) if isinstance(items, dict) else None
+        if nested is not None:
+            name, _ = nested
+            return name, True
+        return None
     for branch in (*schema.get("allOf", []), *schema.get("anyOf", [])):
-        name = _schema_ref_name(branch)
-        if name is not None:
-            return name
+        branch_result = _schema_ref_name(branch)
+        if branch_result is not None:
+            return branch_result
     return None
 
 
@@ -109,19 +120,24 @@ def _json_schema(container: dict[str, Any]) -> dict[str, Any] | None:
     return result if isinstance(result, dict) else None
 
 
-def _request_schema_name(operation: dict[str, Any]) -> str | None:
+def _request_schema_name(operation: dict[str, Any]) -> tuple[str, bool] | None:
     request_body = operation.get("requestBody")
     if request_body is None:
         return None
     return _schema_ref_name(_json_schema(request_body))
 
 
-def _response_schema_name(operation: dict[str, Any]) -> str | None:
+def _response_schema_name(operation: dict[str, Any]) -> tuple[str, bool] | None:
     responses = operation.get("responses", {})
     response = responses.get("200") or responses.get("201")
     if response is None:
         return None
     return _schema_ref_name(_json_schema(response))
+
+
+def _schema_label(name_and_is_list: tuple[str, bool]) -> str:
+    name, is_list = name_and_is_list
+    return f"списком `{name}`" if is_list else f"`{name}`"
 
 
 def render_api() -> str:
@@ -148,12 +164,12 @@ def render_api() -> str:
             # тела запроса, а у 204-ответа — тела вовсе): тогда просто не пишем её,
             # а не подставляем пустое значение, которое выглядело бы как имя.
             parts = []
-            request_name = _request_schema_name(operation)
-            if request_name is not None:
-                parts.append(f"принимает `{request_name}`")
-            response_name = _response_schema_name(operation)
-            if response_name is not None:
-                parts.append(f"отвечает `{response_name}`")
+            request_schema = _request_schema_name(operation)
+            if request_schema is not None:
+                parts.append(f"принимает {_schema_label(request_schema)}")
+            response_schema = _response_schema_name(operation)
+            if response_schema is not None:
+                parts.append(f"отвечает {_schema_label(response_schema)}")
             suffix = f" — {', '.join(parts)}" if parts else ""
             lines.append(f"- `{method.upper()} {path}`{suffix}")
     lines.append("")

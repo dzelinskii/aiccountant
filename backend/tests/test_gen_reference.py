@@ -91,6 +91,16 @@ def test_api_names_request_and_response_schemas() -> None:
     )
 
 
+def test_api_marks_array_responses_as_lists() -> None:
+    """У ручек-списков схема ответа — не прямой `$ref`, а `{"type": "array",
+    "items": {"$ref": ...}}`: не развернув `items`, генератор решил бы, что
+    схемы нет вовсе, и GET /api/accounts остался бы без аннотации, хотя отдаёт
+    список `AccountOut`. Сверяем строку целиком: пометка «списком» отличает
+    список от одиночного объекта, а это важно тому, кто пишет клиент."""
+    api = render_all()["api.md"]
+    assert "- `GET /api/accounts` — отвечает списком `AccountOut`" in api
+
+
 def test_api_omits_missing_schema_instead_of_writing_none() -> None:
     """Мутация-находка: `None` в справочнике выглядит как настоящее имя схемы,
     агент пойдёт искать класс `None` в коде. У GET-ручки без тела запроса схему
