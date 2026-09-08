@@ -1173,8 +1173,17 @@ test('заявка не импортируется', () => {
 })
 
 test('сумма не проходит через float', () => {
-  const big = outcome({ operationAmount: { amount: 12345678901234.5678, currencyCode: 'RUB' } })
-  const [op] = toOperations(parse([big]), 'card:1111111111111111')
+  // JSON собирается текстом, а не через объект: литерал 12345678901234.5678 в
+  // исходнике теста округляется движком ещё при разборе файла, до всякого
+  // JSON.stringify. Тест, написанный через объект, терял бы точность сам и
+  // падал при любой правильной реализации, ничего не проверяя
+  const raw =
+    '[{"uohId":"a1b2c3d4-0000-0000-0000-000000000001","date":"08.09.2026T11:23:45",' +
+    '"form":"ExtCardPayment","isFinancial":true,' +
+    '"fromResource":{"id":"card:1111111111111111"},' +
+    '"operationAmount":{"amount":12345678901234.5678,"currencyCode":"RUB"}}]'
+
+  const [op] = toOperations(parseLossless(raw) as unknown[], 'card:1111111111111111')
   expect(op?.amount).toBe('12345678901234.5678')
 })
 
