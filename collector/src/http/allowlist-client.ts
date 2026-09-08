@@ -44,8 +44,10 @@ const DEFAULT_TIMEOUT_MS = 30_000
 
 /**
  * HTTP-клиент, который физически не способен на лишнее: только перечисленные
- * адреса, только разрешённым для каждого методом, без следования за
- * редиректами. Проверяемое ограничение вместо обещания.
+ * адреса, только разрешённым для каждого методом. За редиректом клиент сам не
+ * следит — это свойство обеспечивают транспорты (fetchTransport и
+ * httpsTransport), а не он: оба возвращают 3xx как обычный ответ со статусом.
+ * Проверяемое ограничение вместо обещания.
  *
  * Оговорка про Сбербанк: там чтение идёт через POST, поэтому метод сам по себе
  * безвредности больше не доказывает — гарантией остаётся сам список адресов.
@@ -137,7 +139,11 @@ export class AllowlistClient {
 function describeCause(e: unknown): string {
   const name = hasStringProp(e, 'name') ? e.name : undefined
   const cause = hasProp(e, 'cause') ? e.cause : undefined
-  const code = hasStringProp(cause, 'code') ? cause.code : undefined
+  // undici (fetchTransport) кладёт код причины в e.cause.code, node:https
+  // (httpsTransport) — прямо в e.code. Без проверки обоих мест httpsTransport
+  // всегда терял код, и таймаут, ECONNREFUSED, недоверенный сертификат и
+  // обрыв тела выглядели одной и той же строкой
+  const code = (hasStringProp(cause, 'code') ? cause.code : undefined) ?? (hasStringProp(e, 'code') ? e.code : undefined)
   const parts = [name, code].filter((part): part is string => Boolean(part))
   return parts.length > 0 ? ` (${parts.join(': ')})` : ''
 }

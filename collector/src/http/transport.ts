@@ -31,8 +31,10 @@ export function fetchTransport(fetchImpl: typeof fetch = fetch): Transport {
         body,
         // без этого fetch молча следует за Location, в том числе на чужой
         // origin — allowlist проверяется один раз, до запроса, и редирект его
-        // обходит
-        redirect: 'error',
+        // обходит. 'manual' (а не 'error') отдаёт редирект наверх как обычный
+        // ответ со статусом 3xx — так же, как это делает httpsTransport, и
+        // клиент выше видит одну и ту же BankHttpError вместо двух разных форм
+        redirect: 'manual',
         signal,
       })
       return { status: res.status, ok: res.ok, text: () => res.text() }
@@ -49,28 +51,62 @@ export function httpsTransport(ca: string): Transport {
   return {
     send(url, { method, headers, body, signal }) {
       return new Promise((resolve, reject) => {
+        // и resolve, и reject могут сработать больше одного раза за жизнь
+        // запроса (например 'close' после уже случившегося 'end') — промис
+        // разрешается только первым срабатыванием, остальные молча гасятся
+        let settled = false
+        const settle = (fn: () => void) => {
+          if (settled) return
+          settled = true
+          fn()
+        }
+
         const req = httpsRequest(
           url,
           {
             method,
             ca,
+            // без Content-Length Node уходит в chunked-кодирование, а многие
+            // банковские фронты его отбивают — тело у нас всегда известной
+            // длины заранее, потоковой отправки здесь не бывает
             headers: body === undefined ? headers : { ...headers, 'Content-Length': Buffer.byteLength(body) },
           },
           (res) => {
             const status = res.statusCode ?? 0
+            // редирект node:https сам не проходит, но и ошибкой не считает —
+            // 3xx возвращается обычным ответом, проверка на стороне клиента
+            // (см. allowlist-client)
+            const ok = status >= 200 && status < 300
             let text = ''
-            res.setEncoding('utf-8')
-            res.on('data', (chunk: string) => {
-              text += chunk
-            })
+            if (ok) {
+              res.setEncoding('utf-8')
+              res.on('data', (chunk: string) => {
+                text += chunk
+              })
+            } else {
+              // тело ответа с ошибочным статусом клиенту не нужно — сливаем
+              // поток, а не копим в памяти то, что всё равно будет отброшено
+              res.resume()
+            }
             res.on('end', () => {
-              resolve({ status, ok: status >= 200 && status < 300, text: async () => text })
+              settle(() => resolve({ status, ok, text: async () => text }))
+            })
+            // обрыв тела обычно даёт 'error' на res (Node считает это
+            // ECONNRESET), но это внутреннее поведение, не задокументированная
+            // гарантия — сама документация Node рекомендует проверять
+            // res.complete по 'close' как основной способ различить полный
+            // ответ и обрыв. Без этой проверки для той же ситуации без
+            // 'error' промис не резолвился и не реджектился никогда, и
+            // pnpm collect зависал молча
+            res.on('error', (err) => settle(() => reject(err)))
+            res.on('close', () => {
+              if (!res.complete) {
+                settle(() => reject(new Error('Соединение с банком оборвалось до конца ответа')))
+              }
             })
           },
         )
-        // редирект node:https сам не проходит, но и ошибкой не считает —
-        // проверяем статус на стороне клиента (см. allowlist-client)
-        req.on('error', reject)
+        req.on('error', (err) => settle(() => reject(err)))
         signal.addEventListener('abort', () => req.destroy(new Error('Таймаут запроса')), { once: true })
         if (body !== undefined) req.write(body)
         req.end()

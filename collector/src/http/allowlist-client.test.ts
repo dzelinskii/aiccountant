@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest'
-import { AllowlistClient, NotAllowedError } from './allowlist-client'
+import { AllowlistClient, BankHttpError, NotAllowedError } from './allowlist-client'
 import { fetchTransport } from './transport'
 import type { Transport } from './transport'
 
@@ -90,7 +90,9 @@ test('запрос запрещает автоследование за реди
   const client = clientWith(fetchImpl as unknown as typeof fetch)
   await client.getJson('/api/common/v1/session_status')
   const init = fetchImpl.mock.calls[0]?.[1]
-  expect(init?.redirect).toBe('error')
+  // 'manual', а не 'error': переход по-прежнему не происходит, но статус
+  // 3xx доходит наверх обычным ответом — см. следующий тест
+  expect(init?.redirect).toBe('manual')
 })
 
 test('запрос сопровождается сигналом отмены', async () => {
@@ -134,11 +136,11 @@ test(
   2000,
 )
 
-test('редирект на чужой хост не превращается в ответ — клиент падает, а не переходит', async () => {
+test('редирект на чужой хост не превращается в переход — клиент получает BankHttpError(302)', async () => {
   // симулируем самое опасное: банк отвечает 302 с Location на чужой origin.
-  // даже если бы транспорт (например, инструментированный) не уважал
-  // redirect: 'error' и вернул такой ответ как есть, клиент не должен
-  // трактовать его как успех
+  // redirect: 'manual' не идёт по Location сам (единственный вызов fetchImpl
+  // ниже это подтверждает) и отдаёт 3xx обычным ответом — клиент обязан
+  // трактовать его как типизированную ошибку, а не как успех
   const fetchImpl = vi.fn(
     async () =>
       new Response(null, {
@@ -147,7 +149,10 @@ test('редирект на чужой хост не превращается в
       }),
   )
   const client = clientWith(fetchImpl as unknown as typeof fetch)
-  await expect(client.getJson('/api/common/v1/session_status')).rejects.toThrow()
+  await expect(client.getJson('/api/common/v1/session_status')).rejects.toSatisfy(
+    (e: unknown) => e instanceof BankHttpError && e.status === 302,
+  )
+  expect(fetchImpl).toHaveBeenCalledTimes(1)
 })
 
 test('при not-ok ответе тело не читается', async () => {
@@ -204,6 +209,29 @@ test('сетевые сбои различимы по имени ошибки и
   const client = clientWith(fetchImpl as unknown as typeof fetch)
   await expect(client.getJson('/api/common/v1/session_status')).rejects.toSatisfy(
     (e: Error) => e.message.includes('TypeError') && e.message.includes('ENOTFOUND'),
+  )
+})
+
+test('сетевые сбои различимы и для транспорта в форме node:https, где код лежит прямо на ошибке', async () => {
+  // undici (fetchTransport) кладёт код причины в e.cause.code, а node:https
+  // (httpsTransport) — прямо в e.code, без cause вообще (проверено руками:
+  // реальная ошибка connect ECONNREFUSED от node:https имеет именно такую
+  // форму, включая e.name === 'Error' — у Error-наследников name не
+  // становится именем класса сам по себе)
+  const refused = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:1'), { code: 'ECONNREFUSED' })
+  const transport: Transport = {
+    send: vi.fn(async () => {
+      throw refused
+    }),
+  }
+  const client = new AllowlistClient({
+    baseUrl: 'https://bank.example',
+    allowed: ALLOWED,
+    credentials: CREDENTIALS,
+    transport,
+  })
+  await expect(client.getJson('/api/common/v1/session_status')).rejects.toSatisfy(
+    (e: Error) => e.message.includes('Error') && e.message.includes('ECONNREFUSED'),
   )
 })
 
