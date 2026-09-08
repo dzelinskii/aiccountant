@@ -1,5 +1,7 @@
 import type { AllowlistClient } from '../../http/allowlist-client'
-import { COMMON_PARAMS } from './client'
+import type { BankPlugin, Credentials, LoginPrompt } from '../../core/contract'
+import { COMMON_PARAMS, createTBankClient } from './client'
+import { obtainTBankToken } from './login'
 import { toAccounts, toOperations } from './map'
 import type { CollectedAccount, CollectedOperation } from './types'
 
@@ -130,4 +132,40 @@ function toFiniteNumber(value: unknown): number | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+// Существующие функции остаются как есть — плагин собирается из них, а не
+// переписывает их: так видно, что интерфейс лёг на готовый код, а не наоборот
+export const tbankPlugin: BankPlugin = {
+  name: 'tbank',
+
+  async login(prompt: LoginPrompt): Promise<Credentials> {
+    const token = await obtainTBankToken(prompt)
+    return { kind: 'query', name: 'sessionid', value: token }
+  },
+
+  async isAlive(credentials: Credentials): Promise<boolean> {
+    try {
+      await checkSession(clientFor(credentials))
+      return true
+    } catch (error) {
+      if (error instanceof SessionExpiredError) return false
+      throw error
+    }
+  },
+
+  fetchAccounts(credentials: Credentials) {
+    return fetchAccounts(clientFor(credentials))
+  },
+
+  fetchOperations(credentials: Credentials, accountId: string, since: number, until: number) {
+    return fetchOperations(clientFor(credentials), accountId, since, until)
+  },
+}
+
+function clientFor(credentials: Credentials): AllowlistClient {
+  if (credentials.kind !== 'query') {
+    throw new Error('Т-Банк ожидает секрет в query — сохранённая запись не той формы')
+  }
+  return createTBankClient(credentials.value)
 }
