@@ -60,7 +60,10 @@ test('все значения таблицы есть в словаре', () => 
 test('в таблице MCC нет задвоенных кодов', () => {
   const path = fileURLToPath(new URL('./category-hints.ts', import.meta.url))
   const source = readFileSync(path, 'utf-8')
-  const tableMatch = source.match(/const MCC_TO_HINT: Record<string, CategoryHint> = \{([\s\S]*?)\n\}\n/)
+  // \r?\n обязателен: при core.autocrlf=true рабочая копия получает CRLF, и
+  // регулярка, жёстко ждущая \n, не находит таблицу вовсе — тест падал бы не
+  // из-за дубликата ключа, а из-за настроек git у конкретного разработчика
+  const tableMatch = source.match(/const MCC_TO_HINT: Record<string, CategoryHint> = \{([\s\S]*?)\r?\n\}\r?\n/)
   expect(tableMatch).not.toBeNull()
   const codes = [...(tableMatch?.[1] ?? '').matchAll(/'(\d{4})':/g)].map((match) => match[1])
   expect(codes.length).toBeGreaterThan(0)
