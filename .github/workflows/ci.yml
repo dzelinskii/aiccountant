@@ -21,6 +21,19 @@ jobs:
       - run: uv run mypy
       - run: uv run lint-imports
       - run: uv run pytest
+      - run: uv run python scripts/gen_reference.py
+      - name: Справочник не разошёлся с кодом
+        run: |
+          # --intent-to-add обязателен: git diff неотслеживаемые файлы не видит,
+          # и новый файл от нового генератора прошёл бы сверку молча
+          git -C .. add --intent-to-add docs/reference/generated
+          if ! git -C .. diff --exit-code -- docs/reference/generated; then
+            echo ""
+            echo "Генерируемая часть справочника устарела."
+            echo "Запустите: cd backend && uv run python scripts/gen_reference.py"
+            echo "и закоммитьте изменения в docs/reference/generated."
+            exit 1
+          fi
 
   frontend:
     runs-on: ubuntu-latest
@@ -68,6 +81,19 @@ jobs:
       - run: pnpm lint
       - run: pnpm test
       - run: pnpm build
+      - run: pnpm reference
+      - name: Справочник не разошёлся с кодом
+        run: |
+          # --intent-to-add обязателен: git diff неотслеживаемые файлы не видит,
+          # и новый файл от нового генератора прошёл бы сверку молча
+          git -C .. add --intent-to-add docs/reference/generated
+          if ! git -C .. diff --exit-code -- docs/reference/generated; then
+            echo ""
+            echo "Генерируемая часть справочника устарела."
+            echo "Запустите: cd collector && pnpm reference"
+            echo "и закоммитьте изменения в docs/reference/generated."
+            exit 1
+          fi
 
   docker:
     runs-on: ubuntu-latest
@@ -76,3 +102,36 @@ jobs:
       - uses: actions/checkout@v4
       - run: cp .env.example .env
       - run: docker compose build
+
+  docs-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # только на PR: у push в main нет ни базы для сравнения, ни метки-исключения
+    if: >-
+      github.event_name == 'pull_request' &&
+      !contains(github.event.pull_request.labels.*.name, 'docs-not-needed')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Правка контракта требует правки справочника
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          changed=$(git diff --name-only "$BASE_SHA"...HEAD)
+          # Тесты отсеиваем отдельным шагом: коллектор держит их рядом с кодом,
+          # и без этого правка collector/src/core/*.test.ts требовала бы правки
+          # справочника. Ложные срабатывания опаснее пропусков — от них ворота
+          # начинают обходить бессмысленной правкой документа
+          contract=$(echo "$changed" | grep -E '^(backend/app/[^/]+/service\.py|backend/app/core/|collector/src/core/|collector/src/plugins/[^/]+/map\.ts)' | grep -vE '\.test\.ts$' || true)
+          touched_docs=$(echo "$changed" | grep -E '^docs/reference/' || true)
+          if [ -n "$contract" ] && [ -z "$touched_docs" ]; then
+            echo "Изменились файлы, несущие контракт:"
+            echo "$contract"
+            echo ""
+            echo "Справочник в docs/reference/ не тронут."
+            echo "Обновите нужный документ — либо поставьте на PR метку"
+            echo "docs-not-needed, если правка действительно не меняет поведения."
+            exit 1
+          fi
+          echo "Проверка пройдена."

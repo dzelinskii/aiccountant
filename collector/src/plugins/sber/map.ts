@@ -139,7 +139,7 @@ function limitDescription(value: string): string {
 // ExtCardOtherOut (14 записей из 250 в разведке) в словарь намеренно не
 // попал: разведка не раскрыла смысл значения, а unknown со счётчиком в выводе
 // честнее угадывания.
-const BANK_FORM_TO_KIND: Record<string, string> = {
+export const BANK_FORM_TO_KIND: Record<string, string> = {
   ExtCardPayment: 'purchase',
   UfsQRSBP: 'purchase',
   ExtCardPaymentRefund: 'purchase',
@@ -154,6 +154,20 @@ const BANK_FORM_TO_KIND: Record<string, string> = {
   UfsOutTransfer: 'transfer_person',
   ExtCardCashIn: 'cash',
   ExtCardCashOut: 'cash',
+}
+
+/**
+ * Виды, которые банк присылает регулярно, но которые мы намеренно НЕ переводим.
+ * Такая операция получает вид `unknown`: остаётся видимой, попадает в
+ * статистику, и счётчик в выводе сбора о ней сообщает.
+ *
+ * Перечислены здесь, а не только в коде разбора, чтобы попасть в справочник:
+ * пропуск, о котором нигде не сказано, читается как забытая строка.
+ */
+export const UNMAPPED_BANK_FORMS: Record<string, string> = {
+  ExtCardOtherOut:
+    'буквально «прочее списание»; живой прогон дал 14 таких записей за месяц, ' +
+    'все с MCC — то есть похожи на покупки, но подтверждения этому нет',
 }
 
 function resolveKind(item: Record<string, unknown>): string {

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { expect, test } from 'vitest'
-import { CATEGORY_HINTS, hintFromMcc } from './category-hints'
+import { CATEGORY_HINTS, MCC_TO_HINT, hintFromMcc } from './category-hints'
 
 test('код супермаркета переводится в подсказку', () => {
   expect(hintFromMcc('5411')).toBe('groceries')
@@ -58,15 +58,20 @@ test('все значения таблицы есть в словаре', () => 
 // объект собран, дубликат уже схлопнут. Поэтому тест разбирает исходный текст
 // модуля и считает ключи там, до того как их съел рантайм.
 test('в таблице MCC нет задвоенных кодов', () => {
+  // читаем исходник, а не готовый объект: задвоенный ключ JavaScript схлопывает
+  // ещё при разборе файла, и в объекте от него не остаётся следа
   const path = fileURLToPath(new URL('./category-hints.ts', import.meta.url))
   const source = readFileSync(path, 'utf-8')
-  // \r?\n обязателен: при core.autocrlf=true рабочая копия получает CRLF, и
-  // регулярка, жёстко ждущая \n, не находит таблицу вовсе — тест падал бы не
-  // из-за дубликата ключа, а из-за настроек git у конкретного разработчика
-  const tableMatch = source.match(/const MCC_TO_HINT: Record<string, CategoryHint> = \{([\s\S]*?)\r?\n\}\r?\n/)
+  // \r?\n обязателен: в рабочей копии на Windows файл лежит с CRLF, и регулярка
+  // с голым \n не находит таблицу вовсе. Без этого тест зелёный в CI (там LF)
+  // и красный локально — то есть проверяет операционную систему, а не таблицу
+  const tableMatch = source.match(
+    /const MCC_TO_HINT: Record<string, CategoryHint> = \{([\s\S]*?)\r?\n\}\r?\n/,
+  )
   expect(tableMatch).not.toBeNull()
   const codes = [...(tableMatch?.[1] ?? '').matchAll(/'(\d{4})':/g)].map((match) => match[1])
-  expect(codes.length).toBeGreaterThan(0)
-  const unique = new Set(codes)
-  expect(unique.size).toBe(codes.length)
+  // сверяем с самим объектом, а не с «больше нуля»: захвати регулярка кусок
+  // таблицы вместо всей, уникальность проверилась бы на трёх строках из ста
+  // семидесяти, и тест молча перестал бы сторожить то, ради чего написан
+  expect(new Set(codes).size).toBe(Object.keys(MCC_TO_HINT).length)
 })

@@ -182,13 +182,41 @@ function limitDescription(value: string): string {
 // Единственное место в системе, где живёт словарь Т-Банка. Приложение работает
 // своими терминами и про PAY/INTERNAL не знает: иначе знание об одном банке
 // протекло бы в ядро домена и каждый новый банк правился бы там же.
-const BANK_GROUP_TO_KIND: Record<string, string> = {
+//
+// export — таблицу читает сверка словарей с Python
+export const BANK_GROUP_TO_KIND: Record<string, string> = {
   PAY: 'purchase',
   TRANSFER: 'transfer_person',
   INTERNAL: 'transfer_self',
   CASH: 'cash',
   LOANREPAY: 'loan',
   INCOME: 'income',
+}
+
+// Группа INCOME огрубляет: под ней у банка лежат и переводы от людей, и
+// движение собственных денег владельца. Различает их подгруппа, и здесь она
+// перекрывает решение по группе.
+//
+// Ключ — идентификатор, а не имя: имя «Пополнения» банк использует
+// одновременно для C2, C3, C4 и C5, то есть не различает ничего. (В таблице
+// категорий ниже ключом взято имя — там оно уникально и читается лучше.
+// Правило одно: брать то поле, которое различает.)
+//
+// Отвергнутый признак: isInner. Он выглядел подходящим — у «Между своими
+// счетами» он true, — но замер показал девять операций TRANSFER с isInner=true.
+// Это переводы с людьми внутри Т-Банка, то есть поле означает «внутри банка».
+//
+// Подгруппы оплат (A1), снятий (B1), переводов (F1) и внутренних операций (G1)
+// сюда намеренно не входят: там группа отвечает верно, и вторая запись о том же
+// самом стала бы вторым источником истины.
+//
+// export — ради инварианта, закреплённого тестом: ни одна строка не ведёт
+// обратно в income, и на этом стоит счётчик приходов при сборе
+export const BANK_SUBGROUP_TO_KIND: Record<string, string> = {
+  C10: 'transfer_person', // пополнение по номеру телефона — перевод от человека
+  C4: 'transfer_person', // пополнение с карты другого человека
+  C5: 'transfer_self', // между своими счетами
+  C3: 'cash', // внесение наличных через банкомат
 }
 
 // В отличие от суммы и валюты, незнакомая группа — не повод останавливаться:
@@ -201,7 +229,29 @@ function resolveKind(item: Record<string, unknown>): string {
   // проверка на собственное свойство обязательна: справочник — обычный объект,
   // и группа вроде "toString" достала бы из прототипа функцию вместо вида
   if (!Object.hasOwn(BANK_GROUP_TO_KIND, group)) return 'unknown'
-  return BANK_GROUP_TO_KIND[group] ?? 'unknown'
+  // подгруппа уточняет группу, а не заменяет её: до сюда доходят только
+  // операции из групп, которые мы знаем
+  return refineBySubgroup(item) ?? refineOwnTransfer(item, group) ?? BANK_GROUP_TO_KIND[group] ?? 'unknown'
+}
+
+function refineBySubgroup(item: Record<string, unknown>): string | undefined {
+  const subgroup = getRecord(item, 'subgroup')
+  const id = subgroup ? getStr(subgroup, 'id') : undefined
+  if (id === undefined || !Object.hasOwn(BANK_SUBGROUP_TO_KIND, id)) return undefined
+  return BANK_SUBGROUP_TO_KIND[id]
+}
+
+// Перевод себе банк кладёт в ту же группу TRANSFER и ту же подгруппу F1, что и
+// перевод человеку: подгруппа здесь не различает ничего, в отличие от входящей
+// стороны. Различает isInner — на живых данных владельца он true у всех девяти
+// «Между своими счетами» и false у всех переводов людям.
+//
+// Но сам по себе isInner «свои деньги» не означает: у покупок Yandex Cloud он
+// тоже true. Поэтому смотрим его только в той группе, где он меняет смысл, —
+// доверять признаку в отрыве от группы нельзя.
+function refineOwnTransfer(item: Record<string, unknown>, group: string): string | undefined {
+  if (group !== 'TRANSFER' || item['isInner'] !== true) return undefined
+  return 'transfer_self'
 }
 
 // Имя категории у банка сравнивается не побайтово. Причина в типографике: в

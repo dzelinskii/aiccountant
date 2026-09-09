@@ -32,3 +32,43 @@ export function reportMissingHints(appAccountId: string, operations: readonly Co
   if (count === 0) return
   console.log(`счёт ${appAccountId}: категория не определена у ${count} трат из ${purchases.length}`)
 }
+
+// Таблица подгрупп закрывает то, что видели в живых данных владельца. Банк
+// заведёт новый код — операция останется доходом, и узнать об этом можно только
+// здесь: тесты сверяются с нашей таблицей, а не с тем, что банк присылает
+// сегодня.
+//
+// Считаем оставшиеся income, а не «незнакомые подгруппы»: ни одна строка
+// таблицы не ведёт в income (это закреплено тестом в map.test.ts), поэтому
+// доходом остаются ровно нераспознанные. Считать «все незнакомые подгруппы»
+// было бы неверно: подгруппы оплат и снятий в таблицу не входят намеренно, и
+// счётчик показывал бы сотню при нулевой проблеме.
+export function reportUnrefinedIncome(
+  appAccountId: string,
+  operations: readonly CollectedOperation[],
+): void {
+  const count = operations.filter((operation) => operation.kind === 'income').length
+  if (count === 0) return
+  console.log(`счёт ${appAccountId}: приход не разобран у ${count} — банк прислал незнакомую подгруппу`)
+}
+
+/**
+ * Единственный вход для сбора: main.ts зовёт его, а не счётчики поодиночке.
+ *
+ * Причина в том, что проводку счётчиков нечем проверить. main.ts — точка входа,
+ * он запускает сбор прямо при импорте, и тестом оттуда ничего не достать: убрать
+ * вызов счётчика можно было так, что весь набор оставался зелёным. Три места,
+ * где легко забыть, сведены в одно, и это одно закреплено тестом ниже. Осталась
+ * одна непокрытая строка — вызов отсюда в main.ts, — и её стережёт линтер:
+ * импорт без вызова роняет сборку.
+ *
+ * Заводя новый счётчик, добавляй его сюда — иначе он не будет вызван нигде.
+ */
+export function reportCollected(
+  appAccountId: string,
+  operations: readonly CollectedOperation[],
+): void {
+  reportUnknownKinds(appAccountId, operations)
+  reportMissingHints(appAccountId, operations)
+  reportUnrefinedIncome(appAccountId, operations)
+}

@@ -4,7 +4,7 @@ import { pluginFor } from '../plugins/registry'
 import { browserPrompt } from './browser'
 import { loadConfig, type CollectorConfig } from './config'
 import { pushOperations } from './push'
-import { reportMissingHints, reportUnknownKinds } from './report'
+import { reportCollected } from './report'
 import { osSecretStore, type SecretStore } from './secret-store'
 import { ROOT_SPKI_SHA256, loadTrustAnchor } from './trust-anchor'
 
@@ -77,10 +77,9 @@ async function collect(
         ? `счёт ${appAccountId}: собрано ${operations.length}, импорт ${result.import_id}`
         : `счёт ${appAccountId}: операций за период нет`,
     )
-    // счётчики незнакомых видов и покупок без подсказки живут в общем report.ts:
-    // они одинаковы для всех банков, и вторая копия разошлась бы с первой
-    reportUnknownKinds(appAccountId, operations)
-    reportMissingHints(appAccountId, operations)
+    // счётчики живут в общем report.ts: они одинаковы для всех банков, и
+    // вторая копия разошлась бы с первой
+    reportCollected(appAccountId, operations)
   }
 }
 

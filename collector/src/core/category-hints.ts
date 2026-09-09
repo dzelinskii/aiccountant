@@ -58,7 +58,10 @@ export const CATEGORY_HINTS: readonly CategoryHint[] = [
 
 // Коды, которые встречаются в быту. Полный список MCC — около тысячи значений,
 // и переписывать его целиком незачем: незнакомый код просто не даёт подсказки.
-const MCC_TO_HINT: Record<string, CategoryHint> = {
+// export — ради сторожа задвоенных ключей: он считает коды в исходнике и
+// сверяет их число с этим объектом. Без сверки с объектом сторож не отличил бы
+// «дублей нет» от «разобрал не всю таблицу»
+export const MCC_TO_HINT: Record<string, CategoryHint> = {
   // еда
   '5411': 'groceries', '5412': 'groceries', '5422': 'groceries', '5441': 'groceries',
   '5451': 'groceries', '5462': 'groceries', '5499': 'groceries',
@@ -121,7 +124,10 @@ const MCC_TO_HINT: Record<string, CategoryHint> = {
 
 // Диапазоны, где у каждой компании свой код: перечислять сотни авиалиний и
 // гостиничных сетей поимённо смысла нет
-const MCC_RANGES: ReadonlyArray<{ from: number; to: number; hint: CategoryHint }> = [
+//
+// export — диапазоны входят в справочник: без них таблица кодов выглядит
+// полной, хотя ею не является
+export const MCC_RANGES: ReadonlyArray<{ from: number; to: number; hint: CategoryHint }> = [
   { from: 3000, to: 3299, hint: 'travel' }, // авиакомпании
   { from: 3500, to: 3999, hint: 'travel' }, // гостиничные сети
 ]
