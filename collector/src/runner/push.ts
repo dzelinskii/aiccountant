@@ -1,5 +1,5 @@
 import type { FetchImpl } from '../http/allowlist-client'
-import type { CollectedAccount, CollectedOperation } from '../plugins/tbank/types'
+import type { CollectedAccount, CollectedOperation } from '../core/contract'
 import type { CollectorConfig } from './config'
 
 export interface PushResult {
@@ -22,6 +22,7 @@ const MAX_REPORTED_DETAILS = 5
  */
 export async function pushOperations(
   config: CollectorConfig,
+  bank: string,
   accountId: string,
   operations: readonly CollectedOperation[],
   account: CollectedAccount | undefined,
@@ -39,7 +40,7 @@ export async function pushOperations(
       'Content-Type': 'application/json',
       Authorization: `Bearer ${config.apiToken}`,
     },
-    body: JSON.stringify(requestBody(operations, account)),
+    body: JSON.stringify(requestBody(bank, operations, account)),
   })
   if (!res.ok) throw new Error(`Приложение ответило ${res.status}${await describeFailure(res)}`)
   return parseResult(await res.json())
@@ -50,10 +51,12 @@ export async function pushOperations(
  * прежними. Остаток в блоке обязателен, поэтому без него блок не отправляем
  * вовсе — иначе бэкенд отверг бы запрос целиком, вместе с операциями.
  * Имена полей здесь как в договоре API (`card_masks`), а не как внутри
- * коллектора.
+ * коллектора. Имя парсера собирается из имени банка: заводить второй
+ * справочник «банк → строка parser» значило бы держать два источника правды
+ * об одном и том же.
  */
-function requestBody(operations: readonly CollectedOperation[], account: CollectedAccount | undefined): object {
-  const body = { parser: 'tbank_collector', operations }
+function requestBody(bank: string, operations: readonly CollectedOperation[], account: CollectedAccount | undefined): object {
+  const body = { parser: `${bank}_collector`, operations }
   if (!account || account.balance === null) return body
   return { ...body, account: { balance: account.balance, card_masks: account.cardMasks } }
 }

@@ -19,6 +19,7 @@
     "vitest": "^4"
   },
   "dependencies": {
+    "@napi-rs/keyring": "^2.0.0",
     "playwright": "^1"
   }
 }

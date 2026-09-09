@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from 'vitest'
-import type { CollectedOperation } from '../plugins/tbank/types'
+import type { CollectedOperation } from '../core/contract'
 import {
   reportCollected,
   reportMissingHints,

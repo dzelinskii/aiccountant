@@ -12,6 +12,7 @@
  * скрипт — `pnpm docs` молча делал бы не то, а в CI падал бы с чужой ошибкой.
  */
 import { mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { CATEGORY_HINTS, MCC_RANGES, MCC_TO_HINT } from '../src/core/category-hints'
 import {
@@ -20,6 +21,7 @@ import {
   BANK_SUBGROUP_TO_KIND,
   IGNORED_BANK_CATEGORIES,
 } from '../src/plugins/tbank/map'
+import { BANK_FORM_TO_KIND, UNMAPPED_BANK_FORMS } from '../src/plugins/sber/map'
 
 const WARNING =
   '<!-- Этот файл создан генератором, не правьте руками: ' +
@@ -68,7 +70,52 @@ function render(): string {
   for (const name of [...IGNORED_BANK_CATEGORIES].sort()) lines.push(`- ${name}`)
   lines.push('')
 
-  lines.push('## MCC → подсказка', '')
+  return lines.join('\n')
+}
+
+function renderSber(): string {
+  const lines = [
+    WARNING,
+    '',
+    '# Коллектор: перевод словарей Сбербанка',
+    '',
+    'Слова банка не покидают его плагина: здесь они переводятся в общий словарь',
+    'приложения. У Сбербанка вид операции несёт одно поле `form`, тогда как у',
+    'Т-Банка — группа с уточняющей подгруппой.',
+    '',
+    ...table('Вид операции банка → вид', BANK_FORM_TO_KIND),
+  ]
+
+  // молчание о непереведённых видах читалось бы как полнота таблицы
+  lines.push('## Виды, намеренно не переведённые', '')
+  for (const form of Object.keys(UNMAPPED_BANK_FORMS).sort()) {
+    lines.push(`- \`${form}\` — ${UNMAPPED_BANK_FORMS[form]}`)
+  }
+  lines.push(
+    '',
+    'Такая операция получает вид `unknown`: она остаётся видимой, попадает в',
+    'статистику, и счётчик в выводе сбора о ней сообщает.',
+    '',
+  )
+
+  return lines.join('\n')
+}
+
+// MCC вынесен из документа Т-Банка: коды торговых точек приходят от обоих
+// банков и живут в общем модуле, поэтому место им в общем документе, а не в
+// файле одного из плагинов
+function renderMcc(): string {
+  const lines = [
+    WARNING,
+    '',
+    '# Коллектор: коды торговых точек (MCC)',
+    '',
+    'Таблица общая для всех банков — MCC не банковское понятие. Подсказок о',
+    'категории — ' + String(CATEGORY_HINTS.length) + '.',
+    '',
+    '## MCC → подсказка',
+    '',
+  ]
   const mcc = byHint(MCC_TO_HINT)
   for (const hint of Object.keys(mcc).sort()) {
     lines.push(`- \`${hint}\`: ${mcc[hint]?.join(', ')}`)
@@ -85,7 +132,14 @@ function render(): string {
   return lines.join('\n')
 }
 
-const OUT = fileURLToPath(new URL('../../docs/reference/generated/collector-tbank.md', import.meta.url))
-mkdirSync(fileURLToPath(new URL('../../docs/reference/generated/', import.meta.url)), { recursive: true })
-writeFileSync(OUT, render(), { encoding: 'utf-8' })
-console.log('записан collector-tbank.md')
+const DIR = fileURLToPath(new URL('../../docs/reference/generated/', import.meta.url))
+mkdirSync(DIR, { recursive: true })
+
+for (const [name, body] of [
+  ['collector-tbank.md', render()],
+  ['collector-sber.md', renderSber()],
+  ['collector-mcc.md', renderMcc()],
+] as const) {
+  writeFileSync(join(DIR, name), body, { encoding: 'utf-8' })
+  console.log('записан', name)
+}

@@ -1,6 +1,6 @@
 import { expect, test, vi } from 'vitest'
 import type { FetchImpl } from '../http/allowlist-client'
-import type { CollectedAccount, CollectedOperation } from '../plugins/tbank/types'
+import type { CollectedAccount, CollectedOperation } from '../core/contract'
 import type { CollectorConfig } from './config'
 import { pushOperations } from './push'
 
@@ -10,6 +10,7 @@ const CONFIG: CollectorConfig = {
   workspaceId: 'ws-1',
   accountMap: {},
   days: 30,
+  bank: 'tbank',
 }
 
 // Тип указан явно: новое поле операции тогда обнаружится здесь, в одном месте,
@@ -49,7 +50,7 @@ test('операции уходят с токеном в заголовке и �
     jsonResponse({ import_id: 'imp-1', status: 'ready' }, 201),
   )
 
-  const result = await pushOperations(CONFIG, 'acc-app', OPERATIONS, undefined, fetchImpl)
+  const result = await pushOperations(CONFIG, 'tbank', 'acc-app', OPERATIONS, undefined, fetchImpl)
 
   expect(result?.import_id).toBe('imp-1')
   const [url, init] = fetchImpl.mock.calls[0] ?? []
@@ -70,7 +71,7 @@ test('подсказка о категории уезжает вместе с о
 
   const withoutHint: CollectedOperation = { ...OPERATIONS[0]!, external_id: 'op-2', category_hint: null }
 
-  await pushOperations(CONFIG, 'acc-app', [...OPERATIONS, withoutHint], undefined, fetchImpl)
+  await pushOperations(CONFIG, 'tbank', 'acc-app', [...OPERATIONS, withoutHint], undefined, fetchImpl)
 
   const operations = sentBody(fetchImpl)['operations'] as Array<Record<string, unknown>>
   expect(operations[0]?.['category_hint']).toBe('dining')
@@ -81,7 +82,7 @@ test('подсказка о категории уезжает вместе с о
 test('остаток и метки карт уходят блоком про счёт', async () => {
   const fetchImpl = vi.fn<FetchImpl>(async () => jsonResponse({ import_id: 'imp-1', status: 'ready' }, 201))
 
-  await pushOperations(CONFIG, 'acc-app', OPERATIONS, ACCOUNT, fetchImpl)
+  await pushOperations(CONFIG, 'tbank', 'acc-app', OPERATIONS, ACCOUNT, fetchImpl)
 
   // имена полей — как в договоре API: card_masks, а не cardMasks
   expect(sentBody(fetchImpl)['account']).toEqual({ balance: '10000.50', card_masks: ['1234'] })
@@ -92,7 +93,7 @@ test('без остатка блок про счёт не отправляетс
   // молчать про остаток дешевле, чем потерять сбор
   const fetchImpl = vi.fn<FetchImpl>(async () => jsonResponse({ import_id: 'imp-1', status: 'ready' }, 201))
 
-  await pushOperations(CONFIG, 'acc-app', OPERATIONS, { ...ACCOUNT, balance: null }, fetchImpl)
+  await pushOperations(CONFIG, 'tbank', 'acc-app', OPERATIONS, { ...ACCOUNT, balance: null }, fetchImpl)
 
   const body = sentBody(fetchImpl)
   expect(body['account']).toBeUndefined()
@@ -102,7 +103,7 @@ test('без остатка блок про счёт не отправляетс
 test('пустой список не отправляется', async () => {
   const fetchImpl = vi.fn<FetchImpl>()
 
-  const result = await pushOperations(CONFIG, 'acc-app', [], undefined, fetchImpl)
+  const result = await pushOperations(CONFIG, 'tbank', 'acc-app', [], undefined, fetchImpl)
 
   expect(result).toBeNull()
   expect(fetchImpl).not.toHaveBeenCalled()
@@ -111,7 +112,7 @@ test('пустой список не отправляется', async () => {
 test('ошибка приложения не проглатывается', async () => {
   const fetchImpl = vi.fn<FetchImpl>(async () => jsonResponse({ detail: 'Счёт не найден' }, 404))
 
-  await expect(pushOperations(CONFIG, 'acc-app', OPERATIONS, undefined, fetchImpl)).rejects.toThrow(
+  await expect(pushOperations(CONFIG, 'tbank', 'acc-app', OPERATIONS, undefined, fetchImpl)).rejects.toThrow(
     /404.*Счёт не найден/,
   )
 })
@@ -141,7 +142,7 @@ test('в текст ошибки 422 не попадают суммы, опис�
     ),
   )
 
-  const error = await pushOperations(CONFIG, 'acc-app', OPERATIONS, undefined, fetchImpl).catch(
+  const error = await pushOperations(CONFIG, 'tbank', 'acc-app', OPERATIONS, undefined, fetchImpl).catch(
     (e: unknown) => e,
   )
   const text = String(error)
@@ -157,13 +158,41 @@ test('в текст ошибки 422 не попадают суммы, опис�
 test('непонятное тело ответа даёт только код статуса', async () => {
   const fetchImpl = vi.fn<FetchImpl>(async () => new Response('<html>502</html>', { status: 502 }))
 
-  await expect(pushOperations(CONFIG, 'acc-app', OPERATIONS, undefined, fetchImpl)).rejects.toThrow(/502/)
+  await expect(pushOperations(CONFIG, 'tbank', 'acc-app', OPERATIONS, undefined, fetchImpl)).rejects.toThrow(/502/)
 })
 
 test('неожиданный успешный ответ не выдаётся за импорт', async () => {
   const fetchImpl = vi.fn<FetchImpl>(async () => jsonResponse({ ok: true }, 201))
 
-  await expect(pushOperations(CONFIG, 'acc-app', OPERATIONS, undefined, fetchImpl)).rejects.toThrow(
+  await expect(pushOperations(CONFIG, 'tbank', 'acc-app', OPERATIONS, undefined, fetchImpl)).rejects.toThrow(
     /неожиданный ответ/,
   )
+})
+
+test('имя парсера собирается из имени банка', async () => {
+  const sent: string[] = []
+  const fake: FetchImpl = async (_url, init) => {
+    sent.push(init?.body as string)
+    return new Response(JSON.stringify({ import_id: 'i', status: 'ready' }), { status: 201 })
+  }
+  const config: CollectorConfig = {
+    apiBaseUrl: 'http://localhost:8000',
+    apiToken: 'token',
+    workspaceId: '00000000-0000-0000-0000-000000000000',
+    accountMap: {},
+    days: 30,
+    bank: 'sber',
+  }
+  const operation: CollectedOperation = {
+    occurred_at: '2026-09-08',
+    amount: '-10.00',
+    currency: 'RUB',
+    description: 'Покупка',
+    external_id: 'op-1',
+    kind: 'purchase',
+    category_hint: null,
+  }
+
+  await pushOperations(config, 'sber', 'acc', [operation], undefined, fake)
+  expect(JSON.parse(sent[0] ?? '{}').parser).toBe('sber_collector')
 })
