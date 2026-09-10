@@ -1,5 +1,5 @@
 import { hintFromMcc, type CategoryHint } from '../../core/category-hints'
-import type { CollectedAccount, CollectedOperation } from './types'
+import type { CollectedAccount, CollectedOperation } from '../../core/contract'
 
 /**
  * Отображение ответа Т-Банка в нашу модель. Вход — результат parseLossless,
@@ -182,7 +182,9 @@ function limitDescription(value: string): string {
 // Единственное место в системе, где живёт словарь Т-Банка. Приложение работает
 // своими терминами и про PAY/INTERNAL не знает: иначе знание об одном банке
 // протекло бы в ядро домена и каждый новый банк правился бы там же.
-const BANK_GROUP_TO_KIND: Record<string, string> = {
+//
+// export — таблицу читает сверка словарей с Python
+export const BANK_GROUP_TO_KIND: Record<string, string> = {
   PAY: 'purchase',
   TRANSFER: 'transfer_person',
   INTERNAL: 'transfer_self',
@@ -208,8 +210,8 @@ const BANK_GROUP_TO_KIND: Record<string, string> = {
 // сюда намеренно не входят: там группа отвечает верно, и вторая запись о том же
 // самом стала бы вторым источником истины.
 //
-// export — ради инварианта, который закрепляет тест в следующей задаче: ни одна
-// строка не ведёт обратно в income, и на этом стоит счётчик при сборе
+// export — ради инварианта, закреплённого тестом: ни одна строка не ведёт
+// обратно в income, и на этом стоит счётчик приходов при сборе
 export const BANK_SUBGROUP_TO_KIND: Record<string, string> = {
   C10: 'transfer_person', // пополнение по номеру телефона — перевод от человека
   C4: 'transfer_person', // пополнение с карты другого человека

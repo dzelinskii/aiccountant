@@ -1,4 +1,4 @@
-import type { CollectedOperation } from '../plugins/tbank/types'
+import type { CollectedOperation } from '../core/contract'
 
 /**
  * Счётчики по итогам сбора — то, чем коллектор сообщает о расхождении своих

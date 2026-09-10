@@ -40,7 +40,7 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.mypy]
 strict = true
-packages = ["app", "tests"]
+packages = ["app", "tests", "scripts"]
 plugins = ["pydantic.mypy"]
 
 # testcontainers не поставляет типы для этих подмодулей (нет py.typed)
@@ -57,6 +57,7 @@ module = ["pypdf", "pypdf.*", "reportlab", "reportlab.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
+pythonpath = ["."]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]

@@ -461,7 +461,7 @@ git commit -m "Словари подсказок и видов операций 
  * Вывод обязан быть детерминированным — сверка в CI сравнивает его с
  * закоммиченным, и любая нестабильность превратит её в шум.
  *
- * Запуск: cd collector && pnpm docs
+ * Запуск: cd collector && pnpm reference
  */
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -546,20 +546,20 @@ console.log('записан collector-tbank.md')
 `build`, `collect`, `forget`):
 
 ```json
-    "docs": "tsx scripts/gen-reference.ts"
+    "reference": "tsx scripts/gen-reference.ts"
 ```
 
 Способ запуска `tsx` посмотри у соседнего `collect` — сделай так же.
 
 - [ ] **Step 4: Сгенерировать и посмотреть**
 
-Run: `cd collector && pnpm docs`
+Run: `cd collector && pnpm reference`
 Expected: «записан collector-tbank.md». Открой файл: там должны быть шесть
 групп, четыре подгруппы, 79 категорий банка, 11 игнорируемых и 174 кода MCC.
 
 - [ ] **Step 5: Проверить детерминированность**
 
-Run: `cd collector && pnpm docs && git diff --exit-code -- ../docs/reference/generated/collector-tbank.md && pnpm docs && git diff --exit-code -- ../docs/reference/generated/collector-tbank.md`
+Run: `cd collector && pnpm reference && git diff --exit-code -- ../docs/reference/generated/collector-tbank.md && pnpm reference && git diff --exit-code -- ../docs/reference/generated/collector-tbank.md`
 Expected: обе сверки молчат. Если вторая ругается — вывод недетерминирован,
 чини сортировку.
 
@@ -595,6 +595,9 @@ git commit -m "Генератор справочных фактов коллек
       - run: uv run python scripts/gen_reference.py
       - name: Справочник не разошёлся с кодом
         run: |
+          # --intent-to-add обязателен: git diff неотслеживаемые файлы не видит,
+          # и новый файл от нового генератора прошёл бы сверку молча
+          git -C .. add --intent-to-add docs/reference/generated
           if ! git -C .. diff --exit-code -- docs/reference/generated; then
             echo ""
             echo "Генерируемая часть справочника устарела."
@@ -612,13 +615,16 @@ git commit -m "Генератор справочных фактов коллек
 В той же работе `collector`, после `- run: pnpm build`:
 
 ```yaml
-      - run: pnpm docs
+      - run: pnpm reference
       - name: Справочник не разошёлся с кодом
         run: |
+          # --intent-to-add обязателен: git diff неотслеживаемые файлы не видит,
+          # и новый файл от нового генератора прошёл бы сверку молча
+          git -C .. add --intent-to-add docs/reference/generated
           if ! git -C .. diff --exit-code -- docs/reference/generated; then
             echo ""
             echo "Генерируемая часть справочника устарела."
-            echo "Запустите: cd collector && pnpm docs"
+            echo "Запустите: cd collector && pnpm reference"
             echo "и закоммитьте изменения в docs/reference/generated."
             exit 1
           fi
@@ -629,7 +635,7 @@ git commit -m "Генератор справочных фактов коллек
 Внеси временный дефект — например, добавь в `BANK_SUBGROUP_TO_KIND` строку
 `C9: 'cash'` — и прогони:
 
-Run: `cd collector && pnpm docs && git -C .. diff --stat -- docs/reference/generated`
+Run: `cd collector && pnpm reference && git -C .. diff --stat -- docs/reference/generated`
 Expected: диф не пуст, то есть сверка в CI на таком состоянии упала бы.
 
 **Верни правку редактором**, перегенерируй и убедись, что диф пуст.
@@ -764,7 +770,7 @@ git commit -m "Ворота: правка файлов-носителей кон
 Перегенерировать:
 
     cd backend && uv run python scripts/gen_reference.py
-    cd collector && pnpm docs
+    cd collector && pnpm reference
 
 ## Правила ведения
 
@@ -962,7 +968,7 @@ cd collector && pnpm lint && pnpm build && pnpm vitest run
 - [ ] **Убедиться, что справочник согласован с кодом**
 
 ```bash
-cd backend && uv run python scripts/gen_reference.py && cd ../collector && pnpm docs && cd .. && git diff --exit-code -- docs/reference/generated
+cd backend && uv run python scripts/gen_reference.py && cd ../collector && pnpm reference && cd .. && git diff --exit-code -- docs/reference/generated
 ```
 
 Ожидается: пусто. Если диф не пуст — значит генераторы не запускали после

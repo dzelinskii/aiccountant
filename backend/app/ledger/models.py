@@ -57,6 +57,17 @@ class Category(Base):
     hint: Mapped[str | None] = mapped_column(String(30), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
+    __table_args__ = (
+        # Одна подсказка — одна категория внутри workspace: иначе разрешение
+        # подсказки перестало бы быть однозначным. NULL уникальности не мешает,
+        # так что категорий без отметки может быть сколько угодно.
+        #
+        # Повторяет индекс из миграции 0012 намеренно: alembic сравнивает модели
+        # с базой, и объяви мы индекс только в миграции — автогенерация
+        # следующей предложила бы его удалить.
+        Index("ix_categories_workspace_hint", "workspace_id", "hint", unique=True),
+    )
+
 
 class Transaction(Base):
     __tablename__ = "transactions"

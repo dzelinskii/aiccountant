@@ -8,7 +8,8 @@
     "lint": "oxlint --deny-warnings",
     "build": "tsc --noEmit",
     "collect": "tsx src/runner/main.ts",
-    "forget": "tsx src/runner/forget.ts"
+    "forget": "tsx src/runner/forget.ts",
+    "reference": "tsx scripts/gen-reference.ts"
   },
   "devDependencies": {
     "@types/node": "^22",
@@ -18,6 +19,7 @@
     "vitest": "^4"
   },
   "dependencies": {
+    "@napi-rs/keyring": "^2.0.0",
     "playwright": "^1"
   }
 }
