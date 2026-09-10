@@ -8,6 +8,7 @@ from app.core.money import MoneyStr
 
 ACCOUNT_TYPES = "^(card|cash|savings)$"
 CATEGORY_KINDS = "^(income|expense)$"
+COUNTERPARTY_KINDS = "^(person|organization)$"
 
 
 class AccountCreate(BaseModel):
@@ -73,6 +74,34 @@ class DescriptionRuleOut(BaseModel):
     category_id: uuid.UUID | None
     counterparty_id: uuid.UUID | None
     source: str
+
+
+class CounterpartyCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    kind: str = Field(pattern=COUNTERPARTY_KINDS)
+    # необязательная: контрагент без категории — просто имя вместо банковской
+    # строки, и такой контрагент полезен сам по себе
+    category_id: uuid.UUID | None = None
+    # подписи — то, как контрагента пишет каждый банк; в базе они лягут
+    # правилами, ведущими в него
+    signatures: list[str] = Field(default_factory=list)
+
+
+class CounterpartyUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    # null здесь — не «поле не прислали», а «снять категорию»; различает их
+    # update_counterparty по model_fields_set
+    category_id: uuid.UUID | None = None
+
+
+class CounterpartyOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    kind: str
+    category_id: uuid.UUID | None
+    # нормализованные ключи правил, ведущих в этого контрагента: человек должен
+    # видеть то, что действительно сработает
+    signatures: list[str]
 
 
 class UnknownSignatureOut(BaseModel):

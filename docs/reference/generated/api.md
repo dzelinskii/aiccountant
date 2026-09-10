@@ -13,6 +13,11 @@ API **не версионирован**: все пути живут под `/api
 - `GET /api/categories` — отвечает списком `CategoryOut`
 - `POST /api/categories` — принимает `CategoryCreate`, отвечает `CategoryOut`
 - `PATCH /api/categories/{category_id}` — принимает `CategoryUpdate`, отвечает `CategoryOut`
+- `GET /api/counterparties` — отвечает списком `CounterpartyOut`
+- `POST /api/counterparties` — принимает `CounterpartyCreate`, отвечает `CounterpartyOut`
+- `GET /api/counterparties/unknown-signatures` — отвечает списком `UnknownSignatureOut`
+- `DELETE /api/counterparties/{counterparty_id}`
+- `PATCH /api/counterparties/{counterparty_id}` — принимает `CounterpartyUpdate`, отвечает `CounterpartyOut`
 - `GET /api/dashboard` — отвечает `DashboardOut`
 - `GET /api/description-rules` — отвечает списком `DescriptionRuleOut`
 - `POST /api/description-rules` — принимает `DescriptionRuleCreate`, отвечает `DescriptionRuleOut`

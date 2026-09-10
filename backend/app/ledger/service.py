@@ -11,12 +11,14 @@ from app.core.category_hints import HINT_DEFAULTS
 from app.core.operation_kinds import OperationKind, kind_from_amount
 from app.ledger import repository
 from app.ledger.balance import adjustment_for, visible_balance
-from app.ledger.models import Account, Category, DescriptionRule, Transaction
+from app.ledger.models import Account, Category, Counterparty, DescriptionRule, Transaction
 from app.ledger.schemas import (
     AccountCreate,
     AccountUpdate,
     CategoryCreate,
     CategoryUpdate,
+    CounterpartyCreate,
+    CounterpartyUpdate,
     DashboardAccount,
     DashboardOut,
     MonthExpense,
@@ -337,6 +339,122 @@ async def unknown_transfer_signatures(
 ) -> list[tuple[str, int, int, int]]:
     """Из чего человеку выбирать, заводя контрагента."""
     return await repository.unknown_transfer_signatures(db, workspace_id)
+
+
+async def _category_exists(
+    db: AsyncSession, workspace_id: uuid.UUID, category_id: uuid.UUID
+) -> bool:
+    """Живёт ли категория в этом workspace. Спрашивают и заведение контрагента,
+    и его правка — обе обязаны отвечать одинаково."""
+    return await repository.get_category(db, workspace_id, category_id) is not None
+
+
+async def _counterparty_signatures(
+    db: AsyncSession, workspace_id: uuid.UUID, counterparty_id: uuid.UUID
+) -> list[str]:
+    """Подписи одного контрагента — читаем из базы, а не из того, что прислали:
+    в правило уезжает ключ, и наружу должен уйти он же."""
+    grouped = await repository.signatures_by_counterparty(db, workspace_id)
+    return grouped.get(counterparty_id, [])
+
+
+async def list_counterparties(
+    db: AsyncSession, workspace_id: uuid.UUID
+) -> list[tuple[Counterparty, list[str]]]:
+    counterparties = await repository.list_counterparties(db, workspace_id)
+    signatures = await repository.signatures_by_counterparty(db, workspace_id)
+    return [(cp, signatures.get(cp.id, [])) for cp in counterparties]
+
+
+async def create_counterparty(
+    db: AsyncSession, workspace_id: uuid.UUID, payload: CounterpartyCreate
+) -> tuple[Counterparty, list[str]]:
+    """Завести контрагента и связать с ним перечисленные подписи.
+
+    Подпись становится обычным правилом, только ведёт оно не в категорию, а в
+    контрагента. Ключ считаем той же нормализацией, что и у правил: разойдись
+    они, правило не совпало бы с описанием операции и молча не сработало.
+
+    Занятую подпись не переподчиняем: правило на неё — решение, которое человек
+    уже принял, и отобрать его заведением контрагента нельзя. Порядок проверок
+    тот же, что у правил: сперва категория, потом занятость, — иначе занятая
+    подпись скрыла бы вторую ошибку.
+    """
+    keys = [normalize_description(signature) for signature in payload.signatures]
+    if any(not key or len(key) > RULE_TEXT_MAX_LENGTH for key in keys):
+        raise InvalidRuleTextError
+    # категория обязана жить в том же workspace: внешний ключ этого не ловит,
+    # он про таблицу, а не про workspace
+    if payload.category_id is not None and not await _category_exists(
+        db, workspace_id, payload.category_id
+    ):
+        raise NotFoundError
+    for key in keys:
+        if await repository.find_description_rule(db, workspace_id, key) is not None:
+            raise DuplicateRuleError
+
+    counterparty = Counterparty(
+        workspace_id=workspace_id,
+        name=payload.name,
+        kind=payload.kind,
+        category_id=payload.category_id,
+    )
+    repository.add_counterparty(db, counterparty)
+    # идентификатор нужен подписям, а commit один на всё: контрагент без своих
+    # подписей — не то, о чём просили
+    await db.flush()
+    for key in keys:
+        repository.add_description_rule(
+            db,
+            DescriptionRule(
+                workspace_id=workspace_id,
+                normalized_text=key,
+                counterparty_id=counterparty.id,
+                source="manual",
+            ),
+        )
+    try:
+        await db.commit()
+    except IntegrityError:
+        # проверка выше не видит ни правила, заведённого одновременно в другой
+        # сессии, ни двух одинаковых подписей в одном запросе — обе пары ловит
+        # уникальный индекс, и ответ должен быть тем же честным «уже есть»
+        await db.rollback()
+        raise DuplicateRuleError from None
+    return counterparty, await _counterparty_signatures(db, workspace_id, counterparty.id)
+
+
+async def update_counterparty(
+    db: AsyncSession,
+    workspace_id: uuid.UUID,
+    counterparty_id: uuid.UUID,
+    payload: CounterpartyUpdate,
+) -> tuple[Counterparty, list[str]]:
+    counterparty = await repository.get_counterparty(db, workspace_id, counterparty_id)
+    if counterparty is None:
+        raise NotFoundError
+    if payload.name is not None:
+        counterparty.name = payload.name
+    # именно model_fields_set, а не "is not None": null здесь — осмысленное
+    # «снять категорию», и обычная проверка на None сделала бы это невозможным
+    if "category_id" in payload.model_fields_set:
+        if payload.category_id is not None and not await _category_exists(
+            db, workspace_id, payload.category_id
+        ):
+            raise NotFoundError
+        counterparty.category_id = payload.category_id
+    await db.commit()
+    return counterparty, await _counterparty_signatures(db, workspace_id, counterparty.id)
+
+
+async def delete_counterparty(
+    db: AsyncSession, workspace_id: uuid.UUID, counterparty_id: uuid.UUID
+) -> None:
+    counterparty = await repository.get_counterparty(db, workspace_id, counterparty_id)
+    if counterparty is None:
+        raise NotFoundError
+    await repository.delete_counterparty(db, counterparty)
+    await db.commit()
 
 
 async def find_category_by_name(

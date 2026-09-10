@@ -306,6 +306,64 @@ async def unknown_transfer_signatures(
     return [(key, total, out, back) for key, total, out, back in rows.all()]
 
 
+async def list_counterparties(db: AsyncSession, workspace_id: uuid.UUID) -> list[Counterparty]:
+    """Контрагенты workspace по алфавиту. id — тай-брейк: имена ничем
+    не ограничены, и одноимённых завести можно, а порядок обязан быть тем же
+    от запроса к запросу."""
+    rows = await db.execute(
+        select(Counterparty)
+        .where(Counterparty.workspace_id == workspace_id)
+        .order_by(Counterparty.name, Counterparty.id)
+    )
+    return list(rows.scalars().all())
+
+
+async def get_counterparty(
+    db: AsyncSession, workspace_id: uuid.UUID, counterparty_id: uuid.UUID
+) -> Counterparty | None:
+    counterparty: Counterparty | None = await db.scalar(
+        select(Counterparty).where(
+            Counterparty.id == counterparty_id,
+            Counterparty.workspace_id == workspace_id,
+        )
+    )
+    return counterparty
+
+
+def add_counterparty(db: AsyncSession, counterparty: Counterparty) -> None:
+    db.add(counterparty)
+
+
+async def delete_counterparty(db: AsyncSession, counterparty: Counterparty) -> None:
+    """Удалить контрагента. Его подписи уносит внешний ключ description_rules
+    с ON DELETE CASCADE: правило без обеих целей ограничение в БД не пропустит,
+    так что оставить их всё равно было бы нечем."""
+    await db.delete(counterparty)
+
+
+async def signatures_by_counterparty(
+    db: AsyncSession, workspace_id: uuid.UUID
+) -> dict[uuid.UUID, list[str]]:
+    """Подписи каждого контрагента workspace: подпись — это ключ правила,
+    ведущего в него.
+
+    Одним запросом на весь workspace, а не по запросу на контрагента: список
+    показывает их все сразу, и запрос на строку превратил бы его в N+1.
+    """
+    rows = await db.execute(
+        select(DescriptionRule.counterparty_id, DescriptionRule.normalized_text)
+        .where(
+            DescriptionRule.workspace_id == workspace_id,
+            DescriptionRule.counterparty_id.is_not(None),
+        )
+        .order_by(DescriptionRule.normalized_text)
+    )
+    grouped: dict[uuid.UUID, list[str]] = {}
+    for counterparty_id, signature in rows.all():
+        grouped.setdefault(counterparty_id, []).append(signature)
+    return grouped
+
+
 async def get_description_rule(
     db: AsyncSession, workspace_id: uuid.UUID, rule_id: uuid.UUID
 ) -> DescriptionRule | None:

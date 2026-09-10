@@ -2,6 +2,7 @@ import uuid
 from decimal import Decimal
 from typing import Any
 
+import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -424,6 +425,123 @@ async def test_a_rule_of_another_workspace_does_not_hide_a_signature(
     ]
 
 
+async def _create_counterparty(
+    client: AsyncClient,
+    ws: str,
+    name: str,
+    signatures: list[str],
+    category_id: str | None = None,
+    kind: str = "person",
+) -> dict[str, Any]:
+    resp = await client.post(
+        "/api/counterparties",
+        params={"workspace_id": ws},
+        json={
+            "name": name,
+            "kind": kind,
+            "category_id": category_id,
+            "signatures": signatures,
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    created: dict[str, Any] = resp.json()
+    return created
+
+
+async def _counterparties(client: AsyncClient, ws: str) -> list[dict[str, Any]]:
+    resp = await client.get("/api/counterparties", params={"workspace_id": ws})
+    assert resp.status_code == 200
+    items: list[dict[str, Any]] = resp.json()
+    return items
+
+
+async def _rules(client: AsyncClient, ws: str) -> list[dict[str, Any]]:
+    resp = await client.get("/api/description-rules", params={"workspace_id": ws})
+    assert resp.status_code == 200
+    items: list[dict[str, Any]] = resp.json()
+    return items
+
+
+async def test_counterparty_is_created_and_listed(client: AsyncClient) -> None:
+    """Заведённый контрагент виден в списке вместе с подписями и категорией."""
+    ws, _ = await _register(client, ALICE)
+    category = await _expense_category(client, ws)
+
+    created = await _create_counterparty(
+        client, ws, "Денис", ["зелинский денис", "денис з."], category
+    )
+    assert created["name"] == "Денис"
+    assert created["kind"] == "person"
+    assert created["category_id"] == category
+    assert created["signatures"] == ["денис з.", "зелинский денис"]
+
+    assert await _counterparties(client, ws) == [created]
+
+
+async def test_creating_counterparty_binds_signatures(client: AsyncClient) -> None:
+    """Ради этого ручка и нужна: подписи перестают быть неопознанными."""
+    ws, acc = await _register(client, ALICE)
+    await _import_transfer(client, ws, acc, "Денис З.", "-100.00")
+    await _import_transfer(client, ws, acc, "ЗЕЛИНСКИЙ ДЕНИС", "-200.00")
+
+    created = await _create_counterparty(client, ws, "Денис", ["денис з.", "зелинский денис"])
+    assert created["signatures"] == ["денис з.", "зелинский денис"]
+    assert await _unknown_signatures(client, ws) == []
+
+
+async def test_signatures_are_normalized_when_bound(client: AsyncClient) -> None:
+    """Подпись уезжает в правило ключом, а не тем, что прислали: иначе правило
+    не совпадёт с описанием операции и молча не сработает."""
+    ws, acc = await _register(client, ALICE)
+    await _import_transfer(client, ws, acc, "Денис З.", "-100.00")
+
+    created = await _create_counterparty(client, ws, "Денис", ["  ДЕНИС   З.  "])
+    assert created["signatures"] == ["денис з."]
+    # ключ совпал с подписью операции — иначе она осталась бы неопознанной
+    assert await _unknown_signatures(client, ws) == []
+
+
+async def test_counterparty_without_category_is_allowed(client: AsyncClient) -> None:
+    """Переводы одному человеку бывают разными по смыслу; требовать категорию
+    значит требовать соврать."""
+    ws, _ = await _register(client, ALICE)
+
+    created = await _create_counterparty(client, ws, "Денис", ["денис з."])
+    assert created["category_id"] is None
+
+
+async def test_counterparty_without_signatures_is_allowed(client: AsyncClient) -> None:
+    """Контрагента заводят заранее, ещё до того как встретилась хоть одна его
+    подпись, — пустой список не отказ."""
+    ws, _ = await _register(client, ALICE)
+
+    created = await _create_counterparty(client, ws, "Денис", [])
+    assert created["signatures"] == []
+    assert [c["id"] for c in await _counterparties(client, ws)] == [created["id"]]
+
+
+async def test_organization_is_a_counterparty_too(client: AsyncClient) -> None:
+    """Банк не отличает организацию от человека: «Газпром» приезжает тем же
+    видом перевода, и типом его помечает человек."""
+    ws, _ = await _register(client, ALICE)
+
+    created = await _create_counterparty(
+        client, ws, "Газпром Межрегионгаз", ["газпром межрегионгаз"], kind="organization"
+    )
+    assert created["kind"] == "organization"
+
+
+async def test_unknown_kind_is_rejected(client: AsyncClient) -> None:
+    ws, _ = await _register(client, ALICE)
+    resp = await client.post(
+        "/api/counterparties",
+        params={"workspace_id": ws},
+        json={"name": "Денис", "kind": "робот", "category_id": None, "signatures": []},
+    )
+    assert resp.status_code == 422
+    assert await _counterparties(client, ws) == []
+
+
 async def test_rules_listing_survives_a_counterparty_rule(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
@@ -447,3 +565,323 @@ async def test_rules_listing_survives_a_counterparty_rule(
             "source": "manual",
         }
     ]
+
+
+async def test_taken_signature_is_rejected(client: AsyncClient, db_session: AsyncSession) -> None:
+    """Подпись с готовым правилом молча не переподчиняем: решение о ней человек
+    уже принял, и отобрать его заведением контрагента нельзя."""
+    ws, _ = await _register(client, ALICE)
+    category = await _expense_category(client, ws)
+    await ledger_service.create_description_rule(
+        db_session, uuid.UUID(ws), "денис з.", uuid.UUID(category)
+    )
+
+    resp = await client.post(
+        "/api/counterparties",
+        params={"workspace_id": ws},
+        json={"name": "Денис", "kind": "person", "category_id": None, "signatures": ["ДЕНИС З."]},
+    )
+    assert resp.status_code == 409
+    # отказ полный, а не частичный: контрагента без подписей тоже не осталось
+    assert await _counterparties(client, ws) == []
+    # и прежнее решение на месте
+    assert [r["category_id"] for r in await _rules(client, ws)] == [category]
+
+
+async def test_taken_signature_slipping_past_precheck_is_still_rejected(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Отказ держится не на предпроверке, а на уникальном индексе: сними
+    предпроверку — ответ обязан остаться тем же. Так и выглядит окно гонки,
+    когда правило завели одновременно в другой сессии.
+    """
+    ws, _ = await _register(client, ALICE)
+    category = await _expense_category(client, ws)
+    await ledger_service.create_description_rule(
+        db_session, uuid.UUID(ws), "денис з.", uuid.UUID(category)
+    )
+
+    async def blind(*args: object, **kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(ledger_repository, "find_description_rule", blind)
+    resp = await client.post(
+        "/api/counterparties",
+        params={"workspace_id": ws},
+        json={"name": "Денис", "kind": "person", "category_id": None, "signatures": ["денис з."]},
+    )
+    assert resp.status_code == 409
+    assert await _counterparties(client, ws) == []
+
+
+async def test_signature_of_another_counterparty_is_rejected(client: AsyncClient) -> None:
+    """Та же защита, когда подпись занята не категорией, а другим контрагентом."""
+    ws, _ = await _register(client, ALICE)
+    first = await _create_counterparty(client, ws, "Денис", ["денис з."])
+
+    resp = await client.post(
+        "/api/counterparties",
+        params={"workspace_id": ws},
+        json={
+            "name": "Другой Денис",
+            "kind": "person",
+            "category_id": None,
+            "signatures": ["  ДЕНИС   З."],
+        },
+    )
+    assert resp.status_code == 409
+    assert [c["id"] for c in await _counterparties(client, ws)] == [first["id"]]
+
+
+async def test_repeated_signature_in_one_request_is_rejected(client: AsyncClient) -> None:
+    """Одна подпись — одно правило; дважды названная в одном запросе не
+    исключение, хотя до базы такая пара доходит вместе."""
+    ws, _ = await _register(client, ALICE)
+
+    resp = await client.post(
+        "/api/counterparties",
+        params={"workspace_id": ws},
+        json={
+            "name": "Денис",
+            "kind": "person",
+            "category_id": None,
+            "signatures": ["денис з.", "  ДЕНИС З."],
+        },
+    )
+    assert resp.status_code == 409
+    assert await _counterparties(client, ws) == []
+    assert await _rules(client, ws) == []
+
+
+async def test_signature_without_usable_key_is_rejected(client: AsyncClient) -> None:
+    """Ключ меряем после нормализации: из одних пробелов он не выходит вовсе,
+    а «İ» в нижнем регистре занимает два символа и в колонку не влезает."""
+    ws, _ = await _register(client, ALICE)
+
+    for signature in ("   ", "İ" * 200):
+        resp = await client.post(
+            "/api/counterparties",
+            params={"workspace_id": ws},
+            json={
+                "name": "Денис",
+                "kind": "person",
+                "category_id": None,
+                "signatures": [signature],
+            },
+        )
+        assert resp.status_code == 422, signature
+    assert await _counterparties(client, ws) == []
+
+
+async def test_creating_rejects_category_of_another_workspace(client: AsyncClient) -> None:
+    """Категория обязана жить в том же workspace — иначе межворкспейсная ссылка,
+    которую внешний ключ не ловит: он про таблицу, а не про workspace."""
+    ws_alice, _ = await _register(client, ALICE)
+    alice_category = await _expense_category(client, ws_alice)
+
+    ws_bob, _ = await _register(client, BOB)
+    resp = await client.post(
+        "/api/counterparties",
+        params={"workspace_id": ws_bob},
+        json={
+            "name": "Денис",
+            "kind": "person",
+            "category_id": alice_category,
+            "signatures": ["денис з."],
+        },
+    )
+    assert resp.status_code == 404
+    assert await _counterparties(client, ws_bob) == []
+
+
+async def test_counterparty_name_and_category_are_editable(client: AsyncClient) -> None:
+    ws, _ = await _register(client, ALICE)
+    category = await _expense_category(client, ws)
+    created = await _create_counterparty(client, ws, "Денис", ["денис з."])
+
+    resp = await client.patch(
+        f"/api/counterparties/{created['id']}",
+        params={"workspace_id": ws},
+        json={"name": "Денис Зелинский", "category_id": category},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "id": created["id"],
+        "name": "Денис Зелинский",
+        "kind": "person",
+        "category_id": category,
+        "signatures": ["денис з."],
+    }
+
+
+async def test_editing_name_keeps_the_category(client: AsyncClient) -> None:
+    """Поле, которого в запросе нет, не трогается: правка имени не должна молча
+    снимать категорию."""
+    ws, _ = await _register(client, ALICE)
+    category = await _expense_category(client, ws)
+    created = await _create_counterparty(client, ws, "Денис", ["денис з."], category)
+
+    resp = await client.patch(
+        f"/api/counterparties/{created['id']}",
+        params={"workspace_id": ws},
+        json={"name": "Денис Зелинский"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["category_id"] == category
+
+
+async def test_counterparty_category_can_be_cleared(client: AsyncClient) -> None:
+    """Снять категорию должно быть можно, а не только задать: сегодня переводы
+    человеку про одно, завтра про другое."""
+    ws, _ = await _register(client, ALICE)
+    category = await _expense_category(client, ws)
+    created = await _create_counterparty(client, ws, "Денис", ["денис з."], category)
+
+    resp = await client.patch(
+        f"/api/counterparties/{created['id']}",
+        params={"workspace_id": ws},
+        json={"category_id": None},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["category_id"] is None
+
+
+async def test_editing_rejects_category_of_another_workspace(client: AsyncClient) -> None:
+    ws_alice, _ = await _register(client, ALICE)
+    alice_category = await _expense_category(client, ws_alice)
+
+    ws_bob, _ = await _register(client, BOB)
+    created = await _create_counterparty(client, ws_bob, "Денис", ["денис з."])
+    resp = await client.patch(
+        f"/api/counterparties/{created['id']}",
+        params={"workspace_id": ws_bob},
+        json={"category_id": alice_category},
+    )
+    assert resp.status_code == 404
+    assert (await _counterparties(client, ws_bob))[0]["category_id"] is None
+
+
+async def test_counterparty_of_another_workspace_is_not_editable(client: AsyncClient) -> None:
+    """Чужой идентификатор со своим workspace_id проходит проверку членства —
+    помешать обязан фильтр в repository, и больше некому."""
+    ws_alice, _ = await _register(client, ALICE)
+    created = await _create_counterparty(client, ws_alice, "Денис", ["денис з."])
+
+    ws_bob, _ = await _register(client, BOB)
+    resp = await client.patch(
+        f"/api/counterparties/{created['id']}",
+        params={"workspace_id": ws_bob},
+        json={"name": "Чужое имя"},
+    )
+    assert resp.status_code == 404
+
+    client.cookies.clear()
+    await client.post("/api/auth/login", json=ALICE)
+    assert [c["name"] for c in await _counterparties(client, ws_alice)] == ["Денис"]
+
+
+async def test_counterparty_of_another_workspace_is_not_deleted(client: AsyncClient) -> None:
+    ws_alice, _ = await _register(client, ALICE)
+    created = await _create_counterparty(client, ws_alice, "Денис", ["денис з."])
+
+    ws_bob, _ = await _register(client, BOB)
+    resp = await client.delete(
+        f"/api/counterparties/{created['id']}", params={"workspace_id": ws_bob}
+    )
+    assert resp.status_code == 404
+
+    client.cookies.clear()
+    await client.post("/api/auth/login", json=ALICE)
+    assert [c["id"] for c in await _counterparties(client, ws_alice)] == [created["id"]]
+
+
+async def test_list_shows_only_own_counterparties(client: AsyncClient) -> None:
+    ws_alice, _ = await _register(client, ALICE)
+    await _create_counterparty(client, ws_alice, "Денис", ["денис з."])
+
+    ws_bob, _ = await _register(client, BOB)
+    assert await _counterparties(client, ws_bob) == []
+
+
+async def test_deleting_counterparty_takes_its_signatures(client: AsyncClient) -> None:
+    """Правила уходят вместе с контрагентом: правило без обеих целей ограничение
+    в БД не пропустит, и оставлять их было бы нечем."""
+    ws, acc = await _register(client, ALICE)
+    await _import_transfer(client, ws, acc, "Денис З.", "-100.00")
+    created = await _create_counterparty(client, ws, "Денис", ["денис з."])
+
+    resp = await client.delete(f"/api/counterparties/{created['id']}", params={"workspace_id": ws})
+    assert resp.status_code == 204
+    assert await _counterparties(client, ws) == []
+    assert await _rules(client, ws) == []
+    # подпись снова неопознана — значит правила не осталось и в поиске по ключу
+    assert [s["text"] for s in await _unknown_signatures(client, ws)] == ["денис з."]
+
+    # повторное удаление — уже нечего удалять
+    again = await client.delete(f"/api/counterparties/{created['id']}", params={"workspace_id": ws})
+    assert again.status_code == 404
+
+
+async def test_deleting_counterparty_keeps_other_rules(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Уносятся подписи этого контрагента, а не все правила workspace."""
+    ws, _ = await _register(client, ALICE)
+    category = await _expense_category(client, ws)
+    await ledger_service.create_description_rule(
+        db_session, uuid.UUID(ws), "Пятёрочка", uuid.UUID(category)
+    )
+    neighbour = await _create_counterparty(client, ws, "Анастасия", ["анастасия с."])
+    created = await _create_counterparty(client, ws, "Денис", ["денис з."])
+
+    resp = await client.delete(f"/api/counterparties/{created['id']}", params={"workspace_id": ws})
+    assert resp.status_code == 204
+    assert sorted(r["normalized_text"] for r in await _rules(client, ws)) == [
+        "анастасия с.",
+        "пятёрочка",
+    ]
+    assert [c["id"] for c in await _counterparties(client, ws)] == [neighbour["id"]]
+
+
+async def test_unknown_signatures_route_survives_counterparty_routes(client: AsyncClient) -> None:
+    """`unknown-signatures` стоит в файле выше ручек с `{counterparty_id}`:
+    иначе FastAPI принял бы это слово за идентификатор."""
+    ws, acc = await _register(client, ALICE)
+    await _import_transfer(client, ws, acc, "Денис З.", "-100.00")
+
+    resp = await client.get("/api/counterparties/unknown-signatures", params={"workspace_id": ws})
+    assert resp.status_code == 200
+    assert [s["text"] for s in resp.json()] == ["денис з."]
+
+
+async def test_api_rejects_counterparty_requests_for_foreign_workspace(
+    client: AsyncClient,
+) -> None:
+    """Проверка членства на всех четырёх ручках: без неё чужой workspace_id
+    пускали бы внутрь вообще без аутентификации."""
+    ws_alice, _ = await _register(client, ALICE)
+    created = await _create_counterparty(client, ws_alice, "Денис", ["денис з."])
+
+    await _register(client, BOB)
+    listed = await client.get("/api/counterparties", params={"workspace_id": ws_alice})
+    assert listed.status_code == 403
+    made = await client.post(
+        "/api/counterparties",
+        params={"workspace_id": ws_alice},
+        json={"name": "Чужой", "kind": "person", "category_id": None, "signatures": []},
+    )
+    assert made.status_code == 403
+    edited = await client.patch(
+        f"/api/counterparties/{created['id']}",
+        params={"workspace_id": ws_alice},
+        json={"name": "Чужое имя"},
+    )
+    assert edited.status_code == 403
+    deleted = await client.delete(
+        f"/api/counterparties/{created['id']}", params={"workspace_id": ws_alice}
+    )
+    assert deleted.status_code == 403
+
+    client.cookies.clear()
+    await client.post("/api/auth/login", json=ALICE)
+    assert [c["name"] for c in await _counterparties(client, ws_alice)] == ["Денис"]
