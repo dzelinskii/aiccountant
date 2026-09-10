@@ -65,11 +65,13 @@ export function CounterpartiesPage() {
       category_id: v.category_id || null,
       signatures: selected,
     }),
-    onSuccess: async (created, v) => {
+    onSuccess: async (created) => {
       // категория контрагента достаётся и уже лежащим операциям, но не молча:
       // спрашиваем, сколько их, и раскладываем только по согласию человека.
-      // Контрагенту без категории раскладывать нечего — и спрашивать не о чем
-      if (v.category_id) {
+      // Контрагенту без категории раскладывать нечего — и спрашивать не о чем.
+      // Завелась категория или нет, знает сервер, а не форма: предложение,
+      // основанное на форме, пережило бы потерю категории по дороге
+      if (created.category_id) {
         const { count } = await getCounterpartyUncategorized(ws, created.id)
         if (count > 0) setPending({ id: created.id, count })
       }
@@ -107,15 +109,23 @@ export function CounterpartiesPage() {
   const toggle = (text: string) =>
     setSelected((s) => (s.includes(text) ? s.filter((t) => t !== text) : [...s, text]))
 
+  // окно одно на заведение и на правку, и Alert в нём рисуется по любой из двух
+  // мутаций: не сбросив обе, человек увидел бы в «Новом контрагенте» жалобу на
+  // правку, которую только что закрыл
+  const forgetErrors = () => {
+    createMut.reset()
+    updateMut.reset()
+  }
+
   const openCreate = () => {
     setEditing(null)
-    createMut.reset()
+    forgetErrors()
     form.setValues({ name: '', kind: 'person', category_id: '' })
     open()
   }
   const openEdit = (c: Counterparty) => {
     setEditing(c)
-    createMut.reset()
+    forgetErrors()
     form.setValues({ name: c.name, kind: c.kind, category_id: c.category_id ?? '' })
     open()
   }

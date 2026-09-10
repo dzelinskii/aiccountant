@@ -1299,6 +1299,27 @@ async def test_transaction_does_not_take_a_counterparty_of_another_workspace(
     assert (await _operation(client, ws_alice, "-100.00"))["counterparty_name"] is None
 
 
+async def test_transaction_does_not_take_a_rule_of_another_workspace(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Зеркальный случай: контрагент свой, а правило с его подписью — чужое.
+    Фильтр на контрагенте здесь молчит: контрагент как раз мой, — и остановить
+    такую связь обязан фильтр на правиле. Иначе чужая строка в чужом workspace
+    решала бы, какое из моих имён достанется моей операции."""
+    ws_alice, acc_alice = await _register(client, ALICE)
+    await _import_transfer(client, ws_alice, acc_alice, "Денис З.", "-100.00")
+    mine = _add_counterparty(db_session, ws_alice, "Денис Зелинский", None)
+    await db_session.flush()
+
+    ws_bob, _ = await _register(client, BOB)
+    _add_signature(db_session, ws_bob, "денис з.", mine.id)
+    await db_session.flush()
+
+    client.cookies.clear()
+    await client.post("/api/auth/login", json=ALICE)
+    assert (await _operation(client, ws_alice, "-100.00"))["counterparty_name"] is None
+
+
 async def test_operations_of_another_workspace_are_not_named(client: AsyncClient) -> None:
     """Своя лента не тянет чужие операции даже тем же именем: у обоих workspace
     контрагент есть, и перепутать строки нечему."""
