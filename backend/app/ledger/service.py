@@ -457,6 +457,83 @@ async def delete_counterparty(
     await db.commit()
 
 
+async def _uncategorized_of_counterparty(
+    db: AsyncSession, workspace_id: uuid.UUID, counterparty: Counterparty
+) -> list[Transaction]:
+    """Операции без категории, подписанные этим контрагентом и пригодные под его
+    категорию.
+
+    Пригодность решает тот же запрос, что и у разбора похожих операций
+    (uncategorized_with_description), а знак задаёт направление категории
+    контрагента: она известна заранее, и подойти может только операции того же
+    направления.
+
+    Сравниваем описание со всеми подписями сразу — ради этого контрагент и
+    заведён: написания из разных банков разбираются вместе.
+
+    Категории нет — раскладывать нечего, и это законный контрагент, а не ошибка.
+    Категория из чужого workspace (руками такую не задать: проверки заведения и
+    правки её не пропустят) — не категория вовсе, и правило через такого
+    контрагента тоже ничего не даёт.
+    """
+    if counterparty.category_id is None:
+        return []
+    category = await repository.get_category(db, workspace_id, counterparty.category_id)
+    if category is None:
+        return []
+    keys = set(await _counterparty_signatures(db, workspace_id, counterparty.id))
+    if not keys:
+        return []
+    candidates = await repository.uncategorized_with_description(
+        db,
+        workspace_id,
+        # знак спрашиваем у того же правила, что стоит на всех путях записи:
+        # подходит ли этой категории положительная сумма. Ответив на это вторым
+        # выражением, мы завели бы второе правило — и оно однажды разошлось бы
+        positive=category_matches_amount(category.kind, Decimal(1)),
+    )
+    return [t for t in candidates if t.merchant and normalize_description(t.merchant) in keys]
+
+
+async def count_uncategorized_of_counterparty(
+    db: AsyncSession, workspace_id: uuid.UUID, counterparty_id: uuid.UUID
+) -> int:
+    """Сколько операций без категории подписаны этим контрагентом — это интерфейс
+    спрашивает, заведя контрагента с категорией, прежде чем предложить разбор."""
+    counterparty = await repository.get_counterparty(db, workspace_id, counterparty_id)
+    if counterparty is None:
+        raise NotFoundError
+    return len(await _uncategorized_of_counterparty(db, workspace_id, counterparty))
+
+
+async def apply_counterparty_category(
+    db: AsyncSession, workspace_id: uuid.UUID, counterparty_id: uuid.UUID
+) -> int:
+    """Проставить категорию контрагента тем его операциям, у которых её нет.
+
+    Правила отбора и записи — те же, что у разбора похожих операций
+    (apply_category_to_similar), и по той же причине: трогаем только пустоту,
+    а отклонённая подсказка — тоже решение человека и остаётся. Худшее
+    последствие согласия — заполнится пустота, поэтому спрашивать безопасно.
+
+    category_confirmed не ставим: человек согласился распространить категорию,
+    но каждую операцию глазами не видел.
+
+    У контрагента без категории раскладывать нечего — отвечаем нулём, а не
+    отказом: контрагент без категории законен.
+    """
+    counterparty = await repository.get_counterparty(db, workspace_id, counterparty_id)
+    if counterparty is None:
+        raise NotFoundError
+    category_id = counterparty.category_id
+    if category_id is None:
+        return 0
+    rows = await _uncategorized_of_counterparty(db, workspace_id, counterparty)
+    applied = await repository.set_category_for(db, workspace_id, [t.id for t in rows], category_id)
+    await db.commit()
+    return applied
+
+
 async def find_category_by_name(
     db: AsyncSession, workspace_id: uuid.UUID, name: str
 ) -> Category | None:
@@ -757,9 +834,12 @@ async def _similar_uncategorized(
 ) -> list[Transaction]:
     """Операции, описанные так же, как заданная, и пригодные под её категорию.
 
-    Пригодность целиком решает запрос (uncategorized_with_description): пустая
-    категория, отсутствие решения человека, участие в статистике и подходящий
-    знак суммы. Здесь остаётся только сравнение описаний.
+    Пригодность решает запрос (uncategorized_with_description): пустая категория,
+    отсутствие решения человека и участие в статистике. Знак задаём отсюда —
+    знаком операции-источника: её категория с ним уже согласована, а значит
+    кандидату та же категория подходит ровно при совпадении знака.
+
+    Здесь остаётся только сравнение описаний.
 
     «Так же» — по тому же ключу, что и у правил: «КОФЕЙНЯ  У ДОМА» и «Кофейня
     у дома» для человека одно и то же место, и разбираться они обязаны вместе.
@@ -772,7 +852,7 @@ async def _similar_uncategorized(
     if not key:
         return []
     candidates = await repository.uncategorized_with_description(
-        db, workspace_id, exclude_id=transaction.id, amount=transaction.amount
+        db, workspace_id, positive=transaction.amount > 0, exclude_id=transaction.id
     )
     return [t for t in candidates if t.merchant and normalize_description(t.merchant) == key]
 

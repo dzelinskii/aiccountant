@@ -70,6 +70,9 @@
 - `category_id` · `UUID` · может быть пустой · → `categories.id`
 - `created_at` · `TIMESTAMP WITH TIME ZONE` · обязательна · по умолчанию `now()`
 
+Индексы:
+- `ix_counterparties_workspace` (обычный): `workspace_id`
+
 ## `imports`
 
 - `id` · `UUID` · обязательна · первичный ключ

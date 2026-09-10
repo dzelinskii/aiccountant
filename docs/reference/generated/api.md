@@ -18,6 +18,8 @@ API **не версионирован**: все пути живут под `/api
 - `GET /api/counterparties/unknown-signatures` — отвечает списком `UnknownSignatureOut`
 - `DELETE /api/counterparties/{counterparty_id}`
 - `PATCH /api/counterparties/{counterparty_id}` — принимает `CounterpartyUpdate`, отвечает `CounterpartyOut`
+- `POST /api/counterparties/{counterparty_id}/apply-category` — отвечает `SimilarAppliedOut`
+- `GET /api/counterparties/{counterparty_id}/uncategorized` — отвечает `SimilarUncategorizedOut`
 - `GET /api/dashboard` — отвечает `DashboardOut`
 - `GET /api/description-rules` — отвечает списком `DescriptionRuleOut`
 - `POST /api/description-rules` — принимает `DescriptionRuleCreate`, отвечает `DescriptionRuleOut`

@@ -258,6 +258,34 @@ async def delete_counterparty(
         raise HTTPException(status_code=404, detail="Контрагент не найден") from None
 
 
+@router.get("/counterparties/{counterparty_id}/uncategorized")
+async def counterparty_uncategorized(
+    counterparty_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> SimilarUncategorizedOut:
+    try:
+        count = await service.count_uncategorized_of_counterparty(db, workspace_id, counterparty_id)
+    except service.NotFoundError:
+        raise HTTPException(status_code=404, detail="Контрагент не найден") from None
+    return SimilarUncategorizedOut(count=count)
+
+
+@router.post("/counterparties/{counterparty_id}/apply-category")
+async def apply_counterparty_category(
+    counterparty_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> SimilarAppliedOut:
+    try:
+        applied = await service.apply_counterparty_category(db, workspace_id, counterparty_id)
+    except service.NotFoundError:
+        raise HTTPException(status_code=404, detail="Контрагент не найден") from None
+    return SimilarAppliedOut(applied=applied)
+
+
 def _transaction_out(t: Transaction) -> TransactionOut:
     # counts_in_stats в модели нет — это решение правила, подставляем отдельно
     return TransactionOut(

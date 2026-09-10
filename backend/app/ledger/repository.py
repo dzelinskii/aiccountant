@@ -527,11 +527,11 @@ async def uncategorized_with_description(
     db: AsyncSession,
     workspace_id: uuid.UUID,
     *,
-    exclude_id: uuid.UUID,
-    amount: Decimal,
+    positive: bool,
+    exclude_id: uuid.UUID | None = None,
 ) -> list[Transaction]:
-    """Кандидаты на разбор по описанию: операции с описанием, которым категорию
-    операции-источника проставить можно, кроме неё самой.
+    """Кандидаты на разбор: операции с описанием, которым чужую категорию
+    проставить можно.
 
     Можно — значит категории нет вовсе и решения человека по ней не было.
     Отклонённая подсказка помечается подтверждённой (см. dismiss_suggestion),
@@ -542,29 +542,34 @@ async def uncategorized_with_description(
     на вопрос «какие операции подлежат категоризации» два запроса обязаны
     отвечать одинаково.
 
-    Знак: категория берётся у операции-источника, а её направление уже
-    согласовано со знаком её суммы (это стережёт category_matches_amount на всех
-    путях записи). Значит кандидату та же категория подходит ровно при
-    совпадении знака. Иначе возврат по той же точке получил бы расходную
-    категорию, и дальше любая правка этой строки отвечала бы отказом.
+    Знак кандидата обязан подойти категории, которую проставим: расходная
+    категория на приходе нарушила бы инвариант, который на всех путях записи
+    стережёт category_matches_amount, и дальше любая правка такой строки
+    отвечала бы отказом. Какой знак подходит, решает вызывающий: у разбора
+    похожих — знак операции-источника, её категория со знаком уже согласована;
+    у разбора по контрагенту — направление его категории.
+
+    exclude_id — операция-источник, если она есть: вопрос звучит «сколько ещё
+    таких», и саму себя считать нельзя. У разбора по контрагенту источника нет.
 
     Сравнение описаний остаётся снаружи. Ключ у правил — нормализованное
     описание (регистр, схлопнутые пробелы, NFC), и в SQL эту нормализацию
     не выразить, не заведя её второго определения; два определения одного
     правила рано или поздно разойдутся.
     """
-    same_sign = Transaction.amount < 0 if amount < 0 else Transaction.amount > 0
+    conditions = [
+        Transaction.workspace_id == workspace_id,
+        Transaction.category_id.is_(None),
+        Transaction.category_confirmed.is_(False),
+        counts_in_stats_sql(),
+        Transaction.amount > 0 if positive else Transaction.amount < 0,
+        Transaction.merchant.is_not(None),
+    ]
+    if exclude_id is not None:
+        conditions.append(Transaction.id != exclude_id)
     rows = await db.execute(
         select(Transaction)
-        .where(
-            Transaction.workspace_id == workspace_id,
-            Transaction.category_id.is_(None),
-            Transaction.category_confirmed.is_(False),
-            counts_in_stats_sql(),
-            same_sign,
-            Transaction.merchant.is_not(None),
-            Transaction.id != exclude_id,
-        )
+        .where(*conditions)
         .order_by(Transaction.occurred_at.desc(), Transaction.id.desc())
         .limit(SIMILAR_CANDIDATES_LIMIT)
     )

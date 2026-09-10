@@ -29,9 +29,17 @@ async def _register(client: AsyncClient, credentials: dict[str, str]) -> tuple[s
     return ws, acc
 
 
-async def _expense_category(client: AsyncClient, ws: str) -> str:
+async def _categories(client: AsyncClient, ws: str, kind: str) -> list[str]:
     cats = (await client.get("/api/categories", params={"workspace_id": ws})).json()
-    return str(next(c for c in cats if c["kind"] == "expense")["id"])
+    return [str(c["id"]) for c in cats if c["kind"] == kind]
+
+
+async def _expense_category(client: AsyncClient, ws: str) -> str:
+    return (await _categories(client, ws, "expense"))[0]
+
+
+async def _income_category(client: AsyncClient, ws: str) -> str:
+    return (await _categories(client, ws, "income"))[0]
 
 
 def _add_counterparty(
@@ -857,7 +865,7 @@ async def test_unknown_signatures_route_survives_counterparty_routes(client: Asy
 async def test_api_rejects_counterparty_requests_for_foreign_workspace(
     client: AsyncClient,
 ) -> None:
-    """Проверка членства на всех четырёх ручках: без неё чужой workspace_id
+    """Проверка членства на всех шести ручках: без неё чужой workspace_id
     пускали бы внутрь вообще без аутентификации."""
     ws_alice, _ = await _register(client, ALICE)
     created = await _create_counterparty(client, ws_alice, "Денис", ["денис з."])
@@ -881,7 +889,293 @@ async def test_api_rejects_counterparty_requests_for_foreign_workspace(
         f"/api/counterparties/{created['id']}", params={"workspace_id": ws_alice}
     )
     assert deleted.status_code == 403
+    counted = await client.get(
+        f"/api/counterparties/{created['id']}/uncategorized", params={"workspace_id": ws_alice}
+    )
+    assert counted.status_code == 403
+    applied = await client.post(
+        f"/api/counterparties/{created['id']}/apply-category", params={"workspace_id": ws_alice}
+    )
+    assert applied.status_code == 403
 
     client.cookies.clear()
     await client.post("/api/auth/login", json=ALICE)
     assert [c["name"] for c in await _counterparties(client, ws_alice)] == ["Денис"]
+
+
+# Дальше — разбор уже лежащих операций по контрагенту. Операции всюду
+# импортируются до заведения контрагента: правило применяется на импорте, и
+# заведи мы контрагента раньше, категория проставилась бы сама, а разбирать было
+# бы нечего — ровно тот случай, ради которого разбор и нужен.
+
+
+async def _uncategorized_count(client: AsyncClient, ws: str, counterparty_id: str) -> int:
+    resp = await client.get(
+        f"/api/counterparties/{counterparty_id}/uncategorized", params={"workspace_id": ws}
+    )
+    assert resp.status_code == 200, resp.text
+    count: int = resp.json()["count"]
+    return count
+
+
+async def _apply_category(client: AsyncClient, ws: str, counterparty_id: str) -> int:
+    resp = await client.post(
+        f"/api/counterparties/{counterparty_id}/apply-category", params={"workspace_id": ws}
+    )
+    assert resp.status_code == 200, resp.text
+    applied: int = resp.json()["applied"]
+    return applied
+
+
+async def _operation(client: AsyncClient, ws: str, amount: str) -> dict[str, Any]:
+    """Операция по сумме: описания в этих тестах повторяются нарочно, а суммы нет.
+
+    Сравниваем как Decimal, а не строки: наружу сумма уходит с четырьмя знаками
+    после запятой, и «-100.00» с ней не совпало бы.
+    """
+    wanted = Decimal(amount)
+    items = (await client.get("/api/transactions", params={"workspace_id": ws})).json()["items"]
+    matching = [t for t in items if Decimal(t["amount"]) == wanted]
+    assert len(matching) == 1, matching
+    found: dict[str, Any] = matching[0]
+    return found
+
+
+async def test_counterparty_counts_operations_of_all_its_signatures(client: AsyncClient) -> None:
+    """Ради этого контрагент и заведён: написания из разных банков разбираются
+    вместе, а не по одному."""
+    ws, acc = await _register(client, ALICE)
+    category = await _expense_category(client, ws)
+    await _import_transfer(client, ws, acc, "Денис З.", "-100.00")
+    await _import_transfer(client, ws, acc, "ДЕНИС З.", "-200.00")
+    await _import_transfer(client, ws, acc, "ЗЕЛИНСКИЙ ДЕНИС", "-300.00")
+    await _import_transfer(client, ws, acc, "Анастасия С.", "-400.00")
+    created = await _create_counterparty(
+        client, ws, "Денис", ["денис з.", "зелинский денис"], category
+    )
+
+    assert await _uncategorized_count(client, ws, created["id"]) == 3
+    assert await _apply_category(client, ws, created["id"]) == 3
+
+    for amount in ("-100.00", "-200.00", "-300.00"):
+        assert (await _operation(client, ws, amount))["category_id"] == category
+    # чужая подпись не его дело
+    assert (await _operation(client, ws, "-400.00"))["category_id"] is None
+
+
+async def test_counterparty_apply_skips_operations_with_a_category(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Разбор заполняет пустоту, а не переписывает готовое: ни выбор человека,
+    ни то, что проставила машина, не трогается."""
+    ws, acc = await _register(client, ALICE)
+    mine, other = (await _categories(client, ws, "expense"))[:2]
+    await _import_transfer(client, ws, acc, "Денис З.", "-100.00")
+    await _import_transfer(client, ws, acc, "Денис З.", "-200.00")
+    await _import_transfer(client, ws, acc, "Денис З.", "-300.00")
+    created = await _create_counterparty(client, ws, "Денис", ["денис з."], mine)
+
+    chosen = await _operation(client, ws, "-200.00")
+    edited = await client.patch(
+        f"/api/transactions/{chosen['id']}",
+        params={"workspace_id": ws},
+        json={"category_id": other},
+    )
+    assert edited.status_code == 200
+    # категория без подтверждения — так её проставляет машина
+    guessed = await _operation(client, ws, "-300.00")
+    stored = await ledger_repository.get_transaction(
+        db_session, uuid.UUID(ws), uuid.UUID(guessed["id"])
+    )
+    assert stored is not None
+    stored.category_id = uuid.UUID(other)
+    await db_session.commit()
+
+    assert await _uncategorized_count(client, ws, created["id"]) == 1
+    assert await _apply_category(client, ws, created["id"]) == 1
+
+    assert (await _operation(client, ws, "-100.00"))["category_id"] == mine
+    assert (await _operation(client, ws, "-200.00"))["category_id"] == other
+    assert (await _operation(client, ws, "-300.00"))["category_id"] == other
+
+
+async def test_counterparty_apply_respects_a_dismissed_suggestion(client: AsyncClient) -> None:
+    """Отклонённая подсказка — решение человека оставить операцию без категории.
+    По одной пустой категории она неотличима от неразобранной, но трогать её
+    нельзя: category_confirmed у такой строки уже стоит, и разложенная она ушла бы
+    в примеры для модели как проверенная."""
+    ws, acc = await _register(client, ALICE)
+    category = await _expense_category(client, ws)
+    await _import_transfer(client, ws, acc, "Денис З.", "-100.00")
+    created = await _create_counterparty(client, ws, "Денис", ["денис з."], category)
+
+    op = await _operation(client, ws, "-100.00")
+    dismissed = await client.post(
+        f"/api/transactions/{op['id']}/dismiss-suggestion", params={"workspace_id": ws}
+    )
+    assert dismissed.status_code == 200
+
+    assert await _uncategorized_count(client, ws, created["id"]) == 0
+    assert await _apply_category(client, ws, created["id"]) == 0
+    assert (await _operation(client, ws, "-100.00"))["category_id"] is None
+
+
+async def test_counterparty_apply_does_not_confirm_what_nobody_looked_at(
+    client: AsyncClient,
+) -> None:
+    """Человек согласился распространить категорию, но каждую операцию глазами
+    не видел. Пометив их подтверждёнными, мы отправили бы их в примеры для модели
+    наравне с проверенными."""
+    ws, acc = await _register(client, ALICE)
+    category = await _expense_category(client, ws)
+    await _import_transfer(client, ws, acc, "Денис З.", "-100.00")
+    created = await _create_counterparty(client, ws, "Денис", ["денис з."], category)
+
+    assert await _apply_category(client, ws, created["id"]) == 1
+
+    op = await _operation(client, ws, "-100.00")
+    assert op["category_id"] == category
+    assert op["category_confirmed"] is False
+
+
+async def test_expense_category_does_not_reach_an_incoming_transfer(client: AsyncClient) -> None:
+    """У Дениса З. переводы идут в обе стороны: расходная категория на приходе
+    не срабатывает — так же, как не срабатывает правило."""
+    ws, acc = await _register(client, ALICE)
+    category = await _expense_category(client, ws)
+    await _import_transfer(client, ws, acc, "Денис З.", "-100.00")
+    await _import_transfer(client, ws, acc, "Денис З.", "300.00")
+    created = await _create_counterparty(client, ws, "Денис", ["денис з."], category)
+
+    assert await _uncategorized_count(client, ws, created["id"]) == 1
+    assert await _apply_category(client, ws, created["id"]) == 1
+
+    assert (await _operation(client, ws, "-100.00"))["category_id"] == category
+    assert (await _operation(client, ws, "300.00"))["category_id"] is None
+
+
+async def test_income_category_does_not_reach_an_outgoing_transfer(client: AsyncClient) -> None:
+    """То же в обратную сторону: доходная категория контрагента не липнет к тому,
+    что ему отдали."""
+    ws, acc = await _register(client, ALICE)
+    category = await _income_category(client, ws)
+    await _import_transfer(client, ws, acc, "Денис З.", "-100.00")
+    await _import_transfer(client, ws, acc, "Денис З.", "300.00")
+    created = await _create_counterparty(client, ws, "Денис", ["денис з."], category)
+
+    assert await _uncategorized_count(client, ws, created["id"]) == 1
+    assert await _apply_category(client, ws, created["id"]) == 1
+
+    assert (await _operation(client, ws, "300.00"))["category_id"] == category
+    assert (await _operation(client, ws, "-100.00"))["category_id"] is None
+
+
+async def test_counterparty_without_category_has_nothing_to_apply(client: AsyncClient) -> None:
+    """Контрагент без категории законен — раскладывать нечего. Ответ ноль, а не
+    отказ, и уж точно не простановка пустоты вместо категории."""
+    ws, acc = await _register(client, ALICE)
+    await _import_transfer(client, ws, acc, "Денис З.", "-100.00")
+    created = await _create_counterparty(client, ws, "Денис", ["денис з."])
+
+    assert await _uncategorized_count(client, ws, created["id"]) == 0
+    assert await _apply_category(client, ws, created["id"]) == 0
+
+    op = await _operation(client, ws, "-100.00")
+    assert op["category_id"] is None
+    assert op["category_confirmed"] is False
+
+
+async def test_counterparty_with_a_category_of_another_workspace_applies_nothing(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Чужая категория — не категория: правило через такого контрагента её не
+    отдаёт, и разбор обязан вести себя так же. Через API такую связь не завести,
+    проверки заведения и правки её не пропустят, — складываем руками, как и в
+    проверках разрешения правила выше."""
+    ws_alice, _ = await _register(client, ALICE)
+    alice_category = await _expense_category(client, ws_alice)
+
+    client.cookies.clear()
+    ws_bob, acc_bob = await _register(client, BOB)
+    await _import_transfer(client, ws_bob, acc_bob, "Денис З.", "-100.00")
+    cp = _add_counterparty(db_session, ws_bob, "Денис", alice_category)
+    await db_session.flush()
+    _add_signature(db_session, ws_bob, "денис з.", cp.id)
+    await db_session.flush()
+
+    assert await _uncategorized_count(client, ws_bob, str(cp.id)) == 0
+    assert await _apply_category(client, ws_bob, str(cp.id)) == 0
+    assert (await _operation(client, ws_bob, "-100.00"))["category_id"] is None
+
+
+async def test_second_apply_finds_nothing(client: AsyncClient) -> None:
+    """Первый разбор уже всё разложил, и разложенное больше не пустое."""
+    ws, acc = await _register(client, ALICE)
+    category = await _expense_category(client, ws)
+    await _import_transfer(client, ws, acc, "Денис З.", "-100.00")
+    created = await _create_counterparty(client, ws, "Денис", ["денис з."], category)
+
+    assert await _apply_category(client, ws, created["id"]) == 1
+    assert await _apply_category(client, ws, created["id"]) == 0
+    assert await _uncategorized_count(client, ws, created["id"]) == 0
+
+
+async def test_signature_of_another_workspace_does_not_widen_the_counterparty(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Подписи контрагента ищутся в его workspace. Правило соседа, указывающее на
+    моего контрагента, его подписью не становится — иначе разбор разложил бы мои
+    операции по ключу, которого я ему не задавал."""
+    ws_alice, acc_alice = await _register(client, ALICE)
+    category = await _expense_category(client, ws_alice)
+    await _import_transfer(client, ws_alice, acc_alice, "Денис З.", "-100.00")
+    await _import_transfer(client, ws_alice, acc_alice, "Анастасия С.", "-200.00")
+    created = await _create_counterparty(client, ws_alice, "Денис", ["денис з."], category)
+
+    client.cookies.clear()
+    ws_bob, _ = await _register(client, BOB)
+    _add_signature(db_session, ws_bob, "анастасия с.", uuid.UUID(created["id"]))
+    await db_session.flush()
+
+    client.cookies.clear()
+    await client.post("/api/auth/login", json=ALICE)
+    assert await _uncategorized_count(client, ws_alice, created["id"]) == 1
+    assert await _apply_category(client, ws_alice, created["id"]) == 1
+
+    assert (await _operation(client, ws_alice, "-100.00"))["category_id"] == category
+    assert (await _operation(client, ws_alice, "-200.00"))["category_id"] is None
+
+
+async def test_operations_of_another_workspace_are_not_touched(client: AsyncClient) -> None:
+    """Та же подпись у соседа — его дело: мой разбор её не видит и не трогает."""
+    ws_alice, acc_alice = await _register(client, ALICE)
+    category = await _expense_category(client, ws_alice)
+    await _import_transfer(client, ws_alice, acc_alice, "Денис З.", "-100.00")
+
+    client.cookies.clear()
+    ws_bob, acc_bob = await _register(client, BOB)
+    await _import_transfer(client, ws_bob, acc_bob, "Денис З.", "-200.00")
+
+    client.cookies.clear()
+    await client.post("/api/auth/login", json=ALICE)
+    created = await _create_counterparty(client, ws_alice, "Денис", ["денис з."], category)
+    assert await _uncategorized_count(client, ws_alice, created["id"]) == 1
+    assert await _apply_category(client, ws_alice, created["id"]) == 1
+
+    client.cookies.clear()
+    await client.post("/api/auth/login", json=BOB)
+    assert (await _operation(client, ws_bob, "-200.00"))["category_id"] is None
+
+
+async def test_apply_for_unknown_counterparty_is_404(client: AsyncClient) -> None:
+    ws, _ = await _register(client, ALICE)
+
+    counted = await client.get(
+        f"/api/counterparties/{uuid.uuid4()}/uncategorized", params={"workspace_id": ws}
+    )
+    assert counted.status_code == 404
+
+    applied = await client.post(
+        f"/api/counterparties/{uuid.uuid4()}/apply-category", params={"workspace_id": ws}
+    )
+    assert applied.status_code == 404
