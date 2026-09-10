@@ -149,6 +149,13 @@ class Counterparty(Base):
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
+    __table_args__ = (
+        # Повторяет индекс из миграции 0013 намеренно, по той же причине, что и
+        # у Category выше: alembic сравнивает модели с базой, и объяви мы индекс
+        # только в миграции — автогенерация следующей предложила бы его удалить.
+        Index("ix_counterparties_workspace", "workspace_id"),
+    )
+
 
 class DescriptionRule(Base):
     """Правило «описание операции → категория».
