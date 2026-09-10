@@ -21,6 +21,25 @@ export interface Category {
   kind: 'income' | 'expense'
 }
 
+export interface Counterparty {
+  id: string
+  name: string
+  kind: 'person' | 'organization'
+  category_id: string | null
+  // нормализованные ключи правил, ведущих в контрагента: показываем именно их,
+  // потому что сработает при импорте только такой ключ
+  signatures: string[]
+}
+
+// подпись перевода, за которой ещё никого не закрепили; сумм здесь нет —
+// для узнавания человека довольно счётчиков
+export interface UnknownSignature {
+  text: string
+  operations: number
+  sent: number
+  received: number
+}
+
 export interface Transaction {
   id: string
   account_id: string
@@ -140,3 +159,41 @@ export const applyCategoryToSimilar = (ws: string, id: string) =>
   api<{ applied: number }>(`/api/transactions/${id}/apply-category-to-similar?${q(ws)}`, {
     method: 'POST',
   })
+
+export const getCounterparties = (ws: string) =>
+  api<Counterparty[]>(`/api/counterparties?${q(ws)}`)
+
+// подписи ложатся правилами одной транзакцией с контрагентом: занятая подпись
+// отвечает 409, и контрагента при этом не остаётся
+export const createCounterparty = (
+  ws: string,
+  body: { name: string; kind: string; category_id?: string | null; signatures: string[] },
+) => api<Counterparty>(`/api/counterparties?${q(ws)}`, {
+  method: 'POST',
+  body: JSON.stringify(body),
+})
+
+// category_id: null — снять категорию, а не «поле не прислали»; бэкенд различает
+// их по факту присутствия ключа, поэтому не подставляем его без надобности
+export const updateCounterparty = (
+  ws: string, id: string, body: { name?: string; category_id?: string | null },
+) => api<Counterparty>(`/api/counterparties/${id}?${q(ws)}`, {
+  method: 'PATCH',
+  body: JSON.stringify(body),
+})
+
+// удаление уносит подписи контрагента: освобождённые снова станут неопознанными
+export const deleteCounterparty = (ws: string, id: string) =>
+  api<void>(`/api/counterparties/${id}?${q(ws)}`, { method: 'DELETE' })
+
+// сколько операций без категории подписаны этим контрагентом
+export const getCounterpartyUncategorized = (ws: string, id: string) =>
+  api<{ count: number }>(`/api/counterparties/${id}/uncategorized?${q(ws)}`)
+
+export const applyCounterpartyCategory = (ws: string, id: string) =>
+  api<{ applied: number }>(`/api/counterparties/${id}/apply-category?${q(ws)}`, {
+    method: 'POST',
+  })
+
+export const getUnknownSignatures = (ws: string) =>
+  api<UnknownSignature[]>(`/api/counterparties/unknown-signatures?${q(ws)}`)

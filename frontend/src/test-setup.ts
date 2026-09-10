@@ -22,6 +22,12 @@ if (!window.matchMedia) {
     }) as MediaQueryList
 }
 
+// jsdom не реализует scrollIntoView, а выпадающий список Mantine прокручивает
+// к уже выбранному варианту при открытии — без заглушки такой Select падает
+if (!Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = () => {}
+}
+
 if (!window.ResizeObserver) {
   window.ResizeObserver = class {
     observe() {}
