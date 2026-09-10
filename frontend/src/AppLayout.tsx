@@ -8,6 +8,7 @@ const LINKS = [
   { to: '/', label: 'Дашборд' },
   { to: '/accounts', label: 'Счета' },
   { to: '/categories', label: 'Категории' },
+  { to: '/counterparties', label: 'Контрагенты' },
   { to: '/transactions', label: 'Операции' },
   { to: '/recurring', label: 'Регулярные' },
   { to: '/import', label: 'Импорт' },

@@ -151,6 +151,10 @@ class TransactionOut(BaseModel):
     currency: str
     occurred_at: date
     merchant: str | None
+    # имя контрагента, за которым закреплена эта банковская строка; пусто —
+    # никого не закрепили. Едет рядом с merchant, а не вместо него: банковскую
+    # строку подменять нельзя, иначе не разобрать, почему подпись сопоставилась
+    counterparty_name: str | None
     note: str | None
     transfer_group_id: uuid.UUID | None
     operation_kind: str

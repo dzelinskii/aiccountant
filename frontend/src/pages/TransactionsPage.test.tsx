@@ -1,6 +1,6 @@
 import { MantineProvider } from '@mantine/core'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, expect, test, vi } from 'vitest'
 import type { Transaction } from '../api/ledger'
@@ -32,9 +32,10 @@ vi.mock('../api/ledger', () => ({
 
 const base: Transaction = {
   id: 't1', account_id: 'a1', category_id: null, amount: '-1000.00', currency: 'RUB',
-  occurred_at: '2026-09-01', merchant: null, note: null, transfer_group_id: null,
-  operation_kind: 'purchase', spending_override: null, counts_in_stats: true,
-  category_confirmed: false, suggested_category_id: null, category_confidence: null,
+  occurred_at: '2026-09-01', merchant: null, counterparty_name: null, note: null,
+  transfer_group_id: null, operation_kind: 'purchase', spending_override: null,
+  counts_in_stats: true, category_confirmed: false, suggested_category_id: null,
+  category_confidence: null,
 }
 
 beforeEach(() => {
@@ -53,6 +54,51 @@ function renderPage(txn: Transaction) {
     </MantineProvider>,
   )
 }
+
+// Содержимое ячейки под названным заголовком. Искать текст «где-то в строке»
+// нельзя: так проходит и вариант с перепутанными местами колонками.
+async function cellUnder(header: string) {
+  // шапка таблицы отрисована сразу, а строка с данными — только после ответа
+  // запроса; без ожидания проверка смотрела бы в пустую таблицу
+  const row = await waitFor(() => {
+    const rows = screen.getAllByRole('row')
+    expect(rows.length).toBeGreaterThan(1) // нулевая — шапка
+    return rows[1]
+  })
+  const headers = screen.getAllByRole('columnheader')
+  const column = headers.findIndex((h) => h.textContent === header)
+  expect(column).toBeGreaterThan(-1)
+  return within(row).getAllByRole('cell')[column]
+}
+
+test('в колонке контрагента видно имя, а банковская строка стоит рядом', async () => {
+  renderPage({ ...base, merchant: 'ДЕНИС З.', counterparty_name: 'Денис Зелинский' })
+
+  const cell = await cellUnder('Контрагент')
+  expect(cell.textContent).toContain('Денис Зелинский')
+  // банковскую строку не прячем совсем: по ней и понятно, откуда взялось имя
+  expect(cell.textContent).toContain('ДЕНИС З.')
+})
+
+test('имя контрагента не занимает чужую колонку', async () => {
+  renderPage({ ...base, merchant: 'ДЕНИС З.', counterparty_name: 'Денис Зелинский' })
+
+  const category = await cellUnder('Категория')
+  expect(category.textContent).toBe('—')
+})
+
+test('без контрагента в колонке остаётся банковская строка', async () => {
+  renderPage({ ...base, merchant: 'Пятёрочка', counterparty_name: null })
+
+  // ровно один раз: показывать её и главной строкой, и подписью незачем
+  expect((await cellUnder('Контрагент')).textContent).toBe('Пятёрочка')
+})
+
+test('операция без описания и без контрагента показывает прочерк', async () => {
+  renderPage(base)
+
+  expect((await cellUnder('Контрагент')).textContent).toBe('—')
+})
 
 test('перевод между своими счетами подписан и его можно вернуть в статистику', async () => {
   renderPage({ ...base, operation_kind: 'transfer_self', counts_in_stats: false })

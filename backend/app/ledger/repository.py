@@ -306,6 +306,54 @@ async def unknown_transfer_signatures(
     return [(key, total, out, back) for key, total, out, back in rows.all()]
 
 
+async def counterparty_names(
+    db: AsyncSession, workspace_id: uuid.UUID, transaction_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, str]:
+    """Имя контрагента для каждой из перечисленных операций; операции, за которой
+    никого не закреплено, в ответе нет.
+
+    Путь до имени тот же, что и до категории: банковское описание операции
+    сводится к ключу подписи, ключ ведёт в правило, правило — в контрагента.
+    В самой операции имени нет и быть не должно — переименование контрагента
+    пришлось бы разносить по всей истории, а так оно видно сразу везде.
+
+    Одним запросом на всю пачку: лента показывает страницу целиком, и запрос
+    на строку превратил бы её в N+1. Отдельно от выборки операций — чтобы ответ
+    по одной операции доставал имя этим же кодом; двух способов превратить
+    подпись в имя быть не должно.
+
+    Фильтр по workspace стоит на обоих присоединениях, и обе его роли разные.
+    У правила он стережёт связку «чужое правило, свой контрагент»: чужого
+    контрагента отсекает фильтр ниже, а вот чужая строка, указывающая на моего,
+    без этого фильтра решала бы, каким из моих имён подписана моя операция.
+    У контрагента — зеркальную связку «своё правило, чужой контрагент»: сервис
+    такую не создаёт, но фильтр по операциям её не отсекает, а имя достаётся
+    прямо из контрагента.
+    """
+    if not transaction_ids:
+        return {}
+    signature = normalized_description_sql(Transaction.merchant)
+    rows = await db.execute(
+        select(Transaction.id, Counterparty.name)
+        .select_from(Transaction)
+        .join(
+            DescriptionRule,
+            (DescriptionRule.normalized_text == signature)
+            & (DescriptionRule.workspace_id == workspace_id),
+        )
+        .join(
+            Counterparty,
+            (Counterparty.id == DescriptionRule.counterparty_id)
+            & (Counterparty.workspace_id == workspace_id),
+        )
+        .where(
+            Transaction.workspace_id == workspace_id,
+            Transaction.id.in_(transaction_ids),
+        )
+    )
+    return {transaction_id: name for transaction_id, name in rows.all()}
+
+
 async def list_counterparties(db: AsyncSession, workspace_id: uuid.UUID) -> list[Counterparty]:
     """Контрагенты workspace по алфавиту. id — тай-брейк: имена ничем
     не ограничены, и одноимённых завести можно, а порядок обязан быть тем же

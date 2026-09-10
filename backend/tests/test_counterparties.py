@@ -1179,3 +1179,159 @@ async def test_apply_for_unknown_counterparty_is_404(client: AsyncClient) -> Non
         f"/api/counterparties/{uuid.uuid4()}/apply-category", params={"workspace_id": ws}
     )
     assert applied.status_code == 404
+
+
+async def test_transaction_carries_counterparty_name(client: AsyncClient) -> None:
+    """Ради этого контрагент и заводится: в ленте видно имя человека."""
+    ws, acc = await _register(client, ALICE)
+    await _import_transfer(client, ws, acc, "Денис З.", "-100.00")
+    await _create_counterparty(client, ws, "Денис Зелинский", ["денис з."])
+
+    operation = await _operation(client, ws, "-100.00")
+    assert operation["counterparty_name"] == "Денис Зелинский"
+    # банковская строка на месте: она — то, что прислал банк, и по ней потом
+    # разбираются, почему подпись сопоставилась именно так
+    assert operation["merchant"] == "Денис З."
+
+
+async def test_transaction_without_counterparty_has_no_name(client: AsyncClient) -> None:
+    ws, acc = await _register(client, ALICE)
+    await _import_transfer(client, ws, acc, "Кто-то", "-100.00")
+
+    operation = await _operation(client, ws, "-100.00")
+    assert operation["counterparty_name"] is None
+    assert operation["merchant"] == "Кто-то"
+
+
+async def test_rule_into_category_gives_no_name(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Правило, ведущее прямо в категорию, контрагента не называет: имени у него
+    нет, и подставить в ленту нечего."""
+    ws, acc = await _register(client, ALICE)
+    category = await _expense_category(client, ws)
+    await _import_transfer(client, ws, acc, "Пятёрочка", "-100.00")
+    await ledger_service.create_description_rule(
+        db_session, uuid.UUID(ws), "Пятёрочка", uuid.UUID(category)
+    )
+    await db_session.flush()
+
+    assert (await _operation(client, ws, "-100.00"))["counterparty_name"] is None
+
+
+async def test_name_is_found_by_the_normalized_signature(client: AsyncClient) -> None:
+    """Имя достаётся по тому же ключу, что и категория: банк пишет описание как
+    придётся, а подпись у контрагента одна."""
+    ws, acc = await _register(client, ALICE)
+    await _import_transfer(client, ws, acc, "  ДЕНИС   З.  ", "-100.00")
+    await _create_counterparty(client, ws, "Денис Зелинский", ["денис з."])
+
+    operation = await _operation(client, ws, "-100.00")
+    assert operation["counterparty_name"] == "Денис Зелинский"
+    assert operation["merchant"] == "  ДЕНИС   З.  "
+
+
+async def test_renaming_counterparty_renames_him_in_the_feed(client: AsyncClient) -> None:
+    """Имя в операции не хранится, а достаётся через подпись: иначе
+    переименование пришлось бы разносить по всей истории."""
+    ws, acc = await _register(client, ALICE)
+    await _import_transfer(client, ws, acc, "Денис З.", "-100.00")
+    created = await _create_counterparty(client, ws, "Денис", ["денис з."])
+
+    renamed = await client.patch(
+        f"/api/counterparties/{created['id']}",
+        params={"workspace_id": ws},
+        json={"name": "Денис Зелинский"},
+    )
+    assert renamed.status_code == 200
+
+    assert (await _operation(client, ws, "-100.00"))["counterparty_name"] == "Денис Зелинский"
+
+
+async def test_edited_transaction_still_carries_the_name(client: AsyncClient) -> None:
+    """Ответ по одной операции несёт имя так же, как лента: иначе поле молча
+    пустовало бы на всех ручках, кроме списка."""
+    ws, acc = await _register(client, ALICE)
+    await _import_transfer(client, ws, acc, "Денис З.", "-100.00")
+    await _create_counterparty(client, ws, "Денис Зелинский", ["денис з."])
+    operation = await _operation(client, ws, "-100.00")
+
+    edited = await client.patch(
+        f"/api/transactions/{operation['id']}",
+        params={"workspace_id": ws},
+        json={"note": "за обед"},
+    )
+    assert edited.status_code == 200
+    assert edited.json()["counterparty_name"] == "Денис Зелинский"
+
+
+async def test_counterparty_name_does_not_leak_between_workspaces(client: AsyncClient) -> None:
+    """У чужого workspace контрагент с тем же ключом подписи: моя операция
+    обязана остаться безымянной, а не назваться его именем."""
+    ws_alice, acc_alice = await _register(client, ALICE)
+    await _import_transfer(client, ws_alice, acc_alice, "Денис З.", "-100.00")
+
+    ws_bob, _ = await _register(client, BOB)
+    await _create_counterparty(client, ws_bob, "Денис Зелинский", ["денис з."])
+
+    client.cookies.clear()
+    await client.post("/api/auth/login", json=ALICE)
+    assert (await _operation(client, ws_alice, "-100.00"))["counterparty_name"] is None
+
+
+async def test_transaction_does_not_take_a_counterparty_of_another_workspace(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Испорчено звено «правило → контрагент»: правило своё, а контрагент чужой.
+    Фильтр по операциям такую связь не отсекает — имя достаётся прямо из
+    контрагента, и отсечь его больше некому."""
+    ws_alice, acc_alice = await _register(client, ALICE)
+    await _import_transfer(client, ws_alice, acc_alice, "Денис З.", "-100.00")
+
+    ws_bob, _ = await _register(client, BOB)
+    alien = _add_counterparty(db_session, ws_bob, "Денис Зелинский", None)
+    await db_session.flush()
+    _add_signature(db_session, ws_alice, "денис з.", alien.id)
+    await db_session.flush()
+
+    client.cookies.clear()
+    await client.post("/api/auth/login", json=ALICE)
+    assert (await _operation(client, ws_alice, "-100.00"))["counterparty_name"] is None
+
+
+async def test_transaction_does_not_take_a_rule_of_another_workspace(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Зеркальный случай: контрагент свой, а правило с его подписью — чужое.
+    Фильтр на контрагенте здесь молчит: контрагент как раз мой, — и остановить
+    такую связь обязан фильтр на правиле. Иначе чужая строка в чужом workspace
+    решала бы, какое из моих имён достанется моей операции."""
+    ws_alice, acc_alice = await _register(client, ALICE)
+    await _import_transfer(client, ws_alice, acc_alice, "Денис З.", "-100.00")
+    mine = _add_counterparty(db_session, ws_alice, "Денис Зелинский", None)
+    await db_session.flush()
+
+    ws_bob, _ = await _register(client, BOB)
+    _add_signature(db_session, ws_bob, "денис з.", mine.id)
+    await db_session.flush()
+
+    client.cookies.clear()
+    await client.post("/api/auth/login", json=ALICE)
+    assert (await _operation(client, ws_alice, "-100.00"))["counterparty_name"] is None
+
+
+async def test_operations_of_another_workspace_are_not_named(client: AsyncClient) -> None:
+    """Своя лента не тянет чужие операции даже тем же именем: у обоих workspace
+    контрагент есть, и перепутать строки нечему."""
+    ws_alice, acc_alice = await _register(client, ALICE)
+    await _import_transfer(client, ws_alice, acc_alice, "Денис З.", "-100.00")
+    await _create_counterparty(client, ws_alice, "Денис Зелинский", ["денис з."])
+
+    ws_bob, acc_bob = await _register(client, BOB)
+    await _import_transfer(client, ws_bob, acc_bob, "Денис З.", "-200.00")
+    await _create_counterparty(client, ws_bob, "Денис Другой", ["денис з."])
+
+    items = (await client.get("/api/transactions", params={"workspace_id": ws_bob})).json()["items"]
+    assert [(t["merchant"], t["counterparty_name"]) for t in items] == [
+        ("Денис З.", "Денис Другой")
+    ]

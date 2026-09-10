@@ -11,6 +11,7 @@ import './index.css'
 import { DashboardPage } from './pages/DashboardPage'
 import { AccountsPage } from './pages/AccountsPage'
 import { CategoriesPage } from './pages/CategoriesPage'
+import { CounterpartiesPage } from './pages/CounterpartiesPage'
 import { TransactionsPage } from './pages/TransactionsPage'
 import { RecurringPage } from './pages/RecurringPage'
 import { ImportPage } from './pages/ImportPage'
@@ -37,6 +38,7 @@ const router = createBrowserRouter([
           { path: '/', element: <DashboardPage /> },
           { path: '/accounts', element: <AccountsPage /> },
           { path: '/categories', element: <CategoriesPage /> },
+          { path: '/counterparties', element: <CounterpartiesPage /> },
           { path: '/transactions', element: <TransactionsPage /> },
           { path: '/recurring', element: <RecurringPage /> },
           { path: '/import', element: <ImportPage /> },

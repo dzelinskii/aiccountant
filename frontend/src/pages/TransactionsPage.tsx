@@ -141,6 +141,7 @@ export function TransactionsPage() {
           <Table.Tr>
             <Table.Th>Дата</Table.Th>
             <Table.Th>Счёт</Table.Th>
+            <Table.Th>Контрагент</Table.Th>
             <Table.Th>Категория</Table.Th>
             <Table.Th ta="right">Сумма</Table.Th>
             <Table.Th />
@@ -151,6 +152,16 @@ export function TransactionsPage() {
             <Table.Tr key={t.id}>
               <Table.Td>{t.occurred_at}</Table.Td>
               <Table.Td>{accountName(t.account_id)}</Table.Td>
+              <Table.Td>
+                {/* имя человека вместо банковской строки — ради этого
+                    контрагента и заводят. Саму строку не прячем: по ней
+                    и понятно, откуда взялось имя. Второй раз её не повторяем —
+                    без контрагента она и так стоит главной */}
+                {t.counterparty_name ?? t.merchant ?? '—'}
+                {t.counterparty_name !== null && t.merchant !== null && (
+                  <Text size="xs" c="dimmed">{t.merchant}</Text>
+                )}
+              </Table.Td>
               <Table.Td>
                 <CategoryCell
                   txn={t}

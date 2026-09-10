@@ -286,8 +286,9 @@ async def apply_counterparty_category(
     return SimilarAppliedOut(applied=applied)
 
 
-def _transaction_out(t: Transaction) -> TransactionOut:
-    # counts_in_stats в модели нет — это решение правила, подставляем отдельно
+def _transaction_out(t: Transaction, counterparty_name: str | None) -> TransactionOut:
+    # counts_in_stats в модели нет — это решение правила, подставляем отдельно.
+    # Имени контрагента там нет по той же причине: оно достаётся через подпись
     return TransactionOut(
         id=t.id,
         account_id=t.account_id,
@@ -296,6 +297,7 @@ def _transaction_out(t: Transaction) -> TransactionOut:
         currency=t.currency,
         occurred_at=t.occurred_at,
         merchant=t.merchant,
+        counterparty_name=counterparty_name,
         note=t.note,
         transfer_group_id=t.transfer_group_id,
         operation_kind=t.operation_kind,
@@ -305,6 +307,23 @@ def _transaction_out(t: Transaction) -> TransactionOut:
         suggested_category_id=t.suggested_category_id,
         category_confidence=t.category_confidence,
     )
+
+
+async def _transactions_out(
+    db: AsyncSession, workspace_id: uuid.UUID, rows: list[Transaction]
+) -> list[TransactionOut]:
+    """Ответ по пачке операций: имена контрагентов достаются одним запросом
+    на всю пачку, а не по запросу на строку."""
+    names = await service.counterparty_names(db, workspace_id, [t.id for t in rows])
+    return [_transaction_out(t, names.get(t.id)) for t in rows]
+
+
+async def _one_transaction_out(
+    db: AsyncSession, workspace_id: uuid.UUID, t: Transaction
+) -> TransactionOut:
+    """Ответ по одной операции. Имя ищется тем же кодом, что и в ленте: иначе
+    поле молча пустовало бы всюду, кроме списка."""
+    return (await _transactions_out(db, workspace_id, [t]))[0]
 
 
 @router.get("/transactions")
@@ -329,7 +348,7 @@ async def list_transactions(
         limit=limit,
         offset=offset,
     )
-    return TransactionList(items=[_transaction_out(t) for t in items], total=total)
+    return TransactionList(items=await _transactions_out(db, workspace_id, items), total=total)
 
 
 @router.post("/transactions", status_code=201)
@@ -349,7 +368,7 @@ async def create_transaction(
         ) from None
     if transaction.category_id is None:
         service.enqueue_categorization(workspace_id)
-    return _transaction_out(transaction)
+    return await _one_transaction_out(db, workspace_id, transaction)
 
 
 @router.post("/transactions/transfer", status_code=201)
@@ -363,7 +382,7 @@ async def create_transfer(
         rows = await service.create_transfer(db, workspace_id, user.id, payload)
     except service.InvalidTransferError:
         raise HTTPException(status_code=422, detail="Некорректный перевод") from None
-    return TransactionList(items=[_transaction_out(t) for t in rows], total=len(rows))
+    return TransactionList(items=await _transactions_out(db, workspace_id, rows), total=len(rows))
 
 
 @router.patch("/transactions/{transaction_id}")
@@ -384,7 +403,7 @@ async def update_transaction(
         raise HTTPException(
             status_code=422, detail="Знак суммы не соответствует типу категории"
         ) from None
-    return _transaction_out(transaction)
+    return await _one_transaction_out(db, workspace_id, transaction)
 
 
 @router.post("/transactions/categorize", status_code=202)
@@ -435,7 +454,7 @@ async def dismiss_suggestion(
         transaction = await service.dismiss_suggestion(db, workspace_id, transaction_id)
     except service.NotFoundError:
         raise HTTPException(status_code=404, detail="Операция не найдена") from None
-    return _transaction_out(transaction)
+    return await _one_transaction_out(db, workspace_id, transaction)
 
 
 @router.delete("/transactions/{transaction_id}", status_code=204)
