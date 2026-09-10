@@ -8,6 +8,7 @@ from app.core.money import MoneyStr
 
 ACCOUNT_TYPES = "^(card|cash|savings)$"
 CATEGORY_KINDS = "^(income|expense)$"
+COUNTERPARTY_KINDS = "^(person|organization)$"
 
 
 class AccountCreate(BaseModel):
@@ -66,8 +67,51 @@ class DescriptionRuleOut(BaseModel):
     # и человек должен видеть тот ключ, который реально сработает
     id: uuid.UUID
     normalized_text: str
-    category_id: uuid.UUID
+    # ровно одно из двух непусто: правило ведёт либо прямо в категорию, либо в
+    # контрагента, у которого категория своя (ограничение в БД это и требует).
+    # Объяви category_id обязательным — первое же правило через контрагента
+    # уронило бы выдачу правил пятисоткой на проверке схемы
+    category_id: uuid.UUID | None
+    counterparty_id: uuid.UUID | None
     source: str
+
+
+class CounterpartyCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    kind: str = Field(pattern=COUNTERPARTY_KINDS)
+    # необязательная: контрагент без категории — просто имя вместо банковской
+    # строки, и такой контрагент полезен сам по себе
+    category_id: uuid.UUID | None = None
+    # подписи — то, как контрагента пишет каждый банк; в базе они лягут
+    # правилами, ведущими в него
+    signatures: list[str] = Field(default_factory=list)
+
+
+class CounterpartyUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    # null здесь — не «поле не прислали», а «снять категорию»; различает их
+    # update_counterparty по model_fields_set
+    category_id: uuid.UUID | None = None
+
+
+class CounterpartyOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    kind: str
+    category_id: uuid.UUID | None
+    # нормализованные ключи правил, ведущих в этого контрагента: человек должен
+    # видеть то, что действительно сработает
+    signatures: list[str]
+
+
+class UnknownSignatureOut(BaseModel):
+    """Подпись переводов, про которую ещё не решили. Сумм здесь нет намеренно:
+    для узнавания человека довольно счётчиков."""
+
+    text: str
+    operations: int
+    sent: int
+    received: int
 
 
 class TransactionCreate(BaseModel):
@@ -129,13 +173,14 @@ class TransactionList(BaseModel):
 
 
 class SimilarUncategorizedOut(BaseModel):
-    """Сколько ещё операций без категории описаны так же, как эта."""
+    """Сколько операций без категории подпадает под разбор: у операции — ещё
+    столько же описанных так же, у контрагента — подписанных им."""
 
     count: int
 
 
 class SimilarAppliedOut(BaseModel):
-    """Сколько операций получили категорию при разборе похожих."""
+    """Сколько операций получили категорию при разборе."""
 
     applied: int
 

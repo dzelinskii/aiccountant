@@ -61,14 +61,17 @@
 - `role` · `VARCHAR(20)` · обязательна
 - `created_at` · `TIMESTAMP WITH TIME ZONE` · обязательна · по умолчанию `now()`
 
-## `description_rules`
+## `counterparties`
 
 - `id` · `UUID` · обязательна · первичный ключ
 - `workspace_id` · `UUID` · обязательна · → `workspaces.id`
-- `normalized_text` · `VARCHAR(300)` · обязательна
-- `category_id` · `UUID` · обязательна · → `categories.id`
-- `source` · `VARCHAR(20)` · обязательна
+- `name` · `VARCHAR(200)` · обязательна
+- `kind` · `VARCHAR(20)` · обязательна
+- `category_id` · `UUID` · может быть пустой · → `categories.id`
 - `created_at` · `TIMESTAMP WITH TIME ZONE` · обязательна · по умолчанию `now()`
+
+Индексы:
+- `ix_counterparties_workspace` (обычный): `workspace_id`
 
 ## `imports`
 
@@ -136,6 +139,16 @@
 - `ix_transactions_account_occurred` (обычный): `account_id`, `occurred_at`
 - `ix_transactions_workspace_occurred` (обычный): `workspace_id`, `occurred_at`
 - `uq_transactions_account_external` (уникальный): `account_id`, `external_id`
+
+## `description_rules`
+
+- `id` · `UUID` · обязательна · первичный ключ
+- `workspace_id` · `UUID` · обязательна · → `workspaces.id`
+- `normalized_text` · `VARCHAR(300)` · обязательна
+- `category_id` · `UUID` · может быть пустой · → `categories.id`
+- `counterparty_id` · `UUID` · может быть пустой · → `counterparties.id`
+- `source` · `VARCHAR(20)` · обязательна
+- `created_at` · `TIMESTAMP WITH TIME ZONE` · обязательна · по умолчанию `now()`
 
 ## `recurring_occurrences`
 

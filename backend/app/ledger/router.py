@@ -10,7 +10,7 @@ from app.core.db import get_db
 from app.identity.deps import require_workspace_member
 from app.identity.models import User
 from app.ledger import repository, service
-from app.ledger.models import Account, Transaction
+from app.ledger.models import Account, Counterparty, Transaction
 from app.ledger.schemas import (
     AccountCreate,
     AccountOut,
@@ -18,6 +18,9 @@ from app.ledger.schemas import (
     CategoryCreate,
     CategoryOut,
     CategoryUpdate,
+    CounterpartyCreate,
+    CounterpartyOut,
+    CounterpartyUpdate,
     DashboardOut,
     DescriptionRuleCreate,
     DescriptionRuleOut,
@@ -28,6 +31,7 @@ from app.ledger.schemas import (
     TransactionOut,
     TransactionUpdate,
     TransferCreate,
+    UnknownSignatureOut,
 )
 
 router = APIRouter(prefix="/api")
@@ -167,6 +171,119 @@ async def delete_description_rule(
         await service.delete_description_rule(db, workspace_id, rule_id)
     except service.NotFoundError:
         raise HTTPException(status_code=404, detail="Правило не найдено") from None
+
+
+# Ручка неопознанных подписей стоит выше ручек с {counterparty_id} намеренно:
+# маршруты разбираются в порядке объявления, и слово unknown-signatures иначе
+# рискует быть принятым за идентификатор.
+@router.get("/counterparties/unknown-signatures")
+async def list_unknown_signatures(
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> list[UnknownSignatureOut]:
+    rows = await service.unknown_transfer_signatures(db, workspace_id)
+    return [
+        UnknownSignatureOut(text=text, operations=total, sent=sent, received=received)
+        for text, total, sent, received in rows
+    ]
+
+
+def _counterparty_out(counterparty: Counterparty, signatures: list[str]) -> CounterpartyOut:
+    # подписей в модели контрагента нет — они живут правилами, подставляем отдельно
+    return CounterpartyOut(
+        id=counterparty.id,
+        name=counterparty.name,
+        kind=counterparty.kind,
+        category_id=counterparty.category_id,
+        signatures=signatures,
+    )
+
+
+@router.get("/counterparties")
+async def list_counterparties(
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> list[CounterpartyOut]:
+    rows = await service.list_counterparties(db, workspace_id)
+    return [_counterparty_out(cp, signatures) for cp, signatures in rows]
+
+
+@router.post("/counterparties", status_code=201)
+async def create_counterparty(
+    payload: CounterpartyCreate,
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> CounterpartyOut:
+    try:
+        counterparty, signatures = await service.create_counterparty(db, workspace_id, payload)
+    except service.InvalidRuleTextError:
+        raise HTTPException(status_code=422, detail="Из подписи не выходит ключ правила") from None
+    except service.DuplicateRuleError:
+        raise HTTPException(status_code=409, detail="Подпись уже занята правилом") from None
+    except service.NotFoundError:
+        raise HTTPException(status_code=404, detail="Категория не найдена") from None
+    return _counterparty_out(counterparty, signatures)
+
+
+@router.patch("/counterparties/{counterparty_id}")
+async def update_counterparty(
+    counterparty_id: uuid.UUID,
+    payload: CounterpartyUpdate,
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> CounterpartyOut:
+    try:
+        counterparty, signatures = await service.update_counterparty(
+            db, workspace_id, counterparty_id, payload
+        )
+    except service.NotFoundError:
+        raise HTTPException(status_code=404, detail="Контрагент или категория не найдены") from None
+    return _counterparty_out(counterparty, signatures)
+
+
+@router.delete("/counterparties/{counterparty_id}", status_code=204)
+async def delete_counterparty(
+    counterparty_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> None:
+    try:
+        await service.delete_counterparty(db, workspace_id, counterparty_id)
+    except service.NotFoundError:
+        raise HTTPException(status_code=404, detail="Контрагент не найден") from None
+
+
+@router.get("/counterparties/{counterparty_id}/uncategorized")
+async def counterparty_uncategorized(
+    counterparty_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> SimilarUncategorizedOut:
+    try:
+        count = await service.count_uncategorized_of_counterparty(db, workspace_id, counterparty_id)
+    except service.NotFoundError:
+        raise HTTPException(status_code=404, detail="Контрагент не найден") from None
+    return SimilarUncategorizedOut(count=count)
+
+
+@router.post("/counterparties/{counterparty_id}/apply-category")
+async def apply_counterparty_category(
+    counterparty_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> SimilarAppliedOut:
+    try:
+        applied = await service.apply_counterparty_category(db, workspace_id, counterparty_id)
+    except service.NotFoundError:
+        raise HTTPException(status_code=404, detail="Контрагент не найден") from None
+    return SimilarAppliedOut(applied=applied)
 
 
 def _transaction_out(t: Transaction) -> TransactionOut:

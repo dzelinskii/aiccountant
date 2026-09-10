@@ -2,13 +2,13 @@ import uuid
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import func, select, update
+from sqlalchemy import SQLColumnExpression, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.core.operation_kinds import IN_STATS_KINDS, counts_in_stats
-from app.ledger.models import Account, Category, DescriptionRule, Transaction
+from app.ledger.models import Account, Category, Counterparty, DescriptionRule, Transaction
 
 
 def counts_in_stats_sql() -> ColumnElement[bool]:
@@ -184,19 +184,184 @@ async def description_rule_targets(
     """Ключ правила, его категория и направление категории — для применения
     правил к пачке операций без запроса на каждую строку.
 
+    Правило ведёт либо прямо в категорию, либо в контрагента, у которого
+    категория своя; берём ту, что нашлась. Контрагент без категории — законный
+    случай (он может быть просто именем), и такое правило в выборку не попадает:
+    подставлять из него нечего.
+
     Категорию присоединяем с тем же фильтром по workspace: правило и категория
     чужого workspace связаны только друг с другом, и одна снятая проверка
-    не должна открывать вторую.
+    не должна открывать вторую. Контрагента — по той же причине.
     """
+    own = aliased(Category)
+    via = aliased(Category)
+    counterparty = aliased(Counterparty)
+    category_id = func.coalesce(own.id, via.id)
+    kind = func.coalesce(own.kind, via.kind)
     rows = await db.execute(
-        select(DescriptionRule.normalized_text, DescriptionRule.category_id, Category.kind)
-        .join(Category, Category.id == DescriptionRule.category_id)
+        select(DescriptionRule.normalized_text, category_id, kind)
+        .outerjoin(
+            own,
+            (own.id == DescriptionRule.category_id) & (own.workspace_id == workspace_id),
+        )
+        .outerjoin(
+            counterparty,
+            (counterparty.id == DescriptionRule.counterparty_id)
+            & (counterparty.workspace_id == workspace_id),
+        )
+        .outerjoin(via, (via.id == counterparty.category_id) & (via.workspace_id == workspace_id))
+        .where(DescriptionRule.workspace_id == workspace_id, category_id.is_not(None))
+    )
+    return [(text, cid, k) for text, cid, k in rows.all()]
+
+
+# Пробел в понимании Python: str.split() режет по str.isspace(), и SQL обязан
+# резать по тому же набору. Готовый класс [[:space:]] не подходит — его состав
+# зависит от локали базы, и неразрывный пробел в него, как правило, не входит,
+# а банки им разделяют слова. Совпадение набора с Python закреплено тестом.
+WHITESPACE_CODEPOINTS: tuple[int, ...] = (
+    0x09,
+    0x0A,
+    0x0B,
+    0x0C,
+    0x0D,
+    0x1C,
+    0x1D,
+    0x1E,
+    0x1F,
+    0x20,
+    0x85,
+    0xA0,
+    0x1680,
+    *range(0x2000, 0x200B),
+    0x2028,
+    0x2029,
+    0x202F,
+    0x205F,
+    0x3000,
+)
+_WHITESPACE_CLASS = "[" + "".join(rf"\u{code:04x}" for code in WHITESPACE_CODEPOINTS) + "]+"
+
+
+def normalized_description_sql(column: SQLColumnExpression[str | None]) -> ColumnElement[str]:
+    """Ключ правила «описание → категория» выражением SQL.
+
+    Повторяет service.normalize_description шаг в шаг: схлопнуть пробелы,
+    обрезать края, привести регистр, привести к NFC. Порядок тот же — NFC после
+    регистра, — потому что разложенная буква приводится к одной форме уже после
+    того, как её основа сменила регистр.
+
+    Второе определение одного правила — цена за группировку в базе, и держится
+    оно на тесте, который сверяет обе реализации на одних и тех же строках.
+    """
+    collapsed = func.regexp_replace(column, _WHITESPACE_CLASS, " ", "g")
+    return func.normalize(func.btrim(func.lower(collapsed), " "), text("NFC"))
+
+
+async def unknown_transfer_signatures(
+    db: AsyncSession, workspace_id: uuid.UUID
+) -> list[tuple[str, int, int, int]]:
+    """Описания переводов, про которые ещё не решили: ключ, сколько операций,
+    сколько отдано, сколько получено. Из этого человек и выбирает, заводя
+    контрагента.
+
+    Ключ — то же нормализованное описание, по которому ищется правило: разойдись
+    нормализации, и человек завёл бы контрагента на подпись, которая правилу не
+    соответствует, а она осталась бы неопознанной навсегда.
+
+    Берём только переводы людям: покупки в контрагенты не заводим, категории для
+    них приходят подсказкой банка.
+
+    Фильтр по workspace стоит дважды, и вторая его роль не в том, чтобы не
+    отдать чужие операции. В присоединении он стережёт обратное направление:
+    без него чужое правило с тем же текстом опознало бы мою подпись, и она молча
+    пропала бы из списка.
+    """
+    signature = normalized_description_sql(Transaction.merchant)
+    operations = func.count()
+    sent = func.count().filter(Transaction.amount < 0)
+    received = func.count().filter(Transaction.amount > 0)
+    rows = await db.execute(
+        select(signature, operations, sent, received)
+        .select_from(Transaction)
+        .outerjoin(
+            DescriptionRule,
+            (DescriptionRule.normalized_text == signature)
+            & (DescriptionRule.workspace_id == workspace_id),
+        )
         .where(
-            DescriptionRule.workspace_id == workspace_id,
-            Category.workspace_id == workspace_id,
+            Transaction.workspace_id == workspace_id,
+            Transaction.operation_kind == "transfer_person",
+            Transaction.merchant.is_not(None),
+            # описание из одних пробелов даёт пустой ключ, а правило с пустым
+            # ключом завести нельзя: предложить такую подпись — предложить тупик
+            signature != "",
+            DescriptionRule.id.is_(None),
+        )
+        .group_by(signature)
+        # частые подписи наверх, дальше по алфавиту: без порядка список
+        # переставлялся бы от запроса к запросу
+        .order_by(operations.desc(), signature)
+    )
+    return [(key, total, out, back) for key, total, out, back in rows.all()]
+
+
+async def list_counterparties(db: AsyncSession, workspace_id: uuid.UUID) -> list[Counterparty]:
+    """Контрагенты workspace по алфавиту. id — тай-брейк: имена ничем
+    не ограничены, и одноимённых завести можно, а порядок обязан быть тем же
+    от запроса к запросу."""
+    rows = await db.execute(
+        select(Counterparty)
+        .where(Counterparty.workspace_id == workspace_id)
+        .order_by(Counterparty.name, Counterparty.id)
+    )
+    return list(rows.scalars().all())
+
+
+async def get_counterparty(
+    db: AsyncSession, workspace_id: uuid.UUID, counterparty_id: uuid.UUID
+) -> Counterparty | None:
+    counterparty: Counterparty | None = await db.scalar(
+        select(Counterparty).where(
+            Counterparty.id == counterparty_id,
+            Counterparty.workspace_id == workspace_id,
         )
     )
-    return [(text, category_id, kind) for text, category_id, kind in rows.all()]
+    return counterparty
+
+
+def add_counterparty(db: AsyncSession, counterparty: Counterparty) -> None:
+    db.add(counterparty)
+
+
+async def delete_counterparty(db: AsyncSession, counterparty: Counterparty) -> None:
+    """Удалить контрагента. Его подписи уносит внешний ключ description_rules
+    с ON DELETE CASCADE: правило без обеих целей ограничение в БД не пропустит,
+    так что оставить их всё равно было бы нечем."""
+    await db.delete(counterparty)
+
+
+async def signatures_by_counterparty(
+    db: AsyncSession, workspace_id: uuid.UUID
+) -> dict[uuid.UUID, list[str]]:
+    """Подписи каждого контрагента workspace: подпись — это ключ правила,
+    ведущего в него.
+
+    Одним запросом на весь workspace, а не по запросу на контрагента: список
+    показывает их все сразу, и запрос на строку превратил бы его в N+1.
+    """
+    rows = await db.execute(
+        select(DescriptionRule.counterparty_id, DescriptionRule.normalized_text)
+        .where(
+            DescriptionRule.workspace_id == workspace_id,
+            DescriptionRule.counterparty_id.is_not(None),
+        )
+        .order_by(DescriptionRule.normalized_text)
+    )
+    grouped: dict[uuid.UUID, list[str]] = {}
+    for counterparty_id, signature in rows.all():
+        grouped.setdefault(counterparty_id, []).append(signature)
+    return grouped
 
 
 async def get_description_rule(
@@ -362,11 +527,11 @@ async def uncategorized_with_description(
     db: AsyncSession,
     workspace_id: uuid.UUID,
     *,
-    exclude_id: uuid.UUID,
-    amount: Decimal,
+    positive: bool,
+    exclude_id: uuid.UUID | None = None,
 ) -> list[Transaction]:
-    """Кандидаты на разбор по описанию: операции с описанием, которым категорию
-    операции-источника проставить можно, кроме неё самой.
+    """Кандидаты на разбор: операции с описанием, которым чужую категорию
+    проставить можно.
 
     Можно — значит категории нет вовсе и решения человека по ней не было.
     Отклонённая подсказка помечается подтверждённой (см. dismiss_suggestion),
@@ -377,29 +542,34 @@ async def uncategorized_with_description(
     на вопрос «какие операции подлежат категоризации» два запроса обязаны
     отвечать одинаково.
 
-    Знак: категория берётся у операции-источника, а её направление уже
-    согласовано со знаком её суммы (это стережёт category_matches_amount на всех
-    путях записи). Значит кандидату та же категория подходит ровно при
-    совпадении знака. Иначе возврат по той же точке получил бы расходную
-    категорию, и дальше любая правка этой строки отвечала бы отказом.
+    Знак кандидата обязан подойти категории, которую проставим: расходная
+    категория на приходе нарушила бы инвариант, который на всех путях записи
+    стережёт category_matches_amount, и дальше любая правка такой строки
+    отвечала бы отказом. Какой знак подходит, решает вызывающий: у разбора
+    похожих — знак операции-источника, её категория со знаком уже согласована;
+    у разбора по контрагенту — направление его категории.
+
+    exclude_id — операция-источник, если она есть: вопрос звучит «сколько ещё
+    таких», и саму себя считать нельзя. У разбора по контрагенту источника нет.
 
     Сравнение описаний остаётся снаружи. Ключ у правил — нормализованное
     описание (регистр, схлопнутые пробелы, NFC), и в SQL эту нормализацию
     не выразить, не заведя её второго определения; два определения одного
     правила рано или поздно разойдутся.
     """
-    same_sign = Transaction.amount < 0 if amount < 0 else Transaction.amount > 0
+    conditions = [
+        Transaction.workspace_id == workspace_id,
+        Transaction.category_id.is_(None),
+        Transaction.category_confirmed.is_(False),
+        counts_in_stats_sql(),
+        Transaction.amount > 0 if positive else Transaction.amount < 0,
+        Transaction.merchant.is_not(None),
+    ]
+    if exclude_id is not None:
+        conditions.append(Transaction.id != exclude_id)
     rows = await db.execute(
         select(Transaction)
-        .where(
-            Transaction.workspace_id == workspace_id,
-            Transaction.category_id.is_(None),
-            Transaction.category_confirmed.is_(False),
-            counts_in_stats_sql(),
-            same_sign,
-            Transaction.merchant.is_not(None),
-            Transaction.id != exclude_id,
-        )
+        .where(*conditions)
         .order_by(Transaction.occurred_at.desc(), Transaction.id.desc())
         .limit(SIMILAR_CANDIDATES_LIMIT)
     )

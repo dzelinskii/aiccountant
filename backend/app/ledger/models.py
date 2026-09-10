@@ -3,6 +3,7 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from sqlalchemy import (
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -122,6 +123,40 @@ class Transaction(Base):
     )
 
 
+class Counterparty(Base):
+    """Тот, кому переводят или кто переводит: человек или организация.
+
+    Заводится, чтобы разные написания одного и того же — «Денис З.» в одном
+    банке, «ЗЕЛИНСКИЙ ДЕНИС» в другом — были одним объектом, и категория
+    задавалась один раз, а не по разу на банк. Сами написания живут в
+    description_rules: отдельная таблица подписей означала бы второй поиск по
+    тому же ключу.
+    """
+
+    __tablename__ = "counterparties"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspaces.id"))
+    name: Mapped[str] = mapped_column(String(200))
+    # person | organization. Сегодня на поведение не влияет: заведён потому, что
+    # у человека могут появиться свои счета, а у организации нет
+    kind: Mapped[str] = mapped_column(String(20))
+    # необязательная: переводы одному человеку бывают разными по смыслу, и
+    # требовать одну категорию значит требовать соврать. Контрагент без
+    # категории — просто имя вместо банковской строки
+    category_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("categories.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        # Повторяет индекс из миграции 0013 намеренно, по той же причине, что и
+        # у Category выше: alembic сравнивает модели с базой, и объяви мы индекс
+        # только в миграции — автогенерация следующей предложила бы его удалить.
+        Index("ix_counterparties_workspace", "workspace_id"),
+    )
+
+
 class DescriptionRule(Base):
     """Правило «описание операции → категория».
 
@@ -137,8 +172,15 @@ class DescriptionRule(Base):
     workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspaces.id"))
     # ключ поиска: описание, пропущенное через normalize_description
     normalized_text: Mapped[str] = mapped_column(String(300))
-    # правило без категории бессмысленно: удалили категорию — удалилось правило
-    category_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("categories.id", ondelete="CASCADE"))
+    # ровно одно из двух: правило ведёт либо прямо в категорию («Пятёрочка»),
+    # либо в контрагента, у которого категория своя («Денис З.»). Проверяет
+    # ограничение в БД — иначе строка без обоих полей молча ничего не делала бы
+    category_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("categories.id", ondelete="CASCADE"), nullable=True
+    )
+    counterparty_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("counterparties.id", ondelete="CASCADE"), nullable=True
+    )
     # manual — задал человек, learned — выучено из подтверждений категорий
     source: Mapped[str] = mapped_column(String(20), default="manual")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -147,4 +189,10 @@ class DescriptionRule(Base):
         # одно описание — одна категория: иначе поиск по ключу отвечал бы
         # по-разному в зависимости от порядка строк
         UniqueConstraint("workspace_id", "normalized_text", name="uq_description_rules_text"),
+        # соглашение об именах в metadata само добавляет префикс ck_<таблица>_,
+        # поэтому здесь только хвост имени
+        CheckConstraint(
+            "(category_id IS NULL) <> (counterparty_id IS NULL)",
+            name="target",
+        ),
     )
