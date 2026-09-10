@@ -7,9 +7,10 @@ import { CategoryCell } from './CategoryCell'
 
 const base: Transaction = {
   id: 't1', account_id: 'a1', category_id: null, amount: '-100.00', currency: 'RUB',
-  occurred_at: '2026-07-05', merchant: 'Пятёрочка', note: null, transfer_group_id: null,
-  operation_kind: 'purchase', spending_override: null, counts_in_stats: true,
-  category_confirmed: false, suggested_category_id: null, category_confidence: null,
+  occurred_at: '2026-07-05', merchant: 'Пятёрочка', counterparty_name: null, note: null,
+  transfer_group_id: null, operation_kind: 'purchase', spending_override: null,
+  counts_in_stats: true, category_confirmed: false, suggested_category_id: null,
+  category_confidence: null,
 }
 
 function renderCell(t: Transaction) {

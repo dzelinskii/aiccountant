@@ -950,6 +950,17 @@ async def list_transactions(
     )
 
 
+async def counterparty_names(
+    db: AsyncSession, workspace_id: uuid.UUID, transaction_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, str]:
+    """Имена контрагентов у перечисленных операций — тому, кто собирает ответ.
+
+    Имя ищется по подписи операции, а не хранится в ней (см. репозиторий), и
+    банковскую строку не подменяет: в ответе едут обе.
+    """
+    return await repository.counterparty_names(db, workspace_id, transaction_ids)
+
+
 async def build_dashboard(db: AsyncSession, workspace_id: uuid.UUID) -> DashboardOut:
     today = date.today()
     month_start = today.replace(day=1)

@@ -48,6 +48,9 @@ export interface Transaction {
   currency: string
   occurred_at: string
   merchant: string | null
+  // имя контрагента, за которым закреплена банковская строка; null — никого
+  // не закрепили. Приходит рядом с merchant, а не вместо неё
+  counterparty_name: string | null
   note: string | null
   transfer_group_id: string | null
   operation_kind: string
