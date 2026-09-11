@@ -1,10 +1,29 @@
 import { rm } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium, type BrowserContext } from 'playwright'
 import type { BrowserSession, LoginPrompt } from '../core/contract'
 
-/** Профиль на банк: признаки устройства у банков свои и смешивать их незачем. */
+/**
+ * Каталог профиля браузера на банк. Признаки устройства у банков свои, поэтому
+ * профиль на каждый банк.
+ *
+ * По умолчанию — рядом с коллектором (`collector/profile/<банк>`, путь считается
+ * от файла модуля, а не от cwd: ровно он закрыт .gitignore). Профиль живёт между
+ * запусками — там оседает привязка устройства и быстрый вход, поэтому со второго
+ * запуска банк не просит полный вход.
+ *
+ * `COLLECTOR_PROFILE_DIR` переносит базу профилей в общий каталог. Тогда разные
+ * копии коллектора (в первую очередь worktree при разработке) делят один
+ * профиль: у банка одна привязка устройства вместо новой на каждый чекаут — это
+ * и удобнее, и не выглядит перед антифродом как вход с очередного нового
+ * устройства. Плата — общий профиль нельзя открыть дважды разом: два
+ * одновременных живых прогона его затрут, поэтому живой прогон согласуют
+ * (см. правило в CLAUDE.md, раздел «Изоляция работы»).
+ */
 export function profileDir(bank: string): string {
+  const base = process.env['COLLECTOR_PROFILE_DIR']
+  if (base) return join(resolve(base), bank)
   return fileURLToPath(new URL(`../../profile/${bank}`, import.meta.url))
 }
 
