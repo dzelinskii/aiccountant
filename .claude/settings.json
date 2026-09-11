@@ -1,0 +1,38 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "s=$(tr -d '\\n' | sed -n 's/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p'); [ -z \"$s\" ] && exit 0; [ -f \"/tmp/claude-socraticode-$s\" ] && exit 0; printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Правило проекта (CLAUDE.md, «Поиск по проекту»): разведка начинается с socraticode. Вызови mcp__socraticode__codebase_search — grep уточняет найденное, а не открывает поиск.\"}}'",
+            "statusMessage": "Проверяю, что разведка началась с socraticode"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "mcp__socraticode__codebase_search",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "s=$(tr -d '\\n' | sed -n 's/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p'); [ -n \"$s\" ] && touch \"/tmp/claude-socraticode-$s\"; exit 0"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "mcp__socraticode__codebase_search",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "s=$(tr -d '\\n' | sed -n 's/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p'); [ -n \"$s\" ] && touch \"/tmp/claude-socraticode-$s\"; exit 0"
+          }
+        ]
+      }
+    ]
+  }
+}
