@@ -1,6 +1,6 @@
 import { mkdir, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { expect, test, vi } from 'vitest'
 import { certificateArgs, forgetProfile, profileDir } from './browser'
@@ -53,6 +53,33 @@ test('путь профиля считается от файла модуля, �
     expect(fromOtherCwd).toBe(profileDir('tbank'))
   } finally {
     process.chdir(before)
+  }
+})
+
+test('COLLECTOR_PROFILE_DIR переносит базу профилей в общий каталог', () => {
+  const prev = process.env['COLLECTOR_PROFILE_DIR']
+  process.env['COLLECTOR_PROFILE_DIR'] = tmpdir()
+  try {
+    // профиль уходит в заданный каталог (база + банк), а не под collector/profile
+    expect(profileDir('sber')).toBe(join(resolve(tmpdir()), 'sber'))
+    expect(profileDir('sber')).not.toBe(fileURLToPath(new URL('../../profile/sber', import.meta.url)))
+    // разные банки по-прежнему в разных каталогах
+    expect(profileDir('sber')).not.toBe(profileDir('alfa'))
+  } finally {
+    if (prev === undefined) delete process.env['COLLECTOR_PROFILE_DIR']
+    else process.env['COLLECTOR_PROFILE_DIR'] = prev
+  }
+})
+
+test('относительный COLLECTOR_PROFILE_DIR разворачивается в абсолютный', () => {
+  // куки банка не должны зависеть от текущего каталога запуска
+  const prev = process.env['COLLECTOR_PROFILE_DIR']
+  process.env['COLLECTOR_PROFILE_DIR'] = 'my-profiles'
+  try {
+    expect(profileDir('alfa')).toBe(join(resolve('my-profiles'), 'alfa'))
+  } finally {
+    if (prev === undefined) delete process.env['COLLECTOR_PROFILE_DIR']
+    else process.env['COLLECTOR_PROFILE_DIR'] = prev
   }
 })
 
