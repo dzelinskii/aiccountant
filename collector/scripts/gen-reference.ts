@@ -22,6 +22,7 @@ import {
   IGNORED_BANK_CATEGORIES,
 } from '../src/plugins/tbank/map'
 import { BANK_FORM_TO_KIND, UNMAPPED_BANK_FORMS } from '../src/plugins/sber/map'
+import { ALFA_CATEGORY_TO_KIND, ALFA_OPERATION_TYPE_TO_KIND, UNMAPPED_ALFA_KINDS } from '../src/plugins/alfa/map'
 
 const WARNING =
   '<!-- Этот файл создан генератором, не правьте руками: ' +
@@ -101,6 +102,36 @@ function renderSber(): string {
   return lines.join('\n')
 }
 
+function renderAlfa(): string {
+  const lines = [
+    WARNING,
+    '',
+    '# Коллектор: перевод словарей Альфа-Банка',
+    '',
+    'Слова банка не покидают его плагина: здесь они переводятся в общий словарь',
+    'приложения. У Альфы вид операции собирается из направления (income/purchase)',
+    'и уточняется по operationType (у переводов) и category.id.',
+    '',
+    ...table('Вид операции (operationType) → вид', ALFA_OPERATION_TYPE_TO_KIND),
+    ...table('Категория банка (category.id) → вид', ALFA_CATEGORY_TO_KIND),
+  ]
+
+  // молчание о неуточнённых видах читалось бы как полнота таблицы
+  lines.push('## Виды, намеренно не уточнённые в v1', '')
+  for (const kind of Object.keys(UNMAPPED_ALFA_KINDS).sort()) {
+    lines.push(`- \`${kind}\` — ${UNMAPPED_ALFA_KINDS[kind]}`)
+  }
+  lines.push(
+    '',
+    'Операция с незнакомыми operationType и category.id получает вид по',
+    'направлению: приход — `income`, расход — `purchase`. Она остаётся видимой,',
+    'попадает в статистику, счётчик в выводе сбора о ней сообщает.',
+    '',
+  )
+
+  return lines.join('\n')
+}
+
 // MCC вынесен из документа Т-Банка: коды торговых точек приходят от обоих
 // банков и живут в общем модуле, поэтому место им в общем документе, а не в
 // файле одного из плагинов
@@ -138,6 +169,7 @@ mkdirSync(DIR, { recursive: true })
 for (const [name, body] of [
   ['collector-tbank.md', render()],
   ['collector-sber.md', renderSber()],
+  ['collector-alfa.md', renderAlfa()],
   ['collector-mcc.md', renderMcc()],
 ] as const) {
   writeFileSync(join(DIR, name), body, { encoding: 'utf-8' })

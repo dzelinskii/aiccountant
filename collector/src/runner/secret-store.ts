@@ -26,7 +26,18 @@ export function parseCredentials(raw: string): Credentials | null {
     return null
   }
   if (typeof parsed !== 'object' || parsed === null) return null
-  const { kind, name, value } = parsed as Record<string, unknown>
+  const record = parsed as Record<string, unknown>
+  if (record['kind'] === 'headers') {
+    const headers = record['headers']
+    if (typeof headers !== 'object' || headers === null) return null
+    const entries = Object.entries(headers as Record<string, unknown>)
+    // пустой словарь или нестроковое/пустое значение — негодная запись, значит
+    // «секрета нет»: клиент с такими заголовками не предъявил бы ничего
+    if (entries.length === 0) return null
+    for (const [, v] of entries) if (typeof v !== 'string' || v === '') return null
+    return { kind: 'headers', headers: headers as Record<string, string> }
+  }
+  const { kind, name, value } = record
   if (kind !== 'query' && kind !== 'header') return null
   if (typeof name !== 'string' || name === '' || typeof value !== 'string' || value === '') return null
   return { kind, name, value }

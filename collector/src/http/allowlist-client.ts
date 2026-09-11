@@ -21,11 +21,13 @@ export type FetchImpl = typeof fetch
 /**
  * Как предъявляется секрет банку. Для раннера это непрозрачное значение: он
  * его хранит и передаёт, но не толкует — у Т-Банка это токен в query, у
- * Сбербанка заголовок с куками, и оболочка про разницу знать не должна.
+ * Сбербанка заголовок с куками, у Альфы — несколько заголовков сразу (кука
+ * плюс производный от неё X-XSRF-TOKEN), и оболочка про разницу знать не должна.
  */
 export type Credentials =
   | { readonly kind: 'query'; readonly name: string; readonly value: string }
   | { readonly kind: 'header'; readonly name: string; readonly value: string }
+  | { readonly kind: 'headers'; readonly headers: Readonly<Record<string, string>> }
 
 export interface AllowedEndpoint {
   readonly path: string
@@ -97,6 +99,8 @@ export class AllowlistClient {
     const headers: Record<string, string> = { Accept: 'application/json' }
     if (this.credentials.kind === 'header') {
       headers[this.credentials.name] = this.credentials.value
+    } else if (this.credentials.kind === 'headers') {
+      for (const [name, value] of Object.entries(this.credentials.headers)) headers[name] = value
     }
     return headers
   }

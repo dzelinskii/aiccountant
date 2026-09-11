@@ -1,4 +1,5 @@
 import type { BankPlugin } from '../core/contract'
+import { createAlfaPlugin } from './alfa'
 import { createSberPlugin } from './sber'
 import { tbankPlugin } from './tbank'
 
@@ -17,10 +18,13 @@ export interface RegistryDeps {
 // сертификата, и лишний слой объекта с именем банка ключом снова открыл бы
 // дорогу prototype pollution (см. историю этого файла и registry.test.ts) —
 // здесь же имя банка нигде не используется как ключ доступа к чему-либо
-export const BANK_NAMES: readonly string[] = [tbankPlugin.name, 'sber']
+export const BANK_NAMES: readonly string[] = [tbankPlugin.name, 'sber', 'alfa']
 
 export async function pluginFor(name: string, deps: RegistryDeps): Promise<BankPlugin> {
   if (name === tbankPlugin.name) return tbankPlugin
   if (name === 'sber') return createSberPlugin({ ca: await deps.loadCa() })
+  // Альфе, как и Сберу, нужен корень УЦ Минцифры — добывается лениво, тем же
+  // способом, поэтому она автоматически получает и закрепление ключа в окне входа
+  if (name === 'alfa') return createAlfaPlugin({ ca: await deps.loadCa() })
   throw new Error(`Неизвестный банк "${name}". Известные: ${BANK_NAMES.join(', ')}`)
 }

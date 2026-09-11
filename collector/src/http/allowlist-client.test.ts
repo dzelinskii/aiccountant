@@ -301,6 +301,25 @@ test('секрет-заголовок уходит в заголовках, а �
   expect(calls[0]?.body).toBe('{"page":1}')
 })
 
+test('вариант headers шлёт все заголовки сразу, а не только один', async () => {
+  // Альфе на POST нужны и Cookie, и производный X-XSRF-TOKEN. Если код кладёт
+  // лишь один из них (как хватало Сберу), этот тест падает
+  const { transport, calls } = recordingTransport()
+  const client = new AllowlistClient({
+    baseUrl: 'https://bank.test',
+    allowed: [{ path: '/data', method: 'POST' }],
+    credentials: { kind: 'headers', headers: { Cookie: 'GW_SESSION_AO=s', 'X-XSRF-TOKEN': 'x' } },
+    transport,
+  })
+
+  await client.postJson('/data', { page: 1 })
+
+  expect(calls[0]?.headers['Cookie']).toBe('GW_SESSION_AO=s')
+  expect(calls[0]?.headers['X-XSRF-TOKEN']).toBe('x')
+  expect(calls[0]?.headers['Accept']).toBe('application/json')
+  expect(calls[0]?.url).not.toContain('GW_SESSION_AO')
+})
+
 test('POST по пути, разрешённому только для GET, не отправляется', async () => {
   const { transport, calls } = recordingTransport()
   const client = new AllowlistClient({
