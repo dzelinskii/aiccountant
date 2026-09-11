@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 import type { Transport } from '../../http/transport'
-import { createAlfaPlugin } from './index'
+import { createAlfaPlugin, toAlfaDate } from './index'
 
 const CRED = { kind: 'header' as const, name: 'Cookie', value: 'GW_SESSION_AO=s; XSRF-TOKEN=x' }
 
@@ -98,4 +98,28 @@ test('fetchOperations листает до короткой страницы и �
 test('банк вернул историю не массивом — сбор падает, не молчит', async () => {
   const { plugin } = pluginWith({ operationsByPage: () => '{"operations":"нет"}' })
   await expect(plugin.fetchOperations(CRED, '1', 0, 1)).rejects.toThrow(/историю не массивом/)
+})
+
+test('бесконечно полные страницы — обход падает страховкой, а не крутится вечно', async () => {
+  // банк отдаёт полную страницу без конца: без страховки MAX_PAGES это был бы
+  // бесконечный цикл; проверяем, что вместо тихого зависания наступает явная
+  // ошибка (мутация «убрать throw» → тихий возврат — этот тест её ловит)
+  const fullPage = JSON.stringify({
+    operations: Array.from({ length: 100 }, (_v, i) => ({
+      id: `f-${i}`,
+      dateTime: '2026-09-10T10:00:00.000+0300',
+      title: 'x',
+      amount: { value: 100, currency: 'RUR', minorUnits: 100 },
+      direction: 'EXPENSE',
+    })),
+  })
+  const { plugin } = pluginWith({ operationsByPage: () => fullPage })
+  await expect(plugin.fetchOperations(CRED, '1', 0, 1)).rejects.toThrow(/не сошёлся/)
+})
+
+test('toAlfaDate даёт московский календарный день, а не UTC', () => {
+  // 2026-08-31T22:30:00Z — это уже 01:30 1 сентября по Москве. Наивный срез по
+  // UTC дал бы «2026-08-31» и увёл бы операцию на прошлые сутки
+  expect(toAlfaDate(Date.parse('2026-08-31T22:30:00Z'))).toBe('2026-09-01')
+  expect(toAlfaDate(Date.parse('2026-08-31T23:30:00+03:00'))).toBe('2026-08-31')
 })

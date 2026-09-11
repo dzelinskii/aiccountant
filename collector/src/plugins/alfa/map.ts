@@ -89,7 +89,8 @@ const MOSCOW = new Intl.DateTimeFormat('en-CA', {
 function toMoscowDate(value: string | undefined, context: string): string {
   if (!value) throw new Error(`${context}: у операции нет даты`)
   const millis = Date.parse(value)
-  if (Number.isNaN(millis)) throw new Error(`${context}: не удалось разобрать дату "${value}"`)
+  // значение даты в текст не кладём — держим правило «только идентификаторы»
+  if (Number.isNaN(millis)) throw new Error(`${context}: не удалось разобрать дату операции`)
   // en-CA даёт формат YYYY-MM-DD, ровно как ждёт бэкенд
   return MOSCOW.format(new Date(millis))
 }
@@ -283,8 +284,10 @@ function cardMasksByAccount(rawCards: readonly unknown[]): Map<string, string[]>
 // значение — сигнал, что форма ответа поменялась, и это повод упасть, а не
 // молча посчитать неверно
 function shiftByMinorUnits(digits: string, minorUnits: string, context: string): string {
-  if (!/^\d+$/.test(digits)) throw new Error(`${context}: сумма не целое число "${digits}"`)
-  if (!/^10*$/.test(minorUnits)) throw new Error(`${context}: неожиданный делитель суммы "${minorUnits}"`)
+  // ни сумму (digits), ни делитель в текст ошибки не кладём: это монетарное
+  // значение из ответа банка, а суммы в логи не пишутся (CLAUDE.md, спека §9)
+  if (!/^\d+$/.test(digits)) throw new Error(`${context}: сумма пришла не целым числом`)
+  if (!/^10*$/.test(minorUnits)) throw new Error(`${context}: неожиданный делитель суммы`)
   const places = minorUnits.length - 1
   const trimmed = digits.replace(/^0+(?=\d)/, '')
   if (places === 0) return trimmed
