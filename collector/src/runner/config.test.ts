@@ -100,7 +100,13 @@ test('банк по умолчанию — Т-Банк, чтобы прежни�
 })
 
 test('незнакомый банк отвергается со списком известных', () => {
-  expect(() => loadConfig(env({ COLLECT_BANK: 'alfa' }))).toThrow(/alfa/)
+  // 'vtb' коллектором не поддержан (в BANK_NAMES его нет) — годится примером
+  // неизвестного банка; 'alfa' раньше был таким примером, но теперь поддержан
+  expect(() => loadConfig(env({ COLLECT_BANK: 'vtb' }))).toThrow(/vtb/)
+})
+
+test('alfa принимается как известный банк', () => {
+  expect(loadConfig(env({ COLLECT_BANK: 'alfa' })).bank).toBe('alfa')
 })
 
 test('пер-банковский список счетов важнее общего', () => {

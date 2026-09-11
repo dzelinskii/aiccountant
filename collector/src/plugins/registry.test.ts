@@ -52,6 +52,19 @@ test('выбор Сбербанка вызывает загрузку корня
   expect(plugin.name).toBe('sber')
 })
 
+test('выбор Альфы тоже добывает корень УЦ — значит получает и закрепление ключа в окне входа', async () => {
+  let calls = 0
+  const loadCa = async (): Promise<string> => {
+    calls += 1
+    return 'зашитый-корень-для-теста'
+  }
+
+  const plugin = await pluginFor('alfa', { loadCa })
+
+  expect(calls).toBe(1)
+  expect(plugin.name).toBe('alfa')
+})
+
 test('провал загрузки корня для Сбербанка не проглатывается — результат действительно ожидается', async () => {
   // если бы plugFor не использовал (не await-ил) результат loadCa, отказ
   // загрузки не помешал бы получить плагин
