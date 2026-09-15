@@ -1,5 +1,6 @@
 import { hintFromMcc } from '../../core/category-hints'
 import type { CollectedAccount, CollectedOperation } from '../../core/contract'
+import { subtractDecimal } from '../../core/money'
 
 /**
  * Отображение ответа Сбербанка в нашу модель. Вход — результат parseLossless,
@@ -266,43 +267,6 @@ function cardBalance(item: Record<string, unknown>, id: string, creditByCard: Cr
 
 function moneyAmount(block: Record<string, unknown> | undefined): string | null {
   return block ? (getStr(block, 'amount') ?? null) : null
-}
-
-const DECIMAL = /^-?\d+(\.\d+)?$/
-
-/**
- * Вычитание десятичных строк без float: суммы приводятся к общему масштабу и
- * считаются в BigInt. Правило проекта запрещает float для денег, и не зря —
- * «0.00 − 147601.23» через Number даёт приблизительный результат уже здесь.
- */
-function subtractDecimal(a: string, b: string): string {
-  if (!DECIMAL.test(a) || !DECIMAL.test(b)) {
-    // значения в текст не кладём: это суммы
-    throw new Error('Остаток кредитки: банк прислал сумму не десятичным числом')
-  }
-  const scale = Math.max(fractionLength(a), fractionLength(b))
-  return fromScaled(toScaled(a, scale) - toScaled(b, scale), scale)
-}
-
-function fractionLength(value: string): number {
-  const dot = value.indexOf('.')
-  return dot === -1 ? 0 : value.length - dot - 1
-}
-
-function toScaled(value: string, scale: number): bigint {
-  const negative = value.startsWith('-')
-  const [int = '0', frac = ''] = (negative ? value.slice(1) : value).split('.')
-  const scaled = BigInt(int + frac.padEnd(scale, '0'))
-  return negative ? -scaled : scaled
-}
-
-function fromScaled(value: bigint, scale: number): string {
-  const negative = value < 0n
-  const digits = (negative ? -value : value).toString().padStart(scale + 1, '0')
-  const int = digits.slice(0, digits.length - scale)
-  const body = scale === 0 ? int : `${int}.${digits.slice(digits.length - scale)}`
-  // "-0.00" бэкенд принял бы, но читается он как ошибка разбора, а не как ноль
-  return negative && !/^0(\.0+)?$/.test(body) ? `-${body}` : body
 }
 
 // Валюта — свойство карты, а не поля, выбранного под остаток: у кредитки без
