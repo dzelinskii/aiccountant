@@ -2,7 +2,7 @@ import type { AllowlistClient } from '../../http/allowlist-client'
 import { BankHttpError } from '../../http/allowlist-client'
 import type { Transport } from '../../http/transport'
 import type { BankPlugin, CollectedAccount, CollectedOperation, Credentials, LoginPrompt } from '../../core/contract'
-import { createSberClient, OPERATIONS_PATH, PRODUCTS_PATH } from './client'
+import { CARD_INFO_PATH, createSberClient, OPERATIONS_PATH, PRODUCTS_PATH } from './client'
 import { obtainSberCookies } from './login'
 import { toAccounts, toOperations } from './map'
 
@@ -42,8 +42,10 @@ export function createSberPlugin(options: PluginOptions): BankPlugin {
     },
 
     async fetchAccounts(credentials: Credentials): Promise<CollectedAccount[]> {
-      const raw = await clientFor(credentials).postJson(PRODUCTS_PATH, { withData: true, forceUpdate: false })
-      return toAccounts(cardsFrom(raw))
+      const client = clientFor(credentials)
+      const raw = await client.postJson(PRODUCTS_PATH, { withData: true, forceUpdate: false })
+      const cards = cardsFrom(raw)
+      return toAccounts(cards, await creditInfo(client, cards))
     },
 
     async fetchOperations(credentials: Credentials, accountId: string, since: number, until: number): Promise<CollectedOperation[]> {
@@ -92,6 +94,70 @@ async function requestOperations(client: AllowlistClient, query: OperationsQuery
   // молчаливая подмена не-массива на [] неотличима от «банк прислал 0 операций»
   if (!Array.isArray(operations)) throw new Error('Банк вернул историю не массивом')
   return operations
+}
+
+/**
+ * Долг по кредитке лежит не там, где список карт, поэтому за ним идёт отдельный
+ * запрос — и только для карт типа `credit`: дебетовым он не нужен, и лишнего
+ * запроса за ними не отправляется.
+ *
+ * Спрашиваем по одной карте. Ответ cardInfo кладёт `creditType` внутрь блока
+ * карты, и при запросе пачкой пришлось бы угадывать, к какой карте относится
+ * найденный блок; кредиток у человека единицы, и экономия на запросах не стоит
+ * такой догадки.
+ *
+ * Отказ этой ручки не роняет сбор: список счетов справочный, и терять из-за
+ * него операции несоразмерно. Кредитка тогда приезжает без остатка (null, а не
+ * ноль — см. map.ts), но молча это не проходит: в вывод идёт строка с
+ * идентификатором карты.
+ */
+async function creditInfo(client: AllowlistClient, cards: readonly unknown[]): Promise<Map<string, unknown>> {
+  const found = new Map<string, unknown>()
+  for (const id of creditCardIds(cards)) {
+    try {
+      const block = findCreditType(await client.postJson(CARD_INFO_PATH, { cardIds: [id] }))
+      if (block !== undefined) found.set(id, block)
+    } catch {
+      // ни сумм, ни тела ответа — только идентификатор карты
+      console.log(`карта ${id}: долг по кредитке не получен, остаток показан не будет`)
+    }
+  }
+  return found
+}
+
+function creditCardIds(cards: readonly unknown[]): string[] {
+  const ids: string[] = []
+  for (const card of cards) {
+    if (!isRecord(card)) continue
+    if (String(card['type'] ?? '').toLowerCase() !== 'credit') continue
+    const id = card['id']
+    if (typeof id === 'string' && id !== '') ids.push(id)
+  }
+  return ids
+}
+
+// Ищем блок creditType по всему ответу: точное место в конверте cardInfo не
+// закреплено разведкой, а запрос идёт по одной карте — значит найденный блок
+// относится именно к ней
+function findCreditType(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findCreditType(item)
+      if (found !== undefined) return found
+    }
+    return undefined
+  }
+  if (!isRecord(value)) return undefined
+  if (isRecord(value['creditType'])) return value['creditType']
+  for (const nested of Object.values(value)) {
+    const found = findCreditType(nested)
+    if (found !== undefined) return found
+  }
+  return undefined
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function cardsFrom(raw: unknown): unknown[] {

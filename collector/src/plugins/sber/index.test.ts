@@ -181,10 +181,13 @@ test('секрет не той формы отвергается понятно�
   await expect(plugin.fetchAccounts({ kind: 'query', name: 'sessionid', value: 'x' })).rejects.toThrowError(/заголовк/i)
 })
 
-test('в allowlist только чтение истории и списка продуктов', () => {
+test('в allowlist только чтение истории, списка продуктов и деталей карты', () => {
+  // третий адрес добавлен ради долга по кредитке: в списке продуктов его нет.
+  // Список закреплён целиком — расширение allowlist обязано быть заметным
   expect(SBER_ALLOWED.map((endpoint) => endpoint.path)).toEqual([
     '/uoh-bh/v1/operations/list',
     '/main-screen/rest/v2/m1/web/section/meta',
+    '/ufs-carddetail/rest/card/v1/cardInfo',
   ])
 })
 
@@ -226,6 +229,80 @@ test('обход не сошёлся за предельное число стр
   }
   const plugin = createSberPlugin({ ca: '', transport })
   await expect(plugin.fetchOperations(CREDENTIALS, 'card:1', 0, 1)).rejects.toThrow(/200 страниц/)
+})
+
+// Тот же конверт, но карта кредитная: долг за ней придётся спрашивать отдельно
+function creditAccountsResponseBody(): string {
+  return JSON.stringify({
+    success: true,
+    body: {
+      sections: {
+        technicalSection: {
+          sectionProductData: {
+            cardsInWallet: {
+              data: [
+                {
+                  id: 'card-credit',
+                  name: 'Кредитная карта',
+                  type: 'credit',
+                  number: '4276 55** **** 9876',
+                  availableLimit: { amount: '2398.77', currency: { code: 'RUB' } },
+                  creditOwnSum: { amount: '0.00', currency: { code: 'RUB' } },
+                },
+              ],
+            },
+          },
+        },
+      },
+    },
+  })
+}
+
+function cardInfoBody(): string {
+  return JSON.stringify({
+    success: true,
+    body: { cards: [{ id: 'card-credit', creditType: { creditLimit: { amount: '150000.00' }, creditOwnSum: { amount: '0.00' }, creditDebt: { amount: '147601.23' } } }] },
+  })
+}
+
+test('за долгом по кредитке идёт отдельный запрос, и остаток выходит отрицательным', async () => {
+  const paths: string[] = []
+  const bodies: string[] = []
+  const transport: Transport = {
+    async send(url, options) {
+      paths.push(url.pathname)
+      if (options.body) bodies.push(options.body)
+      const isCardInfo = url.pathname === '/ufs-carddetail/rest/card/v1/cardInfo'
+      return { status: 200, ok: true, text: async () => (isCardInfo ? cardInfoBody() : creditAccountsResponseBody()) }
+    },
+  }
+  const plugin = createSberPlugin({ ca: '', transport })
+
+  const accounts = await plugin.fetchAccounts(CREDENTIALS)
+
+  expect(paths).toEqual(['/main-screen/rest/v2/m1/web/section/meta', '/ufs-carddetail/rest/card/v1/cardInfo'])
+  // спрашиваем именно про эту карту, а не про все подряд
+  expect(bodies[1]).toContain('card-credit')
+  // 0.00 − 147601.23; прежнее поведение дало бы "0.00", доступный лимит — "2398.77"
+  expect(accounts[0]?.balance).toBe('-147601.23')
+})
+
+test('отказ cardInfo не роняет список счетов — кредитка приезжает без остатка', async () => {
+  const transport: Transport = {
+    async send(url) {
+      if (url.pathname === '/ufs-carddetail/rest/card/v1/cardInfo') {
+        return { status: 500, ok: false, text: async () => '' }
+      }
+      return { status: 200, ok: true, text: async () => creditAccountsResponseBody() }
+    },
+  }
+  const plugin = createSberPlugin({ ca: '', transport })
+
+  const accounts = await plugin.fetchAccounts(CREDENTIALS)
+
+  expect(accounts).toHaveLength(1)
+  expect(accounts[0]?.balance).toBeNull()
+  expect(accounts[0]?.id).toBe('card:card-credit')
 })
 
 test('fetchAccounts разбирает вложенный ответ и уходит POST-ом на нужный адрес', async () => {

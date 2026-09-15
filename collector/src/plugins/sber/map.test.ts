@@ -219,14 +219,53 @@ test('карта превращается в счёт с идентификат�
   })
 })
 
-test('у кредитной карты остаток — собственные средства, а не доступный лимит', () => {
-  const [account] = toAccounts(parse([creditCard()]) as Record<string, unknown>[])
-  expect(account?.balance).toBe('250.00')
+// Блок creditType, каким его отдаёт cardInfo: долг у карты в обороте велик, а
+// собственных средств почти нет — ровно тот случай, на котором прежнее правило
+// («остаток равен собственным средствам») показывало почти ноль вместо долга
+function creditInfo(debt = '147601.23', own = '250.00'): Map<string, unknown> {
+  return new Map([['3300131089810779', { creditOwnSum: { amount: own }, creditDebt: { amount: debt } }]])
+}
+
+test('у кредитной карты остаток — чистая позиция: собственные минус долг, при долге минус', () => {
+  const [account] = toAccounts(parse([creditCard()]) as Record<string, unknown>[], creditInfo())
+  expect(account?.balance).toBe('-147351.23')
+})
+
+test('в остаток кредитки не просачивается ни доступный лимит, ни одни собственные средства', () => {
+  // сторож против возврата к прежнему поведению: и 250.00 (собственные), и
+  // 90000.00 (доступный лимит) — те самые неверные ответы
+  const [account] = toAccounts(parse([creditCard()]) as Record<string, unknown>[], creditInfo())
+  expect(account?.balance).not.toBe('250.00')
+  expect(account?.balance).not.toBe('90000.00')
 })
 
 test('тип карты сравнивается регистронезависимо', () => {
-  const [account] = toAccounts(parse([creditCard({ type: 'CREDIT' })]) as Record<string, unknown>[])
-  expect(account?.balance).toBe('250.00')
+  const [account] = toAccounts(parse([creditCard({ type: 'CREDIT' })]) as Record<string, unknown>[], creditInfo())
+  expect(account?.balance).toBe('-147351.23')
+})
+
+test('долг не пришёл — остаток кредитки null, а не ноль', () => {
+  // ноль неотличим от «долга нет», хотя на деле это «банк не сообщил»
+  const withoutDebt = new Map([['3300131089810779', { creditOwnSum: { amount: '250.00' } }]])
+  expect(toAccounts(parse([creditCard()]) as Record<string, unknown>[], withoutDebt)[0]?.balance).toBeNull()
+  expect(toAccounts(parse([creditCard()]) as Record<string, unknown>[])[0]?.balance).toBeNull()
+})
+
+test('вычитание идёт без float: разряды не теряются на больших суммах', () => {
+  // 99999999999999.99 − 0.01 через Number дало бы 99999999999999.98 неточно;
+  // деньги обязаны считаться точно (правило проекта — никакого float)
+  const huge = new Map([['3300131089810779', { creditOwnSum: { amount: '99999999999999.99' }, creditDebt: { amount: '0.01' } }]])
+  expect(toAccounts(parse([creditCard()]) as Record<string, unknown>[], huge)[0]?.balance).toBe('99999999999999.98')
+})
+
+test('разный масштаб долей не ломает вычитание', () => {
+  const mixed = new Map([['3300131089810779', { creditOwnSum: { amount: '10' }, creditDebt: { amount: '0.005' } }]])
+  expect(toAccounts(parse([creditCard()]) as Record<string, unknown>[], mixed)[0]?.balance).toBe('9.995')
+})
+
+test('нулевая разница не превращается в «-0.00»', () => {
+  const equal = new Map([['3300131089810779', { creditOwnSum: { amount: '100.00' }, creditDebt: { amount: '100.00' } }]])
+  expect(toAccounts(parse([creditCard()]) as Record<string, unknown>[], equal)[0]?.balance).toBe('0.00')
 })
 
 test('незнакомый тип карты не подставляет доступный лимит угадыванием — остаток null', () => {

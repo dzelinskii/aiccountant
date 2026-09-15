@@ -11,16 +11,22 @@ export const SBER_BASE = 'https://web-node3.online.sberbank.ru'
 // отказом allowlist
 export const OPERATIONS_PATH = '/uoh-bh/v1/operations/list'
 export const PRODUCTS_PATH = '/main-screen/rest/v2/m1/web/section/meta'
+// Детали карты. Нужен ровно ради долга по кредитке: в PRODUCTS_PATH его нет —
+// там у карты только собственные средства и доступный лимит, а общего лимита,
+// из которого долг можно было бы вывести, эта ручка не отдаёт (проверено:
+// availableTotalLimit равен availableLimit). Зовётся только для карт типа credit
+export const CARD_INFO_PATH = '/ufs-carddetail/rest/card/v1/cardInfo'
 
-// Два адреса — весь набор возможностей коллектора по Сбербанку.
+// Три адреса — весь набор возможностей коллектора по Сбербанку.
 //
 // Оговорка, которую важно не потерять: у Т-Банка список состоял из GET, и
 // «методом на чтение ничего не сломать» было отдельной гарантией. Сбербанк
 // отдаёт данные по POST, поэтому метод здесь ничего не доказывает — гарантией
-// остаётся сам список адресов, и оба они читающие.
+// остаётся сам список адресов, и все три читающие.
 export const SBER_ALLOWED: readonly AllowedEndpoint[] = [
   { path: OPERATIONS_PATH, method: 'POST' },
   { path: PRODUCTS_PATH, method: 'POST' },
+  { path: CARD_INFO_PATH, method: 'POST' },
 ]
 
 interface CreateOptions {
