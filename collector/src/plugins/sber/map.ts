@@ -191,11 +191,14 @@ export function cardResourceId(id: string): string {
  * здесь дают null, а не останавливают сбор: иначе одна экзотическая карта
  * лишила бы человека подсказки с идентификаторами по всем остальным.
  */
-export function toAccounts(raw: readonly unknown[]): CollectedAccount[] {
-  return raw.map(toAccount)
+/** Блок creditType по идентификатору карты — его добывает index.ts из cardInfo. */
+export type CreditInfoByCard = ReadonlyMap<string, unknown>
+
+export function toAccounts(raw: readonly unknown[], creditByCard: CreditInfoByCard = new Map()): CollectedAccount[] {
+  return raw.map((item) => toAccount(item, creditByCard))
 }
 
-function toAccount(item: unknown): CollectedAccount {
+function toAccount(item: unknown, creditByCard: CreditInfoByCard): CollectedAccount {
   if (!isRecord(item)) throw new Error('Карта в ответе банка пришла не объектом')
   const id = getStr(item, 'id')
   if (!id) throw new Error('У карты банка нет id')
@@ -205,7 +208,7 @@ function toAccount(item: unknown): CollectedAccount {
     name: getStr(item, 'name') ?? '',
     type: getStr(item, 'type') ?? '',
     currency: cardCurrency(item),
-    balance: cardBalance(item),
+    balance: cardBalance(item, id, creditByCard),
     cardMasks: cardMask(item),
   }
 }
@@ -234,15 +237,72 @@ function cardTypeKind(item: Record<string, unknown>): 'credit' | 'debit' | 'unkn
   return 'unknown'
 }
 
-function balanceSource(item: Record<string, unknown>): Record<string, unknown> | undefined {
+/**
+ * Остаток дебетовой карты — доступные средства. У кредитной остатком считается
+ * чистая позиция владельца: собственные минус долг, то есть при долге минус.
+ *
+ * Показать доступный лимит значило бы выдать заёмные деньги за свои. Показывать
+ * собственные средства (как делалось раньше) не лучше: карта в обороте всегда
+ * показывала бы ноль, а сумма по счетам оказывалась завышена ровно на долг —
+ * замерено на живой карте, где при долге около 147 601 приложение показывало 0.
+ *
+ * Долг приходит отдельной ручкой (cardInfo, см. index.ts): в списке карт его
+ * нет, и вывести его оттуда нечем.
+ */
+function cardBalance(item: Record<string, unknown>, id: string, creditByCard: CreditInfoByCard): string | null {
   const kind = cardTypeKind(item)
-  if (kind === 'unknown') return undefined
-  return getRecord(item, kind === 'credit' ? 'creditOwnSum' : 'availableLimit')
+  if (kind === 'debit') return moneyAmount(getRecord(item, 'availableLimit'))
+  if (kind !== 'credit') return null
+
+  const credit = creditByCard.get(id)
+  if (!isRecord(credit)) return null
+  const own = moneyAmount(getRecord(credit, 'creditOwnSum'))
+  const debt = moneyAmount(getRecord(credit, 'creditDebt'))
+  // без долга ноль соврал бы: он неотличим от «долга нет», хотя на деле это
+  // «банк не сообщил». null честнее — остаток просто не показывается
+  if (own === null || debt === null) return null
+  return subtractDecimal(own, debt)
 }
 
-function cardBalance(item: Record<string, unknown>): string | null {
-  const source = balanceSource(item)
-  return source ? (getStr(source, 'amount') ?? null) : null
+function moneyAmount(block: Record<string, unknown> | undefined): string | null {
+  return block ? (getStr(block, 'amount') ?? null) : null
+}
+
+const DECIMAL = /^-?\d+(\.\d+)?$/
+
+/**
+ * Вычитание десятичных строк без float: суммы приводятся к общему масштабу и
+ * считаются в BigInt. Правило проекта запрещает float для денег, и не зря —
+ * «0.00 − 147601.23» через Number даёт приблизительный результат уже здесь.
+ */
+function subtractDecimal(a: string, b: string): string {
+  if (!DECIMAL.test(a) || !DECIMAL.test(b)) {
+    // значения в текст не кладём: это суммы
+    throw new Error('Остаток кредитки: банк прислал сумму не десятичным числом')
+  }
+  const scale = Math.max(fractionLength(a), fractionLength(b))
+  return fromScaled(toScaled(a, scale) - toScaled(b, scale), scale)
+}
+
+function fractionLength(value: string): number {
+  const dot = value.indexOf('.')
+  return dot === -1 ? 0 : value.length - dot - 1
+}
+
+function toScaled(value: string, scale: number): bigint {
+  const negative = value.startsWith('-')
+  const [int = '0', frac = ''] = (negative ? value.slice(1) : value).split('.')
+  const scaled = BigInt(int + frac.padEnd(scale, '0'))
+  return negative ? -scaled : scaled
+}
+
+function fromScaled(value: bigint, scale: number): string {
+  const negative = value < 0n
+  const digits = (negative ? -value : value).toString().padStart(scale + 1, '0')
+  const int = digits.slice(0, digits.length - scale)
+  const body = scale === 0 ? int : `${int}.${digits.slice(digits.length - scale)}`
+  // "-0.00" бэкенд принял бы, но читается он как ошибка разбора, а не как ноль
+  return negative && !/^0(\.0+)?$/.test(body) ? `-${body}` : body
 }
 
 // Валюта — свойство карты, а не поля, выбранного под остаток: у кредитки без
