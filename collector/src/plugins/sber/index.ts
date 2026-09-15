@@ -114,8 +114,18 @@ async function requestOperations(client: AllowlistClient, query: OperationsQuery
 async function creditInfo(client: AllowlistClient, cards: readonly unknown[]): Promise<Map<string, unknown>> {
   const found = new Map<string, unknown>()
   for (const id of creditCardIds(cards)) {
+    // Банк ждёт cardIds именно числом: со строкой он отвечает 500 (проверено
+    // живьём). Разбор ответа делает все числа строками — правило про деньги без
+    // float, — поэтому идентификатор здесь приходится вернуть в число обратно.
+    const numeric = Number(id)
+    if (!Number.isSafeInteger(numeric)) {
+      // непредставимый точно идентификатор не отправляем: округлив его, мы
+      // спросили бы долг по чужой карте, а это хуже отсутствия остатка
+      console.log(`карта ${id}: идентификатор не представим точным целым, долг не запрашивается`)
+      continue
+    }
     try {
-      const block = findCreditType(await client.postJson(CARD_INFO_PATH, { cardIds: [id] }))
+      const block = findCreditType(await client.postJson(CARD_INFO_PATH, { cardIds: [numeric] }))
       if (block !== undefined) found.set(id, block)
     } catch {
       // ни сумм, ни тела ответа — только идентификатор карты

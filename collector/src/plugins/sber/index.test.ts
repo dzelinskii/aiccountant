@@ -242,7 +242,9 @@ function creditAccountsResponseBody(): string {
             cardsInWallet: {
               data: [
                 {
-                  id: 'card-credit',
+                  // идентификатор карты банк отдаёт числом, и разбор делает его
+                  // строкой — обратный перевод в число проверяется ниже
+                  id: 3300131089810779,
                   name: 'Кредитная карта',
                   type: 'credit',
                   number: '4276 55** **** 9876',
@@ -281,8 +283,11 @@ test('за долгом по кредитке идёт отдельный зап
   const accounts = await plugin.fetchAccounts(CREDENTIALS)
 
   expect(paths).toEqual(['/main-screen/rest/v2/m1/web/section/meta', '/ufs-carddetail/rest/card/v1/cardInfo'])
-  // спрашиваем именно про эту карту, а не про все подряд
-  expect(bodies[1]).toContain('card-credit')
+  // Идентификатор уходит ЧИСЛОМ: со строкой банк отвечает 500 — на живом
+  // прогоне это и случилось. Кавычки вокруг идентификатора означают возврат
+  // той самой ошибки
+  expect(bodies[1]).toBe('{"cardIds":[3300131089810779]}')
+  expect(bodies[1]).not.toContain('"3300131089810779"')
   // 0.00 − 147601.23; прежнее поведение дало бы "0.00", доступный лимит — "2398.77"
   expect(accounts[0]?.balance).toBe('-147601.23')
 })
@@ -302,7 +307,7 @@ test('отказ cardInfo не роняет список счетов — кре
 
   expect(accounts).toHaveLength(1)
   expect(accounts[0]?.balance).toBeNull()
-  expect(accounts[0]?.id).toBe('card:card-credit')
+  expect(accounts[0]?.id).toBe('card:3300131089810779')
 })
 
 test('fetchAccounts разбирает вложенный ответ и уходит POST-ом на нужный адрес', async () => {
