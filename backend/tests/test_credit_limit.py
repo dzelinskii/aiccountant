@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from structlog.testing import capture_logs
 
+from app.imports.models import Import
 from app.ledger import repository as ledger_repository
 from app.ledger.balance import credit_available
 from app.ledger.models import CreditLimitObservation
@@ -203,6 +204,43 @@ async def test_changed_limit_adds_observation(
     observations = await _observations(db_session, ws)
     assert [o.value for o in observations] == [Decimal("142000.0000"), Decimal("200000.0000")]
     assert Decimal((await _account(client, ws))["credit_limit"]) == Decimal("200000.00")
+    # у прежней записи оба момента остались прежними: «когда лимит стал таким»
+    # читается по observed_at, и сдвинь его новый сбор — история изменений
+    # превратилась бы в историю сборов
+    old, new = observations
+    assert old.observed_at == old.confirmed_at < new.observed_at
+    assert new.observed_at == new.confirmed_at
+
+
+async def test_repeat_after_change_keeps_history(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Третий сбор с тем же лимитом двигает момент подтверждения последней записи,
+    а не добавляет дубликат и не трогает «когда лимит стал таким».
+
+    Отдельный тест, потому что «последнее наблюдение» тут выбирается уже из
+    нескольких: с двумя записями ошибка порядка ещё не видна, с тремя — видна.
+    """
+    ws, account_id = await _ws_and_account(client)
+    await _collect(client, ws, account_id, {"balance": "-2000.47", "credit_limit": "142000.00"})
+    await _collect(
+        client, ws, account_id, {"balance": "-2000.47", "credit_limit": "200000.00"}, "bank-op-2"
+    )
+    before = (await _observations(db_session, ws))[1]
+    became_at = before.observed_at
+
+    await _collect(
+        client, ws, account_id, {"balance": "-3000.47", "credit_limit": "200000.00"}, "bank-op-3"
+    )
+
+    observations = await _observations(db_session, ws)
+    assert [o.value for o in observations] == [Decimal("142000.0000"), Decimal("200000.0000")]
+    latest = observations[1]
+    assert latest.observed_at == became_at
+    assert latest.confirmed_at > became_at
+    # и «доступно» по-прежнему считается: момент подтверждения совпал с остатком
+    account = await _account(client, ws)
+    assert Decimal(account["credit_available"]) == Decimal("196999.53")
 
 
 async def test_collection_without_limit_stops_available(
@@ -348,24 +386,34 @@ async def test_overflow_limit_rejected(client: AsyncClient) -> None:
     assert resp.status_code == 422
 
 
-async def test_broken_limit_is_dropped(client: AsyncClient, db_session: AsyncSession) -> None:
-    """Негодный лимит подтверждение не роняет: лимит поясняет счёт, но деньгами
-    счёта не является, — та же граница, что у меток карт. Порча остатка роняет.
-    Молча это не проходит: импорт с мусором виден в логе."""
-    from app.imports.models import Import
+async def _import_with_payload_limit(
+    client: AsyncClient, db_session: AsyncSession, ws: str, account_id: str, limit: object
+) -> str:
+    """Импорт, у которого лимит в сохранённом разборе подменён.
 
-    ws, account_id = await _ws_and_account(client)
+    Схема стережёт вход, но между отправкой и подтверждением значение лежит в
+    JSONB, где оказаться может что угодно — включая записи от других версий.
+    """
     started = await _start_import(
         client, ws, account_id, {"balance": "-2000.47", "credit_limit": "142000.00"}
     )
-    import_id = started.json()["import_id"]
+    import_id: str = started.json()["import_id"]
     imp = await db_session.get(Import, uuid.UUID(import_id))
     assert imp is not None
     assert isinstance(imp.parsed_payload, dict)
     payload = dict(imp.parsed_payload)
-    payload["account"] = {"balance": "-2000.47", "credit_limit": "много"}
+    payload["account"] = {"balance": "-2000.47", "credit_limit": limit}
     imp.parsed_payload = payload
     await db_session.commit()
+    return import_id
+
+
+async def test_broken_limit_is_dropped(client: AsyncClient, db_session: AsyncSession) -> None:
+    """Негодный лимит подтверждение не роняет: лимит поясняет счёт, но деньгами
+    счёта не является, — та же граница, что у меток карт. Порча остатка роняет.
+    Молча это не проходит: импорт с мусором виден в логе."""
+    ws, account_id = await _ws_and_account(client)
+    import_id = await _import_with_payload_limit(client, db_session, ws, account_id, "много")
 
     with capture_logs() as logs:
         await _commit(client, ws, import_id)
@@ -374,6 +422,30 @@ async def test_broken_limit_is_dropped(client: AsyncClient, db_session: AsyncSes
     assert account["credit_limit"] is None
     assert Decimal(account["balance"]) == Decimal("-2000.47")
     assert await _observations(db_session, ws) == []
+    assert [e["import_id"] for e in logs if e["event"] == "import_broken_credit_limit"] == [
+        import_id
+    ]
+
+
+async def test_limit_beyond_column_is_dropped(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Лимит вне рамок NUMERIC(20, 4) отбрасывается так же, как нечисло.
+
+    Числом он при этом остаётся, то есть проверку «это вообще число» проходит.
+    Без сверки с рамками колонки такое значение уронило бы подтверждение
+    переполнением — вместе со всеми операциями, чего справочник обещает не
+    делать.
+    """
+    ws, account_id = await _ws_and_account(client)
+    import_id = await _import_with_payload_limit(client, db_session, ws, account_id, "1E+30")
+
+    with capture_logs() as logs:
+        await _commit(client, ws, import_id)
+
+    account = await _account(client, ws)
+    assert account["credit_limit"] is None
+    assert Decimal(account["balance"]) == Decimal("-2000.47")
     assert [e["import_id"] for e in logs if e["event"] == "import_broken_credit_limit"] == [
         import_id
     ]

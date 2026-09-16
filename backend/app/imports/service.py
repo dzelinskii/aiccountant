@@ -7,6 +7,7 @@ from decimal import Decimal, InvalidOperation
 from typing import NamedTuple, cast
 
 import structlog
+from pydantic import TypeAdapter
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.operation_kinds import OPERATION_KINDS, OperationKind
@@ -23,12 +24,16 @@ from app.imports.schemas import (
     ImportResultOut,
     ImportStatus,
     ImportStatusOut,
+    Money,
     ParsedAccountIn,
     ParsedOperationIn,
 )
 from app.ledger import service as ledger_service
 
 logger = structlog.get_logger()
+
+# рамки денежной колонки одним источником со схемой запроса
+_MONEY = TypeAdapter(Money)
 
 
 class ImportNotReadyError(Exception):
@@ -166,11 +171,18 @@ def _credit_limit(raw: object, import_id: uuid.UUID) -> Decimal | None:
     Негодное значение отбрасываем, а не роняем им подтверждение: лимит поясняет
     счёт, но деньгами счёта не является, — та же граница, что у меток карт.
     Отброшенное видно в логе по идентификатору импорта; самого значения там нет
-    намеренно (см. _known_kind)."""
+    намеренно (см. _known_kind).
+
+    Рамки колонки перепроверяем здесь, а не только на входе: схема стережёт
+    запрос, но между отправкой и подтверждением значение лежит в JSONB, где
+    оказаться может что угодно. Без этой проверки лимит вне NUMERIC(20, 4) ронял
+    бы подтверждение переполнением — то есть ровно тем, чего обещано не делать.
+    Та же причина, по которой _card_masks заново сверяет «четыре цифры»."""
     if raw is None:
         return None
     try:
-        return _finite_decimal(raw)
+        # ValidationError у pydantic — наследник ValueError, отдельной ветки не нужно
+        return _MONEY.validate_python(_finite_decimal(raw))
     except (ValueError, TypeError, InvalidOperation):
         logger.warning("import_broken_credit_limit", import_id=str(import_id))
         return None
