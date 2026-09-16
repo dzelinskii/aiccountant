@@ -9,11 +9,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from structlog.testing import capture_logs
 
+from app.ledger import repository as ledger_repository
 from app.ledger.balance import credit_available
 from app.ledger.models import CreditLimitObservation
 
 ALICE = {"email": "alice@example.com", "password": "password123"}
-BOB = {"email": "bob@example.com", "password": "password123"}
 
 MOMENT = datetime(2026, 9, 15, 10, 0, tzinfo=UTC)
 LATER = MOMENT + timedelta(hours=1)
@@ -302,19 +302,22 @@ async def test_rename_keeps_limit(client: AsyncClient) -> None:
     assert Decimal(resp.json()["credit_available"]) == Decimal("1936.19")
 
 
-async def test_limit_does_not_leak_between_workspaces(
+async def test_limits_read_only_within_workspace(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
-    """Наблюдения — доменные данные, и чужой workspace их не видит."""
+    """Чтение наблюдений отфильтровано по workspace.
+
+    Проверяем repository напрямую: через API этот фильтр не достать — счёт уже
+    принадлежит одному workspace, и выдача всё равно собирается по его счетам.
+    Тест «чужой не видит лимита» на уровне API был бы зелёным и с выброшенным
+    фильтром, то есть не проверял бы ничего.
+    """
     ws, account_id = await _ws_and_account(client)
     await _collect(client, ws, account_id, {"balance": "-148063.81", "credit_limit": "150000.00"})
 
-    client.cookies.clear()
-    await client.post("/api/auth/register", json=BOB)
-    ws_bob = str((await client.get("/api/me")).json()["workspaces"][0]["id"])
-
-    assert await _observations(db_session, ws_bob) == []
-    assert (await client.get("/api/accounts", params={"workspace_id": ws_bob})).json() == []
+    mine = await ledger_repository.latest_credit_limits(db_session, uuid.UUID(ws))
+    assert list(mine) == [uuid.UUID(account_id)]
+    assert await ledger_repository.latest_credit_limits(db_session, uuid.uuid4()) == {}
 
 
 async def test_float_limit_rejected(client: AsyncClient) -> None:
