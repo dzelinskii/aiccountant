@@ -8,7 +8,7 @@ import { readDeclined, rememberDeclined } from './declined'
 import { syncDiscovered } from './discovered'
 import { askAboutAccounts, decideCandidates } from './link-prompt'
 import { pushOperations } from './push'
-import { reportCollected } from './report'
+import { accountsWord, reportCollected } from './report'
 import { osSecretStore, type SecretStore } from './secret-store'
 import { ROOT_SPKI_SHA256, loadTrustAnchor } from './trust-anchor'
 
@@ -49,7 +49,7 @@ async function main(): Promise<void> {
     // чтобы продолжить сбор в этом же запуске, без второго pnpm collect
     linked = await syncDiscovered(config, plugin.name, accounts)
   } else if (decision.unboundCount > 0) {
-    console.log(`В банке ещё ${decision.unboundCount} счёт(ов) не ведётся.`)
+    console.log(`В банке ещё ${accountsWord(decision.unboundCount)} не ведётся.`)
   }
 
   if (linked.size === 0) {

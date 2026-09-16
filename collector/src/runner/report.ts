@@ -72,3 +72,17 @@ export function reportCollected(
   reportMissingHints(appAccountId, operations)
   reportUnrefinedIncome(appAccountId, operations)
 }
+
+/**
+ * «1 счёт», «2 счёта», «11 счетов». Живёт здесь, а не в main.ts: main.ts
+ * запускает сбор при импорте и тестом не достаётся, а у склонения три ветки
+ * и исключение на второй десяток — как раз то, что молча ломается.
+ */
+export function accountsWord(count: number): string {
+  const tail = count % 100
+  if (tail >= 11 && tail <= 14) return `${count} счетов`
+  const last = count % 10
+  if (last === 1) return `${count} счёт`
+  if (last >= 2 && last <= 4) return `${count} счёта`
+  return `${count} счетов`
+}
