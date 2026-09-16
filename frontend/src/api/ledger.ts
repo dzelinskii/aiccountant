@@ -14,6 +14,8 @@ export interface Account {
   card_masks: string[]
   // код банка счёта; null — наличные или банк, для которого плагина нет
   bank_code: string | null
+  // привязан ли счёт к счёту банка; сам отпечаток фронту не нужен
+  is_bank_linked: boolean
 }
 
 export interface Bank {
@@ -131,6 +133,17 @@ export const createAccount = (
 ) => api<Account>(`/api/accounts?${q(ws)}`, { method: 'POST', body: JSON.stringify(body) })
 
 export const getBanks = () => api<Bank[]>('/api/banks')
+
+// привязка уже заведённого счёта к счёту банка, который банк уже показал.
+// Отдельно от createAccount: тот заводит новую строку, этот — правит существующую
+export const linkAccount = (
+  ws: string,
+  accountId: string,
+  body: { bank_code: string; bank_account_fingerprint: string },
+) => api<Account>(`/api/accounts/${accountId}/link?${q(ws)}`, {
+  method: 'POST',
+  body: JSON.stringify(body),
+})
 
 export const getDiscovered = (ws: string) =>
   api<DiscoveredAccount[]>(`/api/accounts/discovered?${q(ws)}`)

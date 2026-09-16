@@ -1,11 +1,18 @@
 import { MantineProvider } from '@mantine/core'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, expect, test, vi } from 'vitest'
 import { ApiError } from '../api/client'
 import type { Account, DiscoveredAccount } from '../api/ledger'
-import { createAccount, getAccounts, getBanks, getDiscovered, updateAccount } from '../api/ledger'
+import {
+  createAccount,
+  getAccounts,
+  getBanks,
+  getDiscovered,
+  linkAccount,
+  updateAccount,
+} from '../api/ledger'
 import { useWorkspaceStore } from '../store/workspace'
 import { AccountsPage } from './AccountsPage'
 
@@ -17,11 +24,13 @@ vi.mock('../api/ledger', () => ({
   updateAccount: vi.fn(),
   getBanks: vi.fn(),
   getDiscovered: vi.fn(),
+  linkAccount: vi.fn(),
 }))
 
 const base: Account = {
   id: 'a1', name: 'Т-Банк', type: 'card', currency: 'RUB', is_archived: false,
   balance: '4900.0000', reported_at: null, card_masks: [], bank_code: null,
+  is_bank_linked: false,
 }
 
 beforeEach(() => {
@@ -177,6 +186,66 @@ test('заведение счёта из непривязанного уходи
     name: 'Текущий счёт',
     type: 'card',
     currency: 'RUB',
+    bank_code: 'alfa',
+    bank_account_fingerprint: 'a'.repeat(64),
+  })
+})
+
+test('без непривязанных счетов у показанного банком счёта только «Завести счёт»', async () => {
+  // выбирать было бы не из чего — предлагать привязку в этом случае бессмысленно
+  renderPage(
+    [],
+    [
+      {
+        fingerprint: 'a'.repeat(64),
+        bank_code: 'alfa',
+        bank_name: 'Альфа-Банк',
+        name: 'Текущий счёт',
+        currency: 'RUB',
+        balance: '1000.0000',
+        card_masks: [],
+      },
+    ],
+  )
+
+  expect(await screen.findByRole('button', { name: 'Завести счёт' })).toBeDefined()
+  expect(screen.queryByRole('button', { name: 'Это мой счёт' })).toBeNull()
+})
+
+test('счёт, показанный банком, привязывается к уже заведённому', async () => {
+  // у показанного банком счёта — оба действия: завести новый или привязать старый
+  renderPage(
+    [{ ...base, name: 'Старый счёт' }],
+    [
+      {
+        fingerprint: 'a'.repeat(64),
+        bank_code: 'alfa',
+        bank_name: 'Альфа-Банк',
+        name: 'Текущий счёт',
+        currency: 'RUB',
+        balance: '1000.0000',
+        card_masks: [],
+      },
+    ],
+  )
+
+  expect(await screen.findByRole('button', { name: 'Завести счёт' })).toBeDefined()
+  await userEvent.click(await screen.findByRole('button', { name: 'Это мой счёт' }))
+
+  // содержимое модального окна появляется не в тот же тик — ждём его явно
+  const dialog = within(await screen.findByRole('dialog'))
+  await userEvent.click(dialog.getByRole('combobox', { name: 'Счёт приложения' }))
+  // имя счёта совпадает с именем в карточке списка счетов, а выпадающий список
+  // Select уходит в отдельный portal вне диалога — из двух совпадений текста
+  // на странице берём то, что действительно вариант выбора
+  const options = await screen.findAllByText('Старый счёт')
+  const option = options.find((el) => el.closest('[role="option"]'))
+  if (!option) throw new Error('Вариант выбора счёта не найден')
+  await userEvent.click(option)
+  await userEvent.click(dialog.getByRole('button', { name: 'Привязать' }))
+
+  // отпечаток и банк уходят от показанного банком счёта, а не от формы
+  expect(linkAccount).toHaveBeenCalledWith('ws-1', 'a1', {
     bank_code: 'alfa',
     bank_account_fingerprint: 'a'.repeat(64),
   })

@@ -9,6 +9,7 @@ const accounts: Account[] = [
   {
     id: 'a1', name: 'Карта', type: 'card', currency: 'RUB', is_archived: false,
     balance: '0.0000', reported_at: null, card_masks: [], bank_code: null,
+    is_bank_linked: false,
   },
 ]
 const categories: Category[] = [{ id: 'c1', parent_id: null, name: 'Еда', kind: 'expense' }]

@@ -8,6 +8,7 @@ import {
   getAccounts,
   getBanks,
   getDiscovered,
+  linkAccount,
   updateAccount,
   type Account,
   type DiscoveredAccount,
@@ -21,6 +22,9 @@ export function AccountsPage() {
   const queryClient = useQueryClient()
   const [opened, { open, close }] = useDisclosure(false)
   const [editing, setEditing] = useState<Account | null>(null)
+  const [linkOpened, { open: openLink, close: closeLink }] = useDisclosure(false)
+  const [linkTarget, setLinkTarget] = useState<DiscoveredAccount | null>(null)
+  const [linkAccountId, setLinkAccountId] = useState<string | null>(null)
 
   const { data: accounts } = useQuery({ queryKey: ['accounts', ws], queryFn: () => getAccounts(ws) })
   const { data: banks } = useQuery({ queryKey: ['banks'], queryFn: getBanks })
@@ -28,6 +32,9 @@ export function AccountsPage() {
     queryKey: ['discovered', ws],
     queryFn: () => getDiscovered(ws),
   })
+  // выбирать при привязке можно только из непривязанных — привязанный счёт
+  // уже отвечает на вопрос «куда слать операции», второй ответ не нужен
+  const unlinkedAccounts = (accounts ?? []).filter((a) => !a.is_bank_linked)
 
   const form = useForm({
     initialValues: {
@@ -59,6 +66,17 @@ export function AccountsPage() {
       await queryClient.invalidateQueries({ queryKey: ['accounts', ws] })
       close()
       setEditing(null)
+    },
+  })
+  const linkMut = useMutation({
+    mutationFn: (v: { id: string; bank_code: string; bank_account_fingerprint: string }) =>
+      linkAccount(ws, v.id, { bank_code: v.bank_code, bank_account_fingerprint: v.bank_account_fingerprint }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['accounts', ws] })
+      await queryClient.invalidateQueries({ queryKey: ['discovered', ws] })
+      closeLink()
+      setLinkTarget(null)
+      setLinkAccountId(null)
     },
   })
 
@@ -94,6 +112,20 @@ export function AccountsPage() {
       bank_account_fingerprint: item.fingerprint,
     })
     open()
+  }
+  const openLinkModal = (item: DiscoveredAccount) => {
+    setLinkTarget(item)
+    setLinkAccountId(null)
+    linkMut.reset()
+    openLink()
+  }
+  const submitLink = () => {
+    if (!linkTarget || !linkAccountId) return
+    linkMut.mutate({
+      id: linkAccountId,
+      bank_code: linkTarget.bank_code,
+      bank_account_fingerprint: linkTarget.fingerprint,
+    })
   }
 
   const submit = (v: {
@@ -179,6 +211,11 @@ export function AccountsPage() {
                   {item.balance && item.currency && (
                     <Text fw={700}>{formatMoney(item.balance, item.currency)}</Text>
                   )}
+                  {unlinkedAccounts.length > 0 && (
+                    <Button variant="default" size="xs" onClick={() => openLinkModal(item)}>
+                      Это мой счёт
+                    </Button>
+                  )}
                   <Button variant="light" size="xs" onClick={() => openFromDiscovered(item)}>
                     Завести счёт
                   </Button>
@@ -231,6 +268,28 @@ export function AccountsPage() {
             Сохранить
           </Button>
         </form>
+      </Modal>
+
+      <Modal opened={linkOpened} onClose={closeLink} title="Привязать счёт">
+        <Select
+          label="Счёт приложения"
+          placeholder="Выберите счёт"
+          data={unlinkedAccounts.map((a) => ({ value: a.id, label: a.name }))}
+          value={linkAccountId}
+          onChange={setLinkAccountId}
+        />
+        {linkMut.isError && (
+          <Alert color="red" mt="md">{linkMut.error.message}</Alert>
+        )}
+        <Button
+          mt="lg"
+          fullWidth
+          disabled={!linkAccountId}
+          loading={linkMut.isPending}
+          onClick={submitLink}
+        >
+          Привязать
+        </Button>
       </Modal>
     </Stack>
   )

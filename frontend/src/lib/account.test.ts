@@ -45,6 +45,7 @@ function acc(name: string, bank_code: string | null): Account {
     reported_at: null,
     card_masks: [],
     bank_code,
+    is_bank_linked: bank_code !== null,
   }
 }
 
