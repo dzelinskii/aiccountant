@@ -89,6 +89,9 @@ class DiscoveredAccount(Base):
     seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
+        # Повторяет миграцию 0014 намеренно, по той же причине, что у Account
+        # выше: объяви мы индекс только в миграции — автогенерация следующей
+        # предложила бы его удалить.
         Index("uq_discovered_accounts_fingerprint", "workspace_id", "fingerprint", unique=True),
     )
 
