@@ -1,6 +1,7 @@
 import type { CollectedAccount } from '../core/contract'
 import type { FetchImpl } from '../http/allowlist-client'
 import type { CollectorConfig } from './config'
+import { appRequest } from './app-api'
 import { accountFingerprint } from './fingerprint'
 
 /**
@@ -18,7 +19,9 @@ export async function syncDiscovered(
   config: CollectorConfig,
   bank: string,
   accounts: readonly CollectedAccount[],
-  fetchImpl: FetchImpl = fetch,
+  // без значения по умолчанию: глобальный fetch остаётся только в app-api.ts,
+  // а appRequest сам подставляет его, если сюда ничего не передали
+  fetchImpl?: FetchImpl,
 ): Promise<Map<string, string>> {
   const byFingerprint = new Map<string, string>()
   const payload = accounts.map((account) => {
@@ -33,22 +36,14 @@ export async function syncDiscovered(
     }
   })
 
-  const url = new URL('/api/accounts/discovered', config.apiBaseUrl)
-  url.searchParams.set('workspace_id', config.workspaceId)
-  url.searchParams.set('bank', bank)
-
-  const res = await fetchImpl(url, {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${config.apiToken}`,
-    },
-    body: JSON.stringify({ accounts: payload }),
-  })
-  if (!res.ok) throw new Error(`Приложение ответило ${res.status} на список счетов`)
+  const data = await appRequest(
+    config,
+    { method: 'PUT', path: '/api/accounts/discovered', params: { bank }, body: { accounts: payload } },
+    fetchImpl,
+  )
 
   const linked = new Map<string, string>()
-  for (const [fingerprint, appAccountId] of Object.entries(parseLinked(await res.json()))) {
+  for (const [fingerprint, appAccountId] of Object.entries(parseLinked(data))) {
     const bankAccountId = byFingerprint.get(fingerprint)
     // отпечаток, которого мы не посылали, адресовать нечем — молча пропускаем
     // такую пару, а не гадаем, чей это счёт
