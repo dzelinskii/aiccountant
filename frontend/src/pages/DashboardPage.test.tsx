@@ -3,15 +3,15 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen } from '@testing-library/react'
 import { beforeEach, expect, test, vi } from 'vitest'
 import type { Dashboard } from '../api/ledger'
-import { getDashboard } from '../api/ledger'
+import { getBanks, getDashboard } from '../api/ledger'
 import { useWorkspaceStore } from '../store/workspace'
 import { DashboardPage } from './DashboardPage'
 
-vi.mock('../api/ledger', () => ({ getDashboard: vi.fn() }))
+vi.mock('../api/ledger', () => ({ getDashboard: vi.fn(), getBanks: vi.fn() }))
 
 const account = {
   id: 'a1', name: 'Т-Банк', type: 'card', currency: 'RUB', balance: '4900.0000',
-  reported_at: null, card_masks: [] as string[],
+  reported_at: null, card_masks: [] as string[], bank_code: null,
 }
 
 beforeEach(() => {
@@ -21,6 +21,7 @@ beforeEach(() => {
 
 function renderPage(accounts: Dashboard['accounts']) {
   vi.mocked(getDashboard).mockResolvedValue({ accounts, month_expenses: [], recent: [] })
+  vi.mocked(getBanks).mockResolvedValue([{ code: 'tbank', name: 'Т-Банк' }])
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
     <MantineProvider>

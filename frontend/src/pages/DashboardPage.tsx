@@ -1,7 +1,7 @@
 import { Badge, Card, Grid, Group, Progress, Stack, Table, Text, Title } from '@mantine/core'
 import { useQuery } from '@tanstack/react-query'
-import { getDashboard } from '../api/ledger'
-import { accountLabel, formatMoment } from '../lib/account'
+import { getBanks, getDashboard } from '../api/ledger'
+import { accountLabel, formatMoment, groupAccountsByBank } from '../lib/account'
 import { formatMoney } from '../lib/money'
 import { useWorkspaceStore } from '../store/workspace'
 
@@ -11,6 +11,7 @@ export function DashboardPage() {
     queryKey: ['dashboard', ws],
     queryFn: () => getDashboard(ws),
   })
+  const { data: banks } = useQuery({ queryKey: ['banks'], queryFn: getBanks })
   if (isPending || !data) return <Text>Загрузка…</Text>
 
   const maxExpense = data.month_expenses.reduce(
@@ -22,24 +23,31 @@ export function DashboardPage() {
     <Stack>
       <Title order={2}>Дашборд</Title>
 
-      <Grid>
-        {data.accounts.map((a) => (
-          <Grid.Col key={a.id} span={{ base: 12, sm: 6, md: 4 }}>
-            <Card withBorder>
-              <Group gap="xs">
-                <Text c="dimmed" size="sm">{a.name}</Text>
-                {accountLabel(a) && (
-                  <Text c="dimmed" size="sm">{accountLabel(a)}</Text>
-                )}
-              </Group>
-              <Text fw={700} size="lg">{formatMoney(a.balance, a.currency)}</Text>
-              {a.reported_at && (
-                <Text c="dimmed" size="xs">остаток на {formatMoment(a.reported_at)}</Text>
-              )}
-            </Card>
-          </Grid.Col>
-        ))}
-      </Grid>
+      {/* раскладка та же, что на экране счетов: метка счёта — правило,
+          а не украшение одного экрана */}
+      {groupAccountsByBank(data.accounts, banks ?? []).map((group) => (
+        <Stack key={group.key} gap="xs">
+          <Title order={4}>{group.title}</Title>
+          <Grid>
+            {group.accounts.map((a) => (
+              <Grid.Col key={a.id} span={{ base: 12, sm: 6, md: 4 }}>
+                <Card withBorder>
+                  <Group gap="xs">
+                    <Text c="dimmed" size="sm">{a.name}</Text>
+                    {accountLabel(a) && (
+                      <Text c="dimmed" size="sm">{accountLabel(a)}</Text>
+                    )}
+                  </Group>
+                  <Text fw={700} size="lg">{formatMoney(a.balance, a.currency)}</Text>
+                  {a.reported_at && (
+                    <Text c="dimmed" size="xs">остаток на {formatMoment(a.reported_at)}</Text>
+                  )}
+                </Card>
+              </Grid.Col>
+            ))}
+          </Grid>
+        </Stack>
+      ))}
 
       <Card withBorder>
         <Title order={4} mb="sm">Расходы месяца по категориям</Title>

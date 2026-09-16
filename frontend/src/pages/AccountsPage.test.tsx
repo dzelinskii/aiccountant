@@ -4,8 +4,8 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, expect, test, vi } from 'vitest'
 import { ApiError } from '../api/client'
-import type { Account } from '../api/ledger'
-import { getAccounts, updateAccount } from '../api/ledger'
+import type { Account, DiscoveredAccount } from '../api/ledger'
+import { createAccount, getAccounts, getBanks, getDiscovered, updateAccount } from '../api/ledger'
 import { useWorkspaceStore } from '../store/workspace'
 import { AccountsPage } from './AccountsPage'
 
@@ -15,11 +15,13 @@ vi.mock('../api/ledger', () => ({
   getAccounts: vi.fn(),
   createAccount: vi.fn(),
   updateAccount: vi.fn(),
+  getBanks: vi.fn(),
+  getDiscovered: vi.fn(),
 }))
 
 const base: Account = {
   id: 'a1', name: 'Т-Банк', type: 'card', currency: 'RUB', is_archived: false,
-  balance: '4900.0000', reported_at: null, card_masks: [],
+  balance: '4900.0000', reported_at: null, card_masks: [], bank_code: null,
 }
 
 beforeEach(() => {
@@ -27,8 +29,13 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
-function renderPage(account: Account) {
-  vi.mocked(getAccounts).mockResolvedValue([account])
+function renderPage(accounts: Account[], discovered: DiscoveredAccount[] = []) {
+  vi.mocked(getAccounts).mockResolvedValue(accounts)
+  vi.mocked(getBanks).mockResolvedValue([
+    { code: 'tbank', name: 'Т-Банк' },
+    { code: 'alfa', name: 'Альфа-Банк' },
+  ])
+  vi.mocked(getDiscovered).mockResolvedValue(discovered)
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
     <MantineProvider>
@@ -40,7 +47,7 @@ function renderPage(account: Account) {
 }
 
 test('счёт с картами опознаётся по их последним цифрам', async () => {
-  renderPage({ ...base, card_masks: ['1234'] })
+  renderPage([{ ...base, card_masks: ['1234'] }])
 
   expect(await screen.findByText('•• 1234')).toBeDefined()
   // цифры заменяют тип, а не дополняют его: у всех карт банка тип одинаковый,
@@ -49,13 +56,13 @@ test('счёт с картами опознаётся по их последни
 })
 
 test('счёт без карт подписан своим типом', async () => {
-  renderPage({ ...base, name: 'Кошелёк', type: 'cash' })
+  renderPage([{ ...base, name: 'Кошелёк', type: 'cash' }])
 
   expect(await screen.findByText('Наличные')).toBeDefined()
 })
 
 test('счёту с остатком от источника правка остатка не предлагается', async () => {
-  renderPage({ ...base, card_masks: ['1234'], reported_at: '2026-09-03T10:15:00+03:00' })
+  renderPage([{ ...base, card_masks: ['1234'], reported_at: '2026-09-03T10:15:00+03:00' }])
 
   expect(await screen.findByText(/остаток на/)).toBeDefined()
   await userEvent.click(screen.getByRole('button', { name: 'Изменить' }))
@@ -67,7 +74,7 @@ test('счёту с остатком от источника правка ост
 })
 
 test('счёту без источника остаток правится вручную', async () => {
-  renderPage(base)
+  renderPage([base])
 
   await userEvent.click(await screen.findByRole('button', { name: 'Изменить' }))
   await userEvent.type(await screen.findByLabelText('Остаток'), '5100.50')
@@ -80,7 +87,7 @@ test('счёту без источника остаток правится вр�
 
 test('остаток с запятой уходит с точкой', async () => {
   // по-русски разделитель — запятая; осмысленное число не должно упираться в 422
-  renderPage(base)
+  renderPage([base])
 
   await userEvent.click(await screen.findByRole('button', { name: 'Изменить' }))
   await userEvent.type(await screen.findByLabelText('Остаток'), '5100,50')
@@ -94,7 +101,7 @@ test('остаток с запятой уходит с точкой', async () =
 test('отказ бэкенда в правке остатка виден человеку', async () => {
   // между загрузкой страницы и сохранением источник мог сообщить остаток —
   // тогда правка упирается в 409, и кнопка обязана это объяснить
-  renderPage(base)
+  renderPage([base])
   vi.mocked(updateAccount).mockRejectedValue(
     new ApiError(409, 'Остаток счёта приходит от источника'),
   )
@@ -104,4 +111,73 @@ test('отказ бэкенда в правке остатка виден чел
   await userEvent.click(screen.getByRole('button', { name: 'Сохранить' }))
 
   expect(await screen.findByText('Остаток счёта приходит от источника')).toBeDefined()
+})
+
+test('счета разложены по банкам', async () => {
+  renderPage([
+    { ...base, name: 'Т-карта', bank_code: 'tbank' },
+    { ...base, id: 'a2', name: 'Кошелёк', bank_code: null },
+  ])
+
+  expect(await screen.findByText('Т-Банк')).toBeDefined()
+  expect(await screen.findByText('Без банка')).toBeDefined()
+})
+
+test('счёт банка, который не ведётся, предлагается завести', async () => {
+  // без этого блока привязка невозможна: отпечаток человеку взять неоткуда
+  renderPage(
+    [],
+    [
+      {
+        fingerprint: 'a'.repeat(64),
+        bank_code: 'alfa',
+        bank_name: 'Альфа-Банк',
+        name: 'Текущий счёт',
+        currency: 'RUB',
+        balance: '1000.0000',
+        card_masks: ['1234'],
+      },
+    ],
+  )
+
+  expect(await screen.findByText(/есть в банке/i)).toBeDefined()
+  expect(await screen.findByText('Текущий счёт')).toBeDefined()
+  expect(await screen.findByText('•• 1234')).toBeDefined()
+})
+
+test('блока непривязанных нет, когда привязано всё', async () => {
+  // пустой заголовок — шум на экране, который человек учится пропускать
+  renderPage([{ ...base, name: 'Т-карта', bank_code: 'tbank' }], [])
+  expect(await screen.findByText('Т-Банк')).toBeDefined()
+  expect(screen.queryByText(/есть в банке/i)).toBeNull()
+})
+
+test('заведение счёта из непривязанного уходит с отпечатком банка', async () => {
+  // без отпечатка бэкенд не может отличить это заведение от обычного счёта
+  // руками — привязка молча не сработает
+  renderPage(
+    [],
+    [
+      {
+        fingerprint: 'a'.repeat(64),
+        bank_code: 'alfa',
+        bank_name: 'Альфа-Банк',
+        name: 'Текущий счёт',
+        currency: 'RUB',
+        balance: '1000.0000',
+        card_masks: ['1234'],
+      },
+    ],
+  )
+
+  await userEvent.click(await screen.findByRole('button', { name: 'Завести счёт' }))
+  await userEvent.click(await screen.findByRole('button', { name: 'Сохранить' }))
+
+  expect(createAccount).toHaveBeenCalledWith('ws-1', {
+    name: 'Текущий счёт',
+    type: 'card',
+    currency: 'RUB',
+    bank_code: 'alfa',
+    bank_account_fingerprint: 'a'.repeat(64),
+  })
 })
