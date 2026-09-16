@@ -6,8 +6,14 @@ import { accountFingerprint } from './fingerprint'
 
 // Тип своего счёта — словарь приложения, не банка. ACCOUNT_TYPES живёт на
 // фронте, в другом рантайме, и делить его с коллектором нечем — держим
-// короткую копию того же смысла здесь, а не общий файл ради трёх строк
-const ACCOUNT_TYPE_CODES = ['card', 'cash', 'savings'] as const
+// короткую копию того же смысла здесь, а не общий файл ради трёх строк.
+// Человеку показываем название, в приложение уезжает код: видеть в вопросе
+// "cash" вместо «Наличные» — значит читать чужой словарь вместо своего
+const ACCOUNT_TYPES = [
+  { code: 'card', label: 'Карта' },
+  { code: 'cash', label: 'Наличные' },
+  { code: 'savings', label: 'Накопления' },
+] as const
 
 export interface AskFns {
   ask(question: string): Promise<string>
@@ -119,13 +125,21 @@ export async function askAboutAccounts(
   return { declined }
 }
 
+function accountTitle(account: CollectedAccount): string {
+  return account.name.trim() !== '' ? account.name : '(без названия)'
+}
+
 // Остаток здесь — исключение из правила «в консоль только идентификаторы и
 // счётчики»: это единственный способ узнать свой счёт в списке, и вывод виден
 // только на машине владельца, а не в логах приложения.
 function describeCandidate(index: number, account: CollectedAccount): string {
   const masks = account.cardMasks.length > 0 ? account.cardMasks.map((m) => `•• ${m}`).join(', ') : null
-  const balance = account.balance ?? 'остаток не распознан'
-  const parts = [account.name || '(без названия)', masks, balance].filter((part): part is string => part !== null)
+  // остаток без валюты не читается: у владельца есть счета в рублях и долларах
+  const balance =
+    account.balance === null
+      ? 'остаток не сообщён'
+      : [account.balance, account.currency].filter((part) => part !== null).join(' ')
+  const parts = [accountTitle(account), masks, balance].filter((part): part is string => part !== null)
   return `  ${index + 1}. ${parts.join(' — ')}`
 }
 
@@ -152,11 +166,11 @@ async function resolveOneAccount(
   if (targetIndex !== null) {
     const target = appAccounts[targetIndex]!
     await deps.linkAppAccount(config, target.id, { bankCode: bank, fingerprint })
-    fns.print(`Привязан к счёту ${target.id}.`)
+    fns.print(`${accountTitle(account)} → «${target.name}»: привязан.`)
     return
   }
 
-  const type = await askAccountType(fns)
+  const type = await askAccountType(account, fns)
   const currency = account.currency ?? (await askCurrency(fns))
   const created = await deps.createAppAccount(config, {
     name: account.name.trim() !== '' ? account.name : `Счёт ${bank}`,
@@ -165,7 +179,7 @@ async function resolveOneAccount(
     bankCode: bank,
     fingerprint,
   } satisfies NewAppAccount)
-  fns.print(`Заведён счёт ${created.id}.`)
+  fns.print(`${accountTitle(account)}: заведён счёт ${created.id}.`)
 }
 
 /** null — заводим новый счёт; иначе — индекс в appAccounts, к которому привязываем. */
@@ -176,7 +190,7 @@ async function askLinkTarget(
 ): Promise<number | null> {
   if (appAccounts.length === 0) return null
 
-  fns.print(`${account.name || '(без названия)'}: привязать к существующему счёту или завести новый?`)
+  fns.print(`${accountTitle(account)}: привязать к существующему счёту или завести новый?`)
   fns.print('  0. Завести новый счёт')
   appAccounts.forEach((acc, i) => fns.print(`  ${i + 1}. ${acc.name}`))
 
@@ -191,14 +205,16 @@ async function askLinkTarget(
   }
 }
 
-async function askAccountType(fns: AskFns): Promise<string> {
-  fns.print('Тип счёта:')
-  ACCOUNT_TYPE_CODES.forEach((code, i) => fns.print(`  ${i + 1}. ${code}`))
+async function askAccountType(account: CollectedAccount, fns: AskFns): Promise<string> {
+  // счетов в разговоре бывает несколько, и вопрос без имени счёта заставляет
+  // вспоминать, про который из них спрашивают
+  fns.print(`${accountTitle(account)}: какой это тип счёта?`)
+  ACCOUNT_TYPES.forEach((type, i) => fns.print(`  ${i + 1}. ${type.label}`))
   for (;;) {
     const answer = (await fns.ask('> ')).trim()
     const n = Number(answer)
-    if (Number.isInteger(n) && n >= 1 && n <= ACCOUNT_TYPE_CODES.length) return ACCOUNT_TYPE_CODES[n - 1]!
-    fns.print(`Не разобрал ответ. Число от 1 до ${ACCOUNT_TYPE_CODES.length}.`)
+    if (Number.isInteger(n) && n >= 1 && n <= ACCOUNT_TYPES.length) return ACCOUNT_TYPES[n - 1]!.code
+    fns.print(`Не разобрал ответ. Число от 1 до ${ACCOUNT_TYPES.length}.`)
   }
 }
 
