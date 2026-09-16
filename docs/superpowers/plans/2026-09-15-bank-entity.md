@@ -931,6 +931,36 @@ async def test_account_created_from_seen_one_gets_bank(client: AsyncClient) -> N
     assert linked == {"a" * 64: created.json()["id"]}
 
 
+async def test_links_do_not_leak_between_workspaces(client: AsyncClient) -> None:
+    """Привязка — это ответ на вопрос «куда слать операции». Утёкшая в чужой
+    workspace, она отправила бы чужие операции на чужой счёт.
+
+    Тест заведён отдельно потому, что при исполнении Task 4 выяснилось: фильтр
+    по workspace в linked_bank_accounts не стерёг ни один тест — непустых
+    привязок в проверках не было вовсе.
+    """
+    alice_ws = await _workspace(client, ALICE)
+    await _sync(client, alice_ws, "alfa", [_seen("a" * 64, "Текущий счёт")])
+    created = await client.post(
+        "/api/accounts",
+        params={"workspace_id": alice_ws},
+        json={
+            "name": "Альфа карта",
+            "type": "card",
+            "currency": "RUB",
+            "bank_code": "alfa",
+            "bank_account_fingerprint": "a" * 64,
+        },
+    )
+    assert created.status_code == 201
+    await client.post("/api/auth/logout")
+
+    bob_ws = await _workspace(client, BOB)
+    # тот же счёт банка у другого человека: отпечаток совпадает, привязка — нет
+    linked = (await _sync(client, bob_ws, "alfa", [_seen("a" * 64, "Текущий счёт")])).json()
+    assert linked["linked"] == {}
+
+
 async def test_linked_account_gone_from_bank_is_not_returned(client: AsyncClient) -> None:
     """Счёт закрыли в банке, а в приложении он остался привязанным. Отдать его
     коллектору значит послать его за операциями несуществующего счёта — банк
@@ -2135,6 +2165,8 @@ cd frontend && pnpm test && pnpm lint && pnpm build
 | Дефект | Файл | Должен покраснеть |
 |---|---|---|
 | убрать фильтр по `bank_code` в `replace_discovered` | `backend/app/ledger/repository.py` | `test_other_bank_accounts_survive_sync` |
+| убрать фильтр по `workspace_id` в `list_discovered` | `backend/app/ledger/repository.py` | `test_seen_accounts_are_isolated_by_workspace` |
+| убрать фильтр по `workspace_id` в `linked_bank_accounts` | `backend/app/ledger/repository.py` | `test_links_do_not_leak_between_workspaces` |
 | убрать `if item.fingerprint not in linked` в `sync_discovered` | `backend/app/ledger/service.py` | `test_account_created_from_seen_one_gets_bank` |
 | не удалять `discovered` в `create_account` | `backend/app/ledger/service.py` | `test_second_account_on_same_bank_account_is_refused` |
 | вернуть `linked` без фильтра по `shown` | `backend/app/ledger/service.py` | `test_linked_account_gone_from_bank_is_not_returned` |
