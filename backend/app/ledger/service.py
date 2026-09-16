@@ -131,7 +131,7 @@ async def sync_discovered(
     Привязанные в «увиденные» не попадают: этот список отвечает ровно на один
     вопрос — что в банке есть, а в приложении нет.
     """
-    linked = await repository.linked_bank_accounts(db, workspace_id, bank_code)
+    already_linked = await repository.linked_bank_accounts(db, workspace_id, bank_code)
     await repository.replace_discovered(
         db,
         workspace_id,
@@ -147,7 +147,7 @@ async def sync_discovered(
                 card_masks=item.card_masks,
             )
             for item in seen
-            if item.fingerprint not in linked
+            if item.fingerprint not in already_linked
         ],
     )
     await db.commit()
@@ -155,7 +155,7 @@ async def sync_discovered(
     # отдаём: собирать по нему нечего, а запрос за его операциями закончился бы
     # ошибкой банка посреди сбора
     shown = {item.fingerprint for item in seen}
-    return {fp: account_id for fp, account_id in linked.items() if fp in shown}
+    return {fp: account_id for fp, account_id in already_linked.items() if fp in shown}
 
 
 async def list_discovered(db: AsyncSession, workspace_id: uuid.UUID) -> list[DiscoveredAccount]:

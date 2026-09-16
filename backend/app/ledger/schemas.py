@@ -2,7 +2,7 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, Field, field_serializer, field_validator
+from pydantic import BaseModel, Field, field_serializer, field_validator, model_validator
 
 from app.core.card_masks import MAX_CARD_MASKS, validate_card_masks
 from app.core.money import Money, MoneyStr, reject_float
@@ -54,6 +54,9 @@ class DiscoveredAccountIn(BaseModel):
     """
 
     fingerprint: str = Field(pattern=FINGERPRINT)
+    # пустое имя законно: банк не всегда даёт счёту название, и все три плагина
+    # подставляют пустую строку. Потребуй мы непустого — сбор падал бы целиком
+    # из-за счёта, который человек и так узнаёт по картам
     name: str = Field(max_length=200)
     # плагин не всегда распознаёт валюту, и это не повод скрывать счёт
     currency: str | None = Field(default=None, min_length=3, max_length=3)
@@ -73,6 +76,16 @@ class DiscoveredAccountIn(BaseModel):
 
 class DiscoveredSyncIn(BaseModel):
     accounts: list[DiscoveredAccountIn] = Field(max_length=MAX_DISCOVERED_ACCOUNTS)
+
+    @model_validator(mode="after")
+    def _unique_fingerprints(self) -> "DiscoveredSyncIn":
+        fingerprints = [item.fingerprint for item in self.accounts]
+        if len(fingerprints) != len(set(fingerprints)):
+            # один счёт банка дважды в одной пачке — баг коллектора; без этой
+            # проверки на него отвечал бы уникальный индекс, то есть 500 вместо
+            # названной причины. Так же устроен приём операций импорта
+            raise ValueError("повторяющийся отпечаток счёта в одном запросе")
+        return self
 
 
 class DiscoveredSyncOut(BaseModel):

@@ -117,6 +117,15 @@ async def test_balance_as_json_number_is_rejected(client: AsyncClient) -> None:
     assert resp.status_code == 422
 
 
+async def test_repeated_fingerprint_in_one_request_is_rejected(client: AsyncClient) -> None:
+    """Один счёт банка дважды в одной пачке — баг коллектора, и отвечать на него
+    должна схема, а не уникальный индекс: индекс даёт 500, из которого причина
+    не видна. Тот же приём стережёт повторяющийся external_id у операций."""
+    ws = await _workspace(client, ALICE)
+    resp = await _sync(client, ws, "alfa", [_seen("a" * 64, "Один"), _seen("a" * 64, "Два")])
+    assert resp.status_code == 422
+
+
 async def test_sync_does_not_wipe_another_workspace(client: AsyncClient) -> None:
     """Замена списка — это удаление, и оно обязано идти по своему workspace.
 
