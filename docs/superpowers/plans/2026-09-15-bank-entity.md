@@ -2231,4 +2231,294 @@ git push -u origin spec/bank-entity
 | §7.3 порядок сбора | Task 8 |
 | §8 экран | Task 9, Task 10 |
 | §9 проверки | Tasks 2, 4, 5, 6, 7, 9, 10; дефекты — Task 12 |
-| §11 привязка существующего счёта, устаревшие строки | сознательно не делаем: открытые вопросы спеки |
+| §11 устаревшие строки увиденного | сознательно не делаем: открытый вопрос спеки |
+| §11 привязка существующего счёта | Task 13 — дописана после исполнения, см. ниже |
+
+---
+
+## Task 13: Привязка уже заведённого счёта
+
+Дописано после исполнения основной работы. Спека §11 числила этот случай
+гипотетическим («если встретится»), но он оказался гарантированным: у владельца
+все счета настроены старой переменной окружения, и без привязки первый же сбор
+после обновления не находит ни одного счёта. Заводить вторые счета рядом со
+старыми значит разводить историю одного реального счёта по двум.
+
+**Files:**
+- Modify: `backend/app/ledger/schemas.py`, `service.py`, `router.py`
+- Modify: `frontend/src/api/ledger.ts`, `frontend/src/pages/AccountsPage.tsx`
+- Test: `backend/tests/test_bank_accounts.py`, `frontend/src/pages/AccountsPage.test.tsx`
+- Modify: `docs/reference/ledger.md`, `docs/backlog.md`, `collector/README.md`
+
+### Решение
+
+Отдельная ручка `POST /api/accounts/{account_id}/link`, а не поля в
+`AccountUpdate`. Причина: `AccountUpdate` меняет то, что человек правит в форме
+счёта (имя, архив, остаток), а привязка — разовое событие со своими отказами.
+Образец такой точечной ручки в проекте есть: `POST
+/counterparties/{id}/apply-category` (`backend/app/ledger/router.py:319`).
+
+Отказы:
+
+- счёта нет в этом workspace — 404;
+- отпечатка нет среди увиденных у этого банка в этом workspace — 404, та же
+  `DiscoveredNotFoundError`, что при создании;
+- у счёта уже есть отпечаток — 409. Перепривязка увела бы будущие операции на
+  другой счёт банка, а собранные раньше остались бы на этом, и оба факта были
+  бы не видны.
+
+Успех: у счёта проставляются банк и отпечаток, строка увиденного удаляется —
+одной транзакцией, как при создании.
+
+**Остаток не трогаем.** У привязанного счёта источник появится при первом же
+подтверждении импорта: `apply_reported_balance` запишет сообщённый остаток, и
+ручная поправка перестанет влиять сама собой — это уже описанное правило
+(`2026-09-03-account-balance-design.md`, §6), а не новое поведение.
+
+**Дедуп обязан сработать.** Операции, собранные до перехода, лежат на том же
+счёте с ключами `bank:<id операции>`. После привязки повторный сбор за тот же
+период принесёт те же ключи, и они обязаны попасть в дубли, а не задвоиться.
+Это главный смысл привязки, и он проверяется тестом, а не доверием.
+
+- [ ] **Step 1: Написать падающие тесты**
+
+Дописать в `backend/tests/test_bank_accounts.py`:
+
+```python
+async def _plain_account(client: AsyncClient, ws: str, name: str = "Старый счёт") -> str:
+    created = await client.post(
+        "/api/accounts",
+        params={"workspace_id": ws},
+        json={"name": name, "type": "card", "currency": "RUB"},
+    )
+    assert created.status_code == 201
+    return str(created.json()["id"])
+
+
+async def _link(
+    client: AsyncClient, ws: str, account_id: str, fingerprint: str, bank: str = "alfa"
+) -> Any:
+    return await client.post(
+        f"/api/accounts/{account_id}/link",
+        params={"workspace_id": ws},
+        json={"bank_code": bank, "bank_account_fingerprint": fingerprint},
+    )
+
+
+async def test_existing_account_can_be_linked(client: AsyncClient) -> None:
+    """Счёт, который вёлся до появления банков, привязывается к своему счёту в
+    банке — без этого переход означал бы второй счёт рядом со старым."""
+    ws = await _workspace(client, ALICE)
+    account_id = await _plain_account(client, ws)
+    await _sync(client, ws, "alfa", [_seen("a" * 64, "Текущий счёт")])
+
+    resp = await _link(client, ws, account_id, "a" * 64)
+    assert resp.status_code == 200
+    assert resp.json()["bank_code"] == "alfa"
+    assert resp.json()["is_bank_linked"] is True
+
+    # предлагать завести этот счёт больше нечего
+    assert (await client.get("/api/accounts/discovered", params={"workspace_id": ws})).json() == []
+    # и коллектор теперь знает, куда слать импорт
+    linked = (await _sync(client, ws, "alfa", [_seen("a" * 64, "Текущий счёт")])).json()["linked"]
+    assert linked == {"a" * 64: account_id}
+
+
+async def test_linking_twice_is_refused(client: AsyncClient) -> None:
+    """Перепривязка увела бы будущие операции на другой счёт банка, а
+    собранные раньше остались бы на этом — молча."""
+    ws = await _workspace(client, ALICE)
+    account_id = await _plain_account(client, ws)
+    await _sync(client, ws, "alfa", [_seen("a" * 64, "Первый"), _seen("b" * 64, "Второй")])
+    assert (await _link(client, ws, account_id, "a" * 64)).status_code == 200
+
+    again = await _link(client, ws, account_id, "b" * 64)
+    assert again.status_code == 409
+
+
+async def test_linking_to_unseen_fingerprint_is_refused(client: AsyncClient) -> None:
+    ws = await _workspace(client, ALICE)
+    account_id = await _plain_account(client, ws)
+    assert (await _link(client, ws, account_id, "c" * 64)).status_code == 404
+
+
+async def test_linking_another_workspace_account_is_refused(client: AsyncClient) -> None:
+    """Чужой счёт не привязывается к своему счёту банка."""
+    alice_ws = await _workspace(client, ALICE)
+    alice_account = await _plain_account(client, alice_ws)
+    await client.post("/api/auth/logout")
+
+    bob_ws = await _workspace(client, BOB)
+    await _sync(client, bob_ws, "alfa", [_seen("a" * 64, "Бобов счёт")])
+    assert (await _link(client, bob_ws, alice_account, "a" * 64)).status_code == 404
+```
+
+Плюс главный тест — про дедуп. Пути создания и подтверждения импорта сверить с
+`backend/app/imports/router.py` и с тем, как это делают существующие тесты в
+`backend/tests/test_imports_parsed.py`: **подставить существующие, а не
+изобретать**.
+
+```python
+async def test_reimport_after_linking_gives_duplicates_not_doubles(client: AsyncClient) -> None:
+    """Ради этого привязка и делается: операции, собранные до перехода, лежат
+    на том же счёте, и повторный сбор за тот же период обязан узнать их
+    дублями, а не задвоить деньги."""
+```
+
+Сценарий теста: завести счёт, прислать на него импорт коллектора с одной
+операцией и подтвердить; синхронизировать увиденные счета; привязать счёт;
+прислать тот же импорт ещё раз; убедиться, что в превью второго импорта
+операция помечена дублем, а число новых — ноль.
+
+- [ ] **Step 2: Прогнать и увидеть падение**
+
+```bash
+cd backend && uv run pytest tests/test_bank_accounts.py -v
+```
+
+- [ ] **Step 3: Схема тела**
+
+В `backend/app/ledger/schemas.py` рядом с `AccountCreate`:
+
+```python
+class AccountLink(BaseModel):
+    """Привязка уже заведённого счёта к счёту банка.
+
+    Отдельно от AccountUpdate: та меняет то, что человек правит в форме счёта,
+    а привязка — разовое событие со своими отказами.
+    """
+
+    bank_code: str = Field(pattern=BANK_CODE_PATTERN)
+    bank_account_fingerprint: str = Field(pattern=FINGERPRINT)
+```
+
+И в `AccountOut` — признак для интерфейса:
+
+```python
+    # привязан ли счёт к счёту банка: фронт предлагает привязывать только
+    # непривязанные. Сам отпечаток наружу не отдаём — он там не нужен
+    is_bank_linked: bool
+```
+
+- [ ] **Step 4: Сервис**
+
+В `backend/app/ledger/service.py` добавить исключение рядом с существующими:
+
+```python
+class AlreadyLinkedError(Exception):
+    """У счёта уже есть счёт банка — перепривязка увела бы операции молча."""
+```
+
+И саму привязку:
+
+```python
+async def link_account(
+    db: AsyncSession, workspace_id: uuid.UUID, account_id: uuid.UUID, payload: AccountLink
+) -> tuple[Account, Decimal]:
+    """Привязать заведённый счёт к счёту банка, который банк уже показал."""
+    account = await repository.get_account(db, workspace_id, account_id)
+    if account is None:
+        raise NotFoundError
+    if account.bank_account_fingerprint is not None:
+        raise AlreadyLinkedError
+    discovered = await repository.get_discovered(
+        db, workspace_id, payload.bank_code, payload.bank_account_fingerprint
+    )
+    if discovered is None:
+        raise DiscoveredNotFoundError
+    account.bank_code = payload.bank_code
+    account.bank_account_fingerprint = payload.bank_account_fingerprint
+    # строка отвечала «что в банке есть, а у нас нет»; ответ изменился
+    await db.delete(discovered)
+    await db.commit()
+    operations_sum = await repository.account_operations_sum(db, workspace_id, account_id)
+    return account, _visible_balance(account, operations_sum)
+```
+
+- [ ] **Step 5: Ручка**
+
+В `backend/app/ledger/router.py` после `update_account`:
+
+```python
+@router.post("/accounts/{account_id}/link")
+async def link_account(
+    account_id: uuid.UUID,
+    payload: AccountLink,
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> AccountOut:
+    try:
+        account, balance = await service.link_account(db, workspace_id, account_id, payload)
+    except service.NotFoundError:
+        raise HTTPException(status_code=404, detail="Счёт не найден") from None
+    except service.DiscoveredNotFoundError:
+        raise HTTPException(
+            status_code=404, detail="Счёт банка не найден среди увиденных"
+        ) from None
+    except service.AlreadyLinkedError:
+        raise HTTPException(status_code=409, detail="Счёт уже привязан к счёту банка") from None
+    return _account_out(account, balance)
+```
+
+В `_account_out` дописать `is_bank_linked=account.bank_account_fingerprint is not None`.
+
+- [ ] **Step 6: Прогон бэкенда**
+
+```bash
+cd backend && uv run ruff format . && uv run ruff check . && uv run mypy app && uv run pytest
+cd backend && uv run python scripts/gen_reference.py
+```
+
+- [ ] **Step 7: Фронт**
+
+`frontend/src/api/ledger.ts`: в `Account` добавить `is_bank_linked: boolean`;
+добавить функцию привязки (форму вызова скопировать с соседних):
+
+```typescript
+export function linkAccount(
+  workspaceId: string,
+  accountId: string,
+  body: { bank_code: string; bank_account_fingerprint: string },
+): Promise<Account>
+```
+
+`frontend/src/pages/AccountsPage.tsx`: у карточки непривязанного счёта рядом с
+«Завести счёт» — второе действие «Это мой счёт». Оно открывает окно с выбором
+из счетов, у которых `is_bank_linked === false`; выбор вызывает `linkAccount` и
+обновляет оба запроса (`accounts`, `discovered`). Если непривязанных счетов нет,
+действие не показывается: выбирать было бы не из чего.
+
+Тест в `AccountsPage.test.tsx`: у показанного банком счёта есть оба действия, и
+«Это мой счёт» уходит в `linkAccount` с отпечатком и банком именно этого счёта.
+
+- [ ] **Step 8: Прогон фронта**
+
+```bash
+cd frontend && pnpm test && pnpm lint && pnpm build
+```
+
+- [ ] **Step 9: Справочник и беклог**
+
+В `docs/reference/ledger.md`, раздел «Банк у счёта»: привязать можно и уже
+заведённый счёт; отпечаток у счёта не меняется, перепривязка отвергается. Из
+`docs/backlog.md` пункт про привязку существующего счёта убрать — он сделан. В
+`collector/README.md` заменить абзац про чистку и пересбор: переход теперь —
+привязка, а не заведение заново.
+
+- [ ] **Step 10: Проверка дефектами**
+
+| Дефект | Должен покраснеть |
+|---|---|
+| убрать проверку `account.bank_account_fingerprint is not None` | `test_linking_twice_is_refused` |
+| убрать проверку `discovered is None` | `test_linking_to_unseen_fingerprint_is_refused` |
+| не удалять строку увиденного при привязке | `test_existing_account_can_be_linked` |
+| убрать `workspace_id` из `get_account` в `link_account` | `test_linking_another_workspace_account_is_refused` |
+| принять повторный импорт как новый (сломать дедуп по `external_id`) | `test_reimport_after_linking_gives_duplicates_not_doubles` |
+
+- [ ] **Step 11: Коммит**
+
+```bash
+git add backend frontend docs collector/README.md
+git commit -m "Привязка заведённого счёта к счёту банка: переход без вторых счетов"
+```
