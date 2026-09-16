@@ -2141,7 +2141,12 @@ cd frontend && pnpm test && pnpm lint && pnpm build
 | убрать банк из строки отпечатка | `collector/src/runner/fingerprint.ts` | «одинаковые идентификаторы в разных банках дают разные отпечатки» |
 | отправлять `type: account.type` в теле | `collector/src/runner/discovered.ts` | «банковский тип счёта в приложение не отправляется» |
 | поставить группу «Без банка» первой | `frontend/src/lib/account.ts` | «счета без банка идут последней группой» |
-| снять частичность с уникального индекса | `backend/alembic/versions/0014_bank_on_account.py` | `test_one_bank_account_maps_to_one_app_account` (второй счёт без отпечатка перестанет создаваться) |
+| убрать `unique=True` у `uq_accounts_bank_fingerprint` | `backend/alembic/versions/0014_bank_on_account.py` | `test_one_bank_account_maps_to_one_app_account` |
+
+Снятие `postgresql_where` с этого индекса дефектом **не является** — проверено
+при исполнении Task 2: Postgres считает NULL различными, и счета без отпечатка
+не конфликтуют ни с частичным индексом, ни с обычным. Предикат здесь экономия и
+объявление намерения; правило держится на `unique=True`.
 
 Если какой-то тест на свой дефект не покраснел — он ничего не проверяет, и
 чинить надо тест, а не продолжать.
