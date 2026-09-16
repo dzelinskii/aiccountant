@@ -282,6 +282,9 @@ class DashboardAccount(BaseModel):
     # знака непонятны на любом экране, а дашборд обязан отдавать всё одним ответом
     reported_at: datetime | None
     card_masks: list[str]
+    # и по той же причине — банк: список счетов и дашборд обязаны раскладывать
+    # одни и те же счета одинаково
+    bank_code: str | None
 
 
 class MonthExpense(BaseModel):

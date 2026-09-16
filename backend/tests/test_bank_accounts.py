@@ -323,6 +323,51 @@ async def test_account_without_bank_still_works(client: AsyncClient) -> None:
     assert created.json()["bank_code"] is None
 
 
+async def test_cannot_link_to_another_workspace_seen_account(client: AsyncClient) -> None:
+    """Чужая увиденная строка не должна становиться чужим счётом.
+
+    Без фильтра по workspace при поиске увиденного сосед не только привязал бы
+    к себе чужой счёт банка, но и стёр бы строку у настоящего владельца —
+    тому просто перестало бы предлагаться завести свой счёт.
+    """
+    alice_ws = await _workspace(client, ALICE)
+    await _sync(client, alice_ws, "alfa", [_seen("a" * 64, "Алисин счёт")])
+    await client.post("/api/auth/logout")
+
+    bob_ws = await _workspace(client, BOB)
+    resp = await client.post(
+        "/api/accounts",
+        params={"workspace_id": bob_ws},
+        json={
+            "name": "Чужой счёт",
+            "type": "card",
+            "currency": "RUB",
+            "bank_code": "alfa",
+            "bank_account_fingerprint": "a" * 64,
+        },
+    )
+    assert resp.status_code == 404
+    await client.post("/api/auth/logout")
+
+    await client.post("/api/auth/login", json=ALICE)
+    rows = (await client.get("/api/accounts/discovered", params={"workspace_id": alice_ws})).json()
+    assert [row["name"] for row in rows] == ["Алисин счёт"]
+
+
+async def test_dashboard_account_carries_bank(client: AsyncClient) -> None:
+    """Список счетов и дашборд обязаны раскладывать счета одинаково, а значит
+    и банк дашборд отдаёт сам — иначе фронту пришлось бы сводить два ответа."""
+    ws = await _workspace(client, ALICE)
+    await client.post(
+        "/api/accounts",
+        params={"workspace_id": ws},
+        json={"name": "Сбер вклад", "type": "savings", "currency": "RUB", "bank_code": "sber"},
+    )
+    dashboard = await client.get("/api/dashboard", params={"workspace_id": ws})
+    assert dashboard.status_code == 200
+    assert [a["bank_code"] for a in dashboard.json()["accounts"]] == ["sber"]
+
+
 async def test_banks_dictionary_is_served(client: AsyncClient) -> None:
     """Названия банков живут в одном месте — в ядре; фронт берёт их отсюда."""
     await _workspace(client, ALICE)

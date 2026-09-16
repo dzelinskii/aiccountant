@@ -1060,6 +1060,7 @@ async def build_dashboard(db: AsyncSession, workspace_id: uuid.UUID) -> Dashboar
                 balance=bal,
                 reported_at=a.reported_at,
                 card_masks=a.card_masks,
+                bank_code=a.bank_code,
             )
             for a, bal in accounts
         ],
