@@ -1,9 +1,12 @@
+import { createInterface } from 'node:readline/promises'
 import { fileURLToPath } from 'node:url'
 import type { BankPlugin, CollectedAccount, Credentials } from '../core/contract'
 import { pluginFor } from '../plugins/registry'
 import { browserPrompt } from './browser'
 import { loadConfig, type CollectorConfig } from './config'
+import { readDeclined, rememberDeclined } from './declined'
 import { syncDiscovered } from './discovered'
+import { askAboutAccounts, decideCandidates } from './link-prompt'
 import { pushOperations } from './push'
 import { reportCollected } from './report'
 import { osSecretStore, type SecretStore } from './secret-store'
@@ -30,9 +33,24 @@ async function main(): Promise<void> {
 
   const credentials = await connect(plugin, store, pinnedSpki)
   const accounts = await plugin.fetchAccounts(credentials)
-  // какие счета вести, решает человек в приложении: здесь мы только
-  // рассказываем, что показал банк, и спрашиваем, куда слать импорты
-  const linked = await syncDiscovered(config, plugin.name, accounts)
+  // какие счета вести, решает человек: заранее в приложении или прямо здесь,
+  // в разговоре ниже — коллектор только рассказывает, что показал банк
+  let linked = await syncDiscovered(config, plugin.name, accounts)
+
+  const declined = await readDeclined(plugin.name)
+  // без терминала (будущий сбор по расписанию) спрашивать не у кого —
+  // decideCandidates про это знает и в этом случае просто молчит
+  const decision = decideCandidates(accounts, plugin.name, linked, declined, process.stdin.isTTY === true)
+
+  if (decision.kind === 'ask') {
+    const declinedNow = await conductLinkPrompt(config, plugin.name, decision.candidates)
+    if (declinedNow.length > 0) await rememberDeclined(plugin.name, declinedNow)
+    // разговор мог что-то привязать или завести — привязки собираем заново,
+    // чтобы продолжить сбор в этом же запуске, без второго pnpm collect
+    linked = await syncDiscovered(config, plugin.name, accounts)
+  } else if (decision.unboundCount > 0) {
+    console.log(`В банке ещё ${decision.unboundCount} счёт(ов) не ведётся.`)
+  }
 
   if (linked.size === 0) {
     console.log('Ни один счёт банка не привязан к счёту приложения.')
@@ -41,6 +59,28 @@ async function main(): Promise<void> {
   }
   await collect(config, plugin, credentials, accounts, linked)
   console.log('Готово. Подтвердите импорт в приложении.')
+}
+
+/**
+ * Своё окно терминала на разговор о счетах, закрывается сразу после него —
+ * не закрыть его значило бы держать stdin открытым, и процесс не завершился
+ * бы сам после сбора.
+ */
+async function conductLinkPrompt(
+  config: CollectorConfig,
+  bank: string,
+  candidates: readonly CollectedAccount[],
+): Promise<string[]> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout })
+  try {
+    const { declined } = await askAboutAccounts(config, bank, candidates, {
+      ask: (question) => rl.question(question),
+      print: (line) => console.log(line),
+    })
+    return declined
+  } finally {
+    rl.close()
+  }
 }
 
 /**
