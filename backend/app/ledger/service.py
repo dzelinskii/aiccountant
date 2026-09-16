@@ -46,6 +46,10 @@ class ReportedBalanceError(Exception):
     """У счёта есть остаток от источника — править его руками нельзя."""
 
 
+class DiscoveredNotFoundError(Exception):
+    """Счёт банка, от которого заводят счёт, не числится увиденным."""
+
+
 def _visible_balance(account: Account, operations_sum: Decimal) -> Decimal:
     """Остаток счёта: наружу отдаём его, а не сумму операций."""
     return visible_balance(account.reported_balance, account.balance_adjustment, operations_sum)
@@ -59,13 +63,30 @@ async def list_accounts(db: AsyncSession, workspace_id: uuid.UUID) -> list[tuple
 async def create_account(
     db: AsyncSession, workspace_id: uuid.UUID, payload: AccountCreate
 ) -> tuple[Account, Decimal]:
+    discovered = None
+    if payload.bank_account_fingerprint is not None:
+        # заводим только от того, что банк действительно показал: иначе в
+        # привязках появились бы отпечатки, которым ничего не соответствует,
+        # и коллектор молча собирал бы в никуда
+        assert payload.bank_code is not None  # обеспечено схемой AccountCreate
+        discovered = await repository.get_discovered(
+            db, workspace_id, payload.bank_code, payload.bank_account_fingerprint
+        )
+        if discovered is None:
+            raise DiscoveredNotFoundError
     account = Account(
         workspace_id=workspace_id,
         name=payload.name,
         type=payload.type,
         currency=payload.currency,
+        bank_code=payload.bank_code,
+        bank_account_fingerprint=payload.bank_account_fingerprint,
     )
     repository.add_account(db, account)
+    if discovered is not None:
+        # строка отвечала на вопрос «что в банке есть, а у нас нет»; ответ
+        # изменился, и держать её значит предлагать завести счёт дважды
+        await db.delete(discovered)
     await db.commit()
     return account, Decimal(0)
 

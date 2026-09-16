@@ -4,6 +4,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field, field_serializer, field_validator, model_validator
 
+from app.core.banks import BANK_CODE_PATTERN
 from app.core.card_masks import MAX_CARD_MASKS, validate_card_masks
 from app.core.money import Money, MoneyStr, reject_float
 
@@ -11,11 +12,27 @@ ACCOUNT_TYPES = "^(card|cash|savings)$"
 CATEGORY_KINDS = "^(income|expense)$"
 COUNTERPARTY_KINDS = "^(person|organization)$"
 
+# столько счетов не бывает ни у одного банка: ограничение отбивает пачку,
+# которая заведомо не про счета
+MAX_DISCOVERED_ACCOUNTS = 100
+FINGERPRINT = r"^[0-9a-f]{64}$"
+
 
 class AccountCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     type: str = Field(pattern=ACCOUNT_TYPES)
     currency: str = Field(default="RUB", min_length=3, max_length=3)
+    # банк необязателен: у наличных его нет. Отпечаток — только вместе с банком
+    # и только для счёта, который банк уже показал (см. service.create_account)
+    bank_code: str | None = Field(default=None, pattern=BANK_CODE_PATTERN)
+    bank_account_fingerprint: str | None = Field(default=None, pattern=FINGERPRINT)
+
+    @model_validator(mode="after")
+    def _fingerprint_needs_bank(self) -> "AccountCreate":
+        if self.bank_account_fingerprint is not None and self.bank_code is None:
+            # отпечаток считается от банка и без него не значит ничего
+            raise ValueError("отпечаток счёта банка без кода банка")
+        return self
 
 
 class AccountUpdate(BaseModel):
@@ -38,12 +55,13 @@ class AccountOut(BaseModel):
     reported_at: datetime | None
     # последние четыре цифры карт; пусто у счетов без карт
     card_masks: list[str]
+    # банк счёта; null — наличные или банк без плагина
+    bank_code: str | None
 
 
-# столько счетов не бывает ни у одного банка: ограничение отбивает пачку,
-# которая заведомо не про счета
-MAX_DISCOVERED_ACCOUNTS = 100
-FINGERPRINT = r"^[0-9a-f]{64}$"
+class BankOut(BaseModel):
+    code: str
+    name: str
 
 
 class DiscoveredAccountIn(BaseModel):

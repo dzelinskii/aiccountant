@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.banks import BANK_CODE_PATTERN, BANKS
 from app.core.db import get_db
-from app.identity.deps import require_workspace_member
+from app.identity.deps import get_current_user, require_workspace_member
 from app.identity.models import User
 from app.ledger import repository, service
 from app.ledger.models import Account, Counterparty, DiscoveredAccount, Transaction
@@ -16,6 +16,7 @@ from app.ledger.schemas import (
     AccountCreate,
     AccountOut,
     AccountUpdate,
+    BankOut,
     CategoryCreate,
     CategoryOut,
     CategoryUpdate,
@@ -52,6 +53,7 @@ def _account_out(account: Account, balance: Decimal) -> AccountOut:
         balance=balance,
         reported_at=account.reported_at,
         card_masks=account.card_masks,
+        bank_code=account.bank_code,
     )
 
 
@@ -105,7 +107,12 @@ async def create_account(
     _user: Annotated[User, Depends(require_workspace_member)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> AccountOut:
-    account, balance = await service.create_account(db, workspace_id, payload)
+    try:
+        account, balance = await service.create_account(db, workspace_id, payload)
+    except service.DiscoveredNotFoundError:
+        raise HTTPException(
+            status_code=404, detail="Счёт банка не найден среди увиденных"
+        ) from None
     return _account_out(account, balance)
 
 
@@ -505,6 +512,15 @@ async def delete_transaction(
         await service.delete_transaction(db, workspace_id, transaction_id)
     except service.NotFoundError:
         raise HTTPException(status_code=404, detail="Операция не найдена") from None
+
+
+@router.get("/banks")
+async def list_banks(
+    _user: Annotated[User, Depends(get_current_user)],
+) -> list[BankOut]:
+    """Словарь банков: код и человеческое название. Фронт своего списка не
+    держит — разъехались бы."""
+    return [BankOut(code=code, name=name) for code, name in BANKS.items()]
 
 
 @router.get("/dashboard")

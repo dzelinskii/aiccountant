@@ -161,3 +161,171 @@ async def test_seen_accounts_are_isolated_by_workspace(client: AsyncClient) -> N
 
     forbidden = await client.get("/api/accounts/discovered", params={"workspace_id": alice_ws})
     assert forbidden.status_code == 403
+
+
+async def test_account_created_from_seen_one_gets_bank(client: AsyncClient) -> None:
+    """Ради этого всё и делается: счёт заводится из показанного банком и
+    перестаёт быть безымянной строкой в env коллектора."""
+    ws = await _workspace(client, ALICE)
+    await _sync(client, ws, "alfa", [_seen("a" * 64, "Текущий счёт")])
+
+    created = await client.post(
+        "/api/accounts",
+        params={"workspace_id": ws},
+        json={
+            "name": "Альфа карта",
+            "type": "card",
+            "currency": "RUB",
+            "bank_code": "alfa",
+            "bank_account_fingerprint": "a" * 64,
+        },
+    )
+    assert created.status_code == 201
+    assert created.json()["bank_code"] == "alfa"
+
+    # счёт заведён — предлагать завести его второй раз больше нечего
+    assert (await client.get("/api/accounts/discovered", params={"workspace_id": ws})).json() == []
+
+    # а коллектор со следующего сбора знает, куда слать импорт
+    linked = (await _sync(client, ws, "alfa", [_seen("a" * 64, "Текущий счёт")])).json()["linked"]
+    assert linked == {"a" * 64: created.json()["id"]}
+
+
+async def test_links_do_not_leak_between_workspaces(client: AsyncClient) -> None:
+    """Привязка — это ответ на вопрос «куда слать операции». Утёкшая в чужой
+    workspace, она отправила бы чужие операции на чужой счёт.
+
+    Тест заведён отдельно потому, что при исполнении Task 4 выяснилось: фильтр
+    по workspace в linked_bank_accounts не стерёг ни один тест — непустых
+    привязок в проверках не было вовсе.
+    """
+    alice_ws = await _workspace(client, ALICE)
+    await _sync(client, alice_ws, "alfa", [_seen("a" * 64, "Текущий счёт")])
+    created = await client.post(
+        "/api/accounts",
+        params={"workspace_id": alice_ws},
+        json={
+            "name": "Альфа карта",
+            "type": "card",
+            "currency": "RUB",
+            "bank_code": "alfa",
+            "bank_account_fingerprint": "a" * 64,
+        },
+    )
+    assert created.status_code == 201
+    await client.post("/api/auth/logout")
+
+    bob_ws = await _workspace(client, BOB)
+    # тот же счёт банка у другого человека: отпечаток совпадает, привязка — нет
+    linked = (await _sync(client, bob_ws, "alfa", [_seen("a" * 64, "Текущий счёт")])).json()
+    assert linked["linked"] == {}
+
+
+async def test_linked_account_gone_from_bank_is_not_returned(client: AsyncClient) -> None:
+    """Счёт закрыли в банке, а в приложении он остался привязанным. Отдать его
+    коллектору значит послать его за операциями несуществующего счёта — банк
+    ответит ошибкой, и сбор встанет посреди работы."""
+    ws = await _workspace(client, ALICE)
+    await _sync(client, ws, "alfa", [_seen("a" * 64, "Текущий счёт")])
+    await client.post(
+        "/api/accounts",
+        params={"workspace_id": ws},
+        json={
+            "name": "Альфа карта",
+            "type": "card",
+            "currency": "RUB",
+            "bank_code": "alfa",
+            "bank_account_fingerprint": "a" * 64,
+        },
+    )
+
+    linked = (await _sync(client, ws, "alfa", [])).json()["linked"]
+    assert linked == {}
+
+
+async def test_second_account_on_same_bank_account_is_refused(client: AsyncClient) -> None:
+    """Два счёта приложения на один счёт банка развели бы операции по двум
+    местам. Первое заведение убирает счёт из увиденных, второе получает отказ."""
+    ws = await _workspace(client, ALICE)
+    await _sync(client, ws, "alfa", [_seen("a" * 64, "Текущий счёт")])
+    body = {
+        "name": "Альфа карта",
+        "type": "card",
+        "currency": "RUB",
+        "bank_code": "alfa",
+        "bank_account_fingerprint": "a" * 64,
+    }
+    assert (
+        await client.post("/api/accounts", params={"workspace_id": ws}, json=body)
+    ).status_code == 201
+
+    again = await client.post("/api/accounts", params={"workspace_id": ws}, json=body)
+    assert again.status_code == 404
+
+
+async def test_fingerprint_from_another_bank_is_refused(client: AsyncClient) -> None:
+    """Отпечаток считается от банка: тот же отпечаток под чужим банком — это
+    не тот счёт, и привязать его нельзя."""
+    ws = await _workspace(client, ALICE)
+    await _sync(client, ws, "alfa", [_seen("a" * 64, "Текущий счёт")])
+
+    resp = await client.post(
+        "/api/accounts",
+        params={"workspace_id": ws},
+        json={
+            "name": "Сбер карта",
+            "type": "card",
+            "currency": "RUB",
+            "bank_code": "sber",
+            "bank_account_fingerprint": "a" * 64,
+        },
+    )
+    assert resp.status_code == 404
+
+
+async def test_fingerprint_without_bank_is_refused(client: AsyncClient) -> None:
+    ws = await _workspace(client, ALICE)
+    resp = await client.post(
+        "/api/accounts",
+        params={"workspace_id": ws},
+        json={
+            "name": "Ничей",
+            "type": "card",
+            "currency": "RUB",
+            "bank_account_fingerprint": "a" * 64,
+        },
+    )
+    assert resp.status_code == 422
+
+
+async def test_manual_account_may_name_its_bank(client: AsyncClient) -> None:
+    """Счёт в банке без плагина ведётся руками, но в списке обязан стоять
+    рядом со своими: банк задаётся без всякого отпечатка."""
+    ws = await _workspace(client, ALICE)
+    created = await client.post(
+        "/api/accounts",
+        params={"workspace_id": ws},
+        json={"name": "Сбер вклад", "type": "savings", "currency": "RUB", "bank_code": "sber"},
+    )
+    assert created.status_code == 201
+    assert created.json()["bank_code"] == "sber"
+
+
+async def test_account_without_bank_still_works(client: AsyncClient) -> None:
+    """Наличные банка не имеют, и заведение счёта не должно этого требовать."""
+    ws = await _workspace(client, ALICE)
+    created = await client.post(
+        "/api/accounts",
+        params={"workspace_id": ws},
+        json={"name": "Кошелёк", "type": "cash", "currency": "RUB"},
+    )
+    assert created.status_code == 201
+    assert created.json()["bank_code"] is None
+
+
+async def test_banks_dictionary_is_served(client: AsyncClient) -> None:
+    """Названия банков живут в одном месте — в ядре; фронт берёт их отсюда."""
+    await _workspace(client, ALICE)
+    resp = await client.get("/api/banks")
+    assert resp.status_code == 200
+    assert {"code": "alfa", "name": "Альфа-Банк"} in resp.json()
