@@ -117,6 +117,27 @@ async def test_balance_as_json_number_is_rejected(client: AsyncClient) -> None:
     assert resp.status_code == 422
 
 
+async def test_sync_does_not_wipe_another_workspace(client: AsyncClient) -> None:
+    """Замена списка — это удаление, и оно обязано идти по своему workspace.
+
+    Без фильтра сбор одного человека стирал бы увиденные счета другого — и
+    молча: пострадавший увидел бы пустой список, а не ошибку. Изоляцию на
+    чтении стережёт соседний тест, но удаление — отдельная операция, и своей
+    проверки ей мало не бывает.
+    """
+    alice_ws = await _workspace(client, ALICE)
+    await _sync(client, alice_ws, "alfa", [_seen("a" * 64, "Алисин счёт")])
+    await client.post("/api/auth/logout")
+
+    bob_ws = await _workspace(client, BOB)
+    await _sync(client, bob_ws, "alfa", [_seen("b" * 64, "Бобов счёт")])
+    await client.post("/api/auth/logout")
+
+    await client.post("/api/auth/login", json=ALICE)
+    rows = (await client.get("/api/accounts/discovered", params={"workspace_id": alice_ws})).json()
+    assert [row["name"] for row in rows] == ["Алисин счёт"]
+
+
 async def test_seen_accounts_are_isolated_by_workspace(client: AsyncClient) -> None:
     """Утечка между workspace — критический баг, и увиденные счета не исключение:
     имя счёта и хвост карты говорят о человеке достаточно."""
