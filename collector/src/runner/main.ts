@@ -3,6 +3,7 @@ import type { BankPlugin, CollectedAccount, Credentials } from '../core/contract
 import { pluginFor } from '../plugins/registry'
 import { browserPrompt } from './browser'
 import { loadConfig, type CollectorConfig } from './config'
+import { syncDiscovered } from './discovered'
 import { pushOperations } from './push'
 import { reportCollected } from './report'
 import { osSecretStore, type SecretStore } from './secret-store'
@@ -29,13 +30,16 @@ async function main(): Promise<void> {
 
   const credentials = await connect(plugin, store, pinnedSpki)
   const accounts = await plugin.fetchAccounts(credentials)
+  // какие счета вести, решает человек в приложении: здесь мы только
+  // рассказываем, что показал банк, и спрашиваем, куда слать импорты
+  const linked = await syncDiscovered(config, plugin.name, accounts)
 
-  if (Object.keys(config.accountMap).length === 0) {
-    printAccountsHint(accounts, config.bank)
+  if (linked.size === 0) {
+    console.log('Ни один счёт банка не привязан к счёту приложения.')
+    console.log('Заведите нужные счета на экране «Счета» и запустите сбор снова.')
     return
   }
-  assertAccountsExist(config.accountMap, accounts)
-  await collect(config, plugin, credentials, accounts)
+  await collect(config, plugin, credentials, accounts, linked)
   console.log('Готово. Подтвердите импорт в приложении.')
 }
 
@@ -63,13 +67,17 @@ async function collect(
   plugin: BankPlugin,
   credentials: Credentials,
   accounts: readonly CollectedAccount[],
+  linked: ReadonlyMap<string, string>,
 ): Promise<void> {
   const until = Date.now()
   const since = until - config.days * DAY_MS
 
-  for (const [bankAccountId, appAccountId] of Object.entries(config.accountMap)) {
-    const operations = await plugin.fetchOperations(credentials, bankAccountId, since, until)
-    const account = accounts.find((item) => item.id === bankAccountId)
+  for (const account of accounts) {
+    const appAccountId = linked.get(account.id)
+    // счёт банка, который человек не завёл: не ошибка, а обычное дело —
+    // из двенадцати счетов в приложении ведётся часть
+    if (!appAccountId) continue
+    const operations = await plugin.fetchOperations(credentials, account.id, since, until)
     const result = await pushOperations(config, plugin.name, appAccountId, operations, account)
     // в консоль только идентификаторы и счётчики: ни сумм, ни описаний
     console.log(
@@ -81,29 +89,6 @@ async function collect(
     // вторая копия разошлась бы с первой
     reportCollected(appAccountId, operations)
   }
-}
-
-// Разовая подсказка человеку на его же машине: идентификаторы счетов банка
-// взять больше неоткуда. Названия здесь уместны, остатки не печатаем
-function printAccountsHint(accounts: readonly CollectedAccount[], bank: string): void {
-  console.log('Счета в банке:')
-  for (const account of accounts) {
-    console.log(`  ${account.id}  ${account.currency ?? 'валюта не распознана'}  ${account.name}`)
-  }
-  console.log('')
-  console.log(`Задайте AICCOUNTANT_ACCOUNTS_${bank.toUpperCase()} — соответствие счетов банка счетам приложения:`)
-  const example = accounts[0]?.id ?? '<счёт банка>'
-  console.log(`  AICCOUNTANT_ACCOUNTS_${bank.toUpperCase()}='{"${example}":"<uuid счёта в приложении>"}'`)
-}
-
-function assertAccountsExist(accountMap: Record<string, string>, accounts: readonly CollectedAccount[]): void {
-  const known = new Set(accounts.map((account) => account.id))
-  const unknown = Object.keys(accountMap).filter((id) => !known.has(id))
-  if (unknown.length === 0) return
-  throw new Error(
-    `В списке счетов указаны те, которых у банка нет: ${unknown.join(', ')}. ` +
-      'Список счетов банка печатается при пустом списке.',
-  )
 }
 
 await main()

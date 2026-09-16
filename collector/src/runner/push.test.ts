@@ -8,7 +8,6 @@ const CONFIG: CollectorConfig = {
   apiBaseUrl: 'http://app.local',
   apiToken: 'secret-token',
   workspaceId: 'ws-1',
-  accountMap: {},
   days: 30,
   bank: 'tbank',
 }
@@ -179,7 +178,6 @@ test('имя парсера собирается из имени банка', as
     apiBaseUrl: 'http://localhost:8000',
     apiToken: 'token',
     workspaceId: '00000000-0000-0000-0000-000000000000',
-    accountMap: {},
     days: 30,
     bank: 'sber',
   }
