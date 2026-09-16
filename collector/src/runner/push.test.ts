@@ -33,6 +33,7 @@ const ACCOUNT: CollectedAccount = {
   type: 'Current',
   currency: 'RUB',
   balance: '10000.50',
+  creditLimit: null,
   cardMasks: ['1234'],
 }
 
@@ -86,6 +87,35 @@ test('остаток и метки карт уходят блоком про с�
 
   // имена полей — как в договоре API: card_masks, а не cardMasks
   expect(sentBody(fetchImpl)['account']).toEqual({ balance: '10000.50', card_masks: ['1234'] })
+  // у счёта без лимита ключа нет вовсе, а не лежит null: форма сохранённого
+  // разбора у дебетовых счетов остаётся такой же, какой была до лимитов
+  expect(sentBody(fetchImpl)['account']).not.toHaveProperty('credit_limit')
+})
+
+test('кредитный лимит уезжает вместе с остатком', async () => {
+  // стык, на котором поле теряется молча: тело собирается вручную, и лимит без
+  // остатка «доступно к трате» не даёт — приложению нужна пара одного сбора
+  const fetchImpl = vi.fn<FetchImpl>(async () => jsonResponse({ import_id: 'imp-1', status: 'ready' }, 201))
+
+  const credit: CollectedAccount = { ...ACCOUNT, balance: '-148063.81', creditLimit: '150000.00' }
+  await pushOperations(CONFIG, 'sber', 'acc-app', OPERATIONS, credit, fetchImpl)
+
+  expect(sentBody(fetchImpl)['account']).toEqual({
+    balance: '-148063.81',
+    credit_limit: '150000.00',
+    card_masks: ['1234'],
+  })
+})
+
+test('лимит без остатка не отправляется отдельно', async () => {
+  // блок про счёт держится на остатке: лимит сам по себе бэкенду не нужен, а
+  // блок без остатка он отвергает вместе со всеми операциями
+  const fetchImpl = vi.fn<FetchImpl>(async () => jsonResponse({ import_id: 'imp-1', status: 'ready' }, 201))
+
+  const credit: CollectedAccount = { ...ACCOUNT, balance: null, creditLimit: '150000.00' }
+  await pushOperations(CONFIG, 'sber', 'acc-app', OPERATIONS, credit, fetchImpl)
+
+  expect(sentBody(fetchImpl)['account']).toBeUndefined()
 })
 
 test('без остатка блок про счёт не отправляется', async () => {

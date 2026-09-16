@@ -1,5 +1,6 @@
 import { hintFromMcc } from '../../core/category-hints'
 import type { CollectedAccount, CollectedOperation } from '../../core/contract'
+import { subtractDecimal } from '../../core/money'
 
 /**
  * Отображение ответа Альфа-Банка в нашу модель. Вход — результат parseLossless,
@@ -217,6 +218,7 @@ export function toAccounts(rawAccounts: readonly unknown[], rawCards: readonly u
       type: getStr(item, 'type') ?? '',
       currency: accountCurrency(item),
       balance: accountBalance(item),
+      creditLimit: accountCreditLimit(item),
       cardMasks: masksByAccount.get(number) ?? [],
     })
   }
@@ -239,11 +241,35 @@ function isExcludedAccount(item: Record<string, unknown>): boolean {
 // холды) и показал бы заёмные деньги как собственные. У дебетового счёта
 // amount == total, так что для него выбор безразличен, — берём total всегда.
 function accountBalance(item: Record<string, unknown>): string | null {
-  const block = getRecord(item, 'total')
+  return blockValue(getRecord(item, 'total'))
+}
+
+function blockValue(block: Record<string, unknown> | undefined): string | null {
   const value = block ? getStr(block, 'value') : undefined
   const minorUnits = block ? getStr(block, 'minorUnits') : undefined
   if (value === undefined || minorUnits === undefined) return null
   return signedMinor(value, minorUnits)
+}
+
+/**
+ * Кредитный лимит выводится вычитанием: прямого поля у Альфы нет.
+ *
+ * `amount` у кредитки — доступно к трате, то есть `лимит + собственные − холды`,
+ * а `total` — чистая позиция, `собственные − холды`. В разности холды
+ * сокращаются и остаётся лимит. Проверено на живой карте:
+ * 1975.00 − (−51025.00) = 53000.00.
+ *
+ * Только у счёта кредитной карты: у дебетового `amount == total`, и без этой
+ * проверки каждый счёт получил бы лимит 0.00 — число, от настоящего
+ * неотличимое. Признак — `properties.creditCardAccount`, а не код типа `EG`:
+ * код мы знаем с одной разведки, а флаг называет ровно то, что нам нужно.
+ */
+function accountCreditLimit(item: Record<string, unknown>): string | null {
+  if (getRecord(item, 'properties')?.['creditCardAccount'] !== true) return null
+  const available = blockValue(getRecord(item, 'amount'))
+  const own = blockValue(getRecord(item, 'total'))
+  if (available === null || own === null) return null
+  return subtractDecimal(available, own)
 }
 
 // Валюта — свойство счёта; берём из total, а если там негодно — из amount:

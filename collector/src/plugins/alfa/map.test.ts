@@ -137,9 +137,11 @@ function accountsFrom(accountsJson: string, cardsJson: string) {
 
 const ACCOUNTS = `{"accounts":[
   {"number":"40817810000000002905","description":"Текущий счёт","type":"EE",
+   "properties":{"creditCardAccount":false,"mainAccount":true},
    "amount":{"value":42600000,"currency":"RUR","minorUnits":100},
    "total":{"value":42600000,"currency":"RUR","minorUnits":100}},
   {"number":"40817810000000000686","description":"Счёт кредитной карты","type":"EG",
+   "properties":{"creditCardAccount":true,"mainAccount":false},
    "amount":{"value":197500,"currency":"RUR","minorUnits":100},
    "total":{"value":-5102500,"currency":"RUR","minorUnits":100}},
   {"number":"30601810000000002618","description":"Брокерский счёт МБ ВР","type":"GK",
@@ -168,6 +170,41 @@ test('остаток кредитки берётся из total (минус пр
   // total = -51025.00 (долг), amount = 1975.00 (доступно к трате). Взяв amount,
   // мы показали бы заёмные деньги как собственные — тест это стережёт
   expect(credit?.balance).toBe('-51025.00')
+})
+
+test('кредитный лимит выводится вычитанием: amount − total', () => {
+  const credit = accountsFrom(ACCOUNTS, CARDS).find((a) => a.id === '40817810000000000686')
+  // живые числа разведки: 1975.00 − (−51025.00) = 53000.00
+  expect(credit?.creditLimit).toBe('53000.00')
+})
+
+test('холды в выводе лимита сокращаются', () => {
+  // amount = лимит + собственные − холды, total = собственные − холды: холды
+  // должны уйти из разности. Проверка самой формулы, а не арифметики
+  const withHolds = `{"accounts":[
+    {"number":"1","description":"Кредитка","type":"EG",
+     "properties":{"creditCardAccount":true},
+     "holds":{"value":30000,"currency":"RUR","minorUnits":100},
+     "amount":{"value":167500,"currency":"RUR","minorUnits":100},
+     "total":{"value":-5132500,"currency":"RUR","minorUnits":100}}
+  ]}`
+  expect(accountsFrom(withHolds, `{"cards":[]}`)[0]?.creditLimit).toBe('53000.00')
+})
+
+test('у дебетового счёта лимита нет, а не ноль', () => {
+  // без проверки признака кредитки каждый счёт получил бы 0.00 — число, от
+  // настоящего лимита неотличимое
+  const current = accountsFrom(ACCOUNTS, CARDS).find((a) => a.id === '40817810000000002905')
+  expect(current?.creditLimit).toBeNull()
+})
+
+test('счёт без блока amount лимита не получает', () => {
+  const noAmount = `{"accounts":[
+    {"number":"1","description":"Кредитка","type":"EG",
+     "properties":{"creditCardAccount":true},
+     "total":{"value":-5102500,"currency":"RUR","minorUnits":100}}
+  ]}`
+  expect(accountsFrom(noAmount, `{"cards":[]}`)[0]?.creditLimit).toBeNull()
 })
 
 test('брокерские (GK) и мультивалютный дубль номера исключены — id остаются уникальными', () => {

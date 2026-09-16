@@ -210,6 +210,7 @@ function toAccount(item: unknown, creditByCard: CreditInfoByCard): CollectedAcco
     type: getStr(item, 'type') ?? '',
     currency: cardCurrency(item),
     balance: cardBalance(item, id, creditByCard),
+    creditLimit: cardCreditLimit(item, id, creditByCard),
     cardMasks: cardMask(item),
   }
 }
@@ -263,6 +264,21 @@ function cardBalance(item: Record<string, unknown>, id: string, creditByCard: Cr
   // «банк не сообщил». null честнее — остаток просто не показывается
   if (own === null || debt === null) return null
   return subtractDecimal(own, debt)
+}
+
+/**
+ * Кредитный лимит карты. Приходит тем же блоком creditType, что и долг, — то
+ * есть той же ручкой cardInfo: нового запроса не нужно.
+ *
+ * Только у кредитной карты: у дебетовой блока creditType нет, а незнакомый тип
+ * (kind === 'unknown') не считается кредитным по той же причине, что и в
+ * cardBalance — догадка один раз назвала бы лимитом чужое число.
+ */
+function cardCreditLimit(item: Record<string, unknown>, id: string, creditByCard: CreditInfoByCard): string | null {
+  if (cardTypeKind(item) !== 'credit') return null
+  const credit = creditByCard.get(id)
+  if (!isRecord(credit)) return null
+  return moneyAmount(getRecord(credit, 'creditLimit'))
 }
 
 function moneyAmount(block: Record<string, unknown> | undefined): string | null {

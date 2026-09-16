@@ -456,9 +456,10 @@ test('toAccounts приводит счета к нашей модели', () => 
       type: 'Current',
       currency: 'RUB',
       balance: '10000.50',
+      creditLimit: null,
       cardMasks: ['1234'],
     },
-    { id: 'acc-2', name: 'Накопительный', type: 'Saving', currency: 'RUB', balance: '500', cardMasks: [] },
+    { id: 'acc-2', name: 'Накопительный', type: 'Saving', currency: 'RUB', balance: '500', creditLimit: null, cardMasks: [] },
   ])
 })
 
@@ -475,8 +476,8 @@ test('счёт с незнакомым числовым кодом валюты 
     { id: 'acc-1', name: 'Счёт для трат', accountType: 'Current', currency: { strCode: '643' } },
   ])
   expect(accounts).toEqual([
-    { id: 'acc-x', name: 'Валютный счёт', type: 'Current', currency: null, balance: null, cardMasks: [] },
-    { id: 'acc-1', name: 'Счёт для трат', type: 'Current', currency: 'RUB', balance: null, cardMasks: [] },
+    { id: 'acc-x', name: 'Валютный счёт', type: 'Current', currency: null, balance: null, creditLimit: null, cardMasks: [] },
+    { id: 'acc-1', name: 'Счёт для трат', type: 'Current', currency: 'RUB', balance: null, creditLimit: null, cardMasks: [] },
   ])
 })
 
@@ -539,6 +540,30 @@ test('кредитка без лимита даёт остаток null, а не
   delete withoutLimit['creditLimit']
   const [account] = toAccounts([withoutLimit])
   expect(account?.balance).toBeNull()
+})
+
+test('кредитный лимит карты собирается строкой', () => {
+  const [account] = toAccounts([creditCard()])
+  expect(account?.creditLimit).toBe('142000.00')
+})
+
+test('лимит собирается и при другом регистре типа счёта', () => {
+  const [account] = toAccounts([creditCard({ accountType: 'CREDIT' })])
+  expect(account?.creditLimit).toBe('142000.00')
+})
+
+test('у обычного счёта лимита нет, даже если поле пришло', () => {
+  // сторож против «взять creditLimit у всех подряд»: лимит дебетовой карты
+  // приложение показало бы как «сколько можно потратить в долг»
+  const [account] = toAccounts([baseAccount({ creditLimit: { value: '999.00', currency: { strCode: '643' } } })])
+  expect(account?.creditLimit).toBeNull()
+})
+
+test('кредитка без поля лимита отдаёт лимит null', () => {
+  const withoutLimit = creditCard()
+  delete withoutLimit['creditLimit']
+  const [account] = toAccounts([withoutLimit])
+  expect(account?.creditLimit).toBeNull()
 })
 
 test('обычный счёт пересчёт не затрагивает — остаток как прислал банк', () => {
