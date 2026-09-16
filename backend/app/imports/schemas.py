@@ -1,4 +1,3 @@
-import re
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
@@ -6,6 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.core.card_masks import MAX_CARD_MASKS, validate_card_masks
 from app.core.category_hints import CategoryHint
 from app.core.money import Money, MoneyStr, reject_float
 from app.core.operation_kinds import OperationKind
@@ -116,12 +116,6 @@ class ParsedOperationIn(BaseModel):
 MAX_PARSED_OPERATIONS = 25_000
 
 
-CARD_MASK = r"^[0-9]{4}$"
-# счёт с десятком карт — уже нечто иное, чем домашний счёт; ограничение здесь
-# затем же, зачем MAX_PARSED_OPERATIONS: предсказуемость размера тела запроса
-MAX_CARD_MASKS = 10
-
-
 class ParsedAccountIn(BaseModel):
     """Что источник знает о самом счёте на момент сбора.
 
@@ -140,13 +134,7 @@ class ParsedAccountIn(BaseModel):
     @field_validator("card_masks")
     @classmethod
     def _masks_are_four_digits(cls, value: list[str]) -> list[str]:
-        for mask in value:
-            # хранить кусок номера карты сверх последних четырёх цифр мы не
-            # собираемся, а укороченная метка не опознаёт счёт — и то и другое
-            # означает баг коллектора
-            if not re.fullmatch(CARD_MASK, mask):
-                raise ValueError("метка карты — ровно четыре цифры")
-        return value
+        return validate_card_masks(value)
 
 
 class ParsedImportIn(BaseModel):

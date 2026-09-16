@@ -1,10 +1,10 @@
-import re
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, Field, field_serializer, field_validator
 
+from app.core.card_masks import MAX_CARD_MASKS, validate_card_masks
 from app.core.money import Money, MoneyStr, reject_float
 
 ACCOUNT_TYPES = "^(card|cash|savings)$"
@@ -44,8 +44,6 @@ class AccountOut(BaseModel):
 # которая заведомо не про счета
 MAX_DISCOVERED_ACCOUNTS = 100
 FINGERPRINT = r"^[0-9a-f]{64}$"
-CARD_MASK = r"^[0-9]{4}$"
-MAX_CARD_MASKS = 10
 
 
 class DiscoveredAccountIn(BaseModel):
@@ -70,12 +68,7 @@ class DiscoveredAccountIn(BaseModel):
     @field_validator("card_masks")
     @classmethod
     def _masks_are_four_digits(cls, value: list[str]) -> list[str]:
-        for mask in value:
-            # хранить кусок номера карты сверх последних четырёх цифр мы не
-            # собираемся, а укороченная метка счёт не опознаёт
-            if not re.fullmatch(CARD_MASK, mask):
-                raise ValueError("метка карты — ровно четыре цифры")
-        return value
+        return validate_card_masks(value)
 
 
 class DiscoveredSyncIn(BaseModel):
