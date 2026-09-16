@@ -15,13 +15,9 @@ def test_bank_code_pattern_anchors() -> None:
     и vtbank, sber2, tbank_unknown будут приняты за знакомые. Якоря гарантируют,
     что совпадает вся строка целиком, а не её часть: это единственное, что мешает
     незнакомому коду молча записаться в базу."""
-    # Каждый кодовый имя принимается
     for code in BANK_CODES:
-        assert re.search(BANK_CODE_PATTERN, code), f"Кода {code} должны принять"
+        assert re.search(BANK_CODE_PATTERN, code), f"знакомый код {code} обязан проходить"
 
-    # Похожие, но чужие строки отвергаются
-    invalid_codes = ["vtb", "vtbank", "sber2", "tbank sber", ""]
-    for invalid in invalid_codes:
-        assert not re.search(BANK_CODE_PATTERN, invalid), (
-            f"Чужой код {invalid!r} не должен быть принят"
-        )
+    # похожие, но чужие: без якорей каждая из этих строк прошла бы по подстроке
+    for alien in ("vtb", "vtbank", "sber2", "tbank sber", ""):
+        assert not re.search(BANK_CODE_PATTERN, alien), f"чужой код {alien!r} не должен проходить"
