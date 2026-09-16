@@ -37,6 +37,13 @@ class AccountOut(BaseModel):
     reported_at: datetime | None
     # последние четыре цифры карт; пусто у счетов без карт
     card_masks: list[str]
+    # кредитный лимит и момент, когда его в последний раз называл банк; пусто —
+    # лимита у счёта не наблюдали
+    credit_limit: MoneyStr | None
+    credit_limit_at: datetime | None
+    # сколько можно потратить: лимит плюс остаток. Пусто — лимит и остаток
+    # известны на разные моменты, и считать их вместе значило бы соврать
+    credit_available: MoneyStr | None
 
 
 class CategoryCreate(BaseModel):
@@ -199,6 +206,9 @@ class DashboardAccount(BaseModel):
     # знака непонятны на любом экране, а дашборд обязан отдавать всё одним ответом
     reported_at: datetime | None
     card_masks: list[str]
+    credit_limit: MoneyStr | None
+    credit_limit_at: datetime | None
+    credit_available: MoneyStr | None
 
 
 class MonthExpense(BaseModel):
