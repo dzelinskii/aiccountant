@@ -14,6 +14,7 @@ from app.ledger import repository, service
 from app.ledger.models import Account, Counterparty, DiscoveredAccount, Transaction
 from app.ledger.schemas import (
     AccountCreate,
+    AccountLink,
     AccountOut,
     AccountUpdate,
     BankOut,
@@ -54,6 +55,7 @@ def _account_out(account: Account, balance: Decimal) -> AccountOut:
         reported_at=account.reported_at,
         card_masks=account.card_masks,
         bank_code=account.bank_code,
+        is_bank_linked=account.bank_account_fingerprint is not None,
     )
 
 
@@ -130,6 +132,27 @@ async def update_account(
         raise HTTPException(status_code=404, detail="Счёт не найден") from None
     except service.ReportedBalanceError:
         raise HTTPException(status_code=409, detail="Остаток счёта приходит от источника") from None
+    return _account_out(account, balance)
+
+
+@router.post("/accounts/{account_id}/link")
+async def link_account(
+    account_id: uuid.UUID,
+    payload: AccountLink,
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> AccountOut:
+    try:
+        account, balance = await service.link_account(db, workspace_id, account_id, payload)
+    except service.NotFoundError:
+        raise HTTPException(status_code=404, detail="Счёт не найден") from None
+    except service.DiscoveredNotFoundError:
+        raise HTTPException(
+            status_code=404, detail="Счёт банка не найден среди увиденных"
+        ) from None
+    except service.AlreadyLinkedError:
+        raise HTTPException(status_code=409, detail="Счёт уже привязан к счёту банка") from None
     return _account_out(account, balance)
 
 

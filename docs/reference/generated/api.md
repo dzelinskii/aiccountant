@@ -9,6 +9,7 @@ API **не версионирован**: все пути живут под `/api
 - `GET /api/accounts/discovered` — отвечает списком `DiscoveredAccountOut`
 - `PUT /api/accounts/discovered` — принимает `DiscoveredSyncIn`, отвечает `DiscoveredSyncOut`
 - `PATCH /api/accounts/{account_id}` — принимает `AccountUpdate`, отвечает `AccountOut`
+- `POST /api/accounts/{account_id}/link` — принимает `AccountLink`, отвечает `AccountOut`
 - `POST /api/auth/login` — принимает `LoginIn`, отвечает `UserOut`
 - `POST /api/auth/logout`
 - `POST /api/auth/register` — принимает `RegisterIn`, отвечает `UserOut`

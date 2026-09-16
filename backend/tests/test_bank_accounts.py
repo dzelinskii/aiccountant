@@ -374,3 +374,117 @@ async def test_banks_dictionary_is_served(client: AsyncClient) -> None:
     resp = await client.get("/api/banks")
     assert resp.status_code == 200
     assert {"code": "alfa", "name": "Альфа-Банк"} in resp.json()
+
+
+async def _plain_account(client: AsyncClient, ws: str, name: str = "Старый счёт") -> str:
+    created = await client.post(
+        "/api/accounts",
+        params={"workspace_id": ws},
+        json={"name": name, "type": "card", "currency": "RUB"},
+    )
+    assert created.status_code == 201
+    return str(created.json()["id"])
+
+
+async def _link(
+    client: AsyncClient, ws: str, account_id: str, fingerprint: str, bank: str = "alfa"
+) -> Any:
+    return await client.post(
+        f"/api/accounts/{account_id}/link",
+        params={"workspace_id": ws},
+        json={"bank_code": bank, "bank_account_fingerprint": fingerprint},
+    )
+
+
+async def test_existing_account_can_be_linked(client: AsyncClient) -> None:
+    """Счёт, который вёлся до появления банков, привязывается к своему счёту в
+    банке — без этого переход означал бы второй счёт рядом со старым."""
+    ws = await _workspace(client, ALICE)
+    account_id = await _plain_account(client, ws)
+    await _sync(client, ws, "alfa", [_seen("a" * 64, "Текущий счёт")])
+
+    resp = await _link(client, ws, account_id, "a" * 64)
+    assert resp.status_code == 200
+    assert resp.json()["bank_code"] == "alfa"
+    assert resp.json()["is_bank_linked"] is True
+
+    # предлагать завести этот счёт больше нечего
+    assert (await client.get("/api/accounts/discovered", params={"workspace_id": ws})).json() == []
+    # и коллектор теперь знает, куда слать импорт
+    linked = (await _sync(client, ws, "alfa", [_seen("a" * 64, "Текущий счёт")])).json()["linked"]
+    assert linked == {"a" * 64: account_id}
+
+
+async def test_linking_twice_is_refused(client: AsyncClient) -> None:
+    """Перепривязка увела бы будущие операции на другой счёт банка, а
+    собранные раньше остались бы на этом — молча."""
+    ws = await _workspace(client, ALICE)
+    account_id = await _plain_account(client, ws)
+    await _sync(client, ws, "alfa", [_seen("a" * 64, "Первый"), _seen("b" * 64, "Второй")])
+    assert (await _link(client, ws, account_id, "a" * 64)).status_code == 200
+
+    again = await _link(client, ws, account_id, "b" * 64)
+    assert again.status_code == 409
+
+
+async def test_linking_to_unseen_fingerprint_is_refused(client: AsyncClient) -> None:
+    ws = await _workspace(client, ALICE)
+    account_id = await _plain_account(client, ws)
+    assert (await _link(client, ws, account_id, "c" * 64)).status_code == 404
+
+
+async def test_linking_another_workspace_account_is_refused(client: AsyncClient) -> None:
+    """Чужой счёт не привязывается к своему счёту банка."""
+    alice_ws = await _workspace(client, ALICE)
+    alice_account = await _plain_account(client, alice_ws)
+    await client.post("/api/auth/logout")
+
+    bob_ws = await _workspace(client, BOB)
+    await _sync(client, bob_ws, "alfa", [_seen("a" * 64, "Бобов счёт")])
+    assert (await _link(client, bob_ws, alice_account, "a" * 64)).status_code == 404
+
+
+async def test_reimport_after_linking_gives_duplicates_not_doubles(client: AsyncClient) -> None:
+    """Ради этого привязка и делается: операции, собранные до перехода, лежат
+    на том же счёте, и повторный сбор за тот же период обязан узнать их
+    дублями, а не задвоить деньги."""
+    ws = await _workspace(client, ALICE)
+    account_id = await _plain_account(client, ws)
+    operations = [
+        {
+            "occurred_at": "2026-07-05",
+            "amount": "-1150.00",
+            "currency": "RUB",
+            "description": "Кофейня",
+            "external_id": "bank-op-1",
+        }
+    ]
+
+    # операции собраны до перехода — на обычный, не привязанный счёт
+    first = await client.post(
+        "/api/imports/parsed",
+        params={"workspace_id": ws, "account_id": account_id},
+        json={"parser": "alfa_collector", "operations": operations},
+    )
+    assert first.status_code == 201
+    committed = await client.post(
+        f"/api/imports/{first.json()['import_id']}/commit", params={"workspace_id": ws}
+    )
+    assert committed.json()["imported"] == 1
+
+    # переход: счёт привязывается к своему счёту в банке
+    await _sync(client, ws, "alfa", [_seen("a" * 64, "Текущий счёт")])
+    assert (await _link(client, ws, account_id, "a" * 64)).status_code == 200
+
+    # повторный сбор за тот же период — с теми же external_id от банка
+    second = await client.post(
+        "/api/imports/parsed",
+        params={"workspace_id": ws, "account_id": account_id},
+        json={"parser": "alfa_collector", "operations": operations},
+    )
+    assert second.status_code == 201
+    status = await client.get(
+        f"/api/imports/{second.json()['import_id']}", params={"workspace_id": ws}
+    )
+    assert status.json()["preview"]["new_count"] == 0
+    assert status.json()["preview"]["duplicate_count"] == 1

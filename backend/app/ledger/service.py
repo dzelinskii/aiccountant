@@ -21,6 +21,7 @@ from app.ledger.models import (
 )
 from app.ledger.schemas import (
     AccountCreate,
+    AccountLink,
     AccountUpdate,
     CategoryCreate,
     CategoryUpdate,
@@ -48,6 +49,10 @@ class ReportedBalanceError(Exception):
 
 class DiscoveredNotFoundError(Exception):
     """Счёт банка, от которого заводят счёт, не числится увиденным."""
+
+
+class AlreadyLinkedError(Exception):
+    """У счёта уже есть счёт банка — перепривязка увела бы операции молча."""
 
 
 def _visible_balance(account: Account, operations_sum: Decimal) -> Decimal:
@@ -108,6 +113,29 @@ async def update_account(
             raise ReportedBalanceError
         operations_sum = await repository.account_operations_sum(db, workspace_id, account_id)
         account.balance_adjustment = adjustment_for(payload.balance, operations_sum)
+    await db.commit()
+    operations_sum = await repository.account_operations_sum(db, workspace_id, account_id)
+    return account, _visible_balance(account, operations_sum)
+
+
+async def link_account(
+    db: AsyncSession, workspace_id: uuid.UUID, account_id: uuid.UUID, payload: AccountLink
+) -> tuple[Account, Decimal]:
+    """Привязать заведённый счёт к счёту банка, который банк уже показал."""
+    account = await repository.get_account(db, workspace_id, account_id)
+    if account is None:
+        raise NotFoundError
+    if account.bank_account_fingerprint is not None:
+        raise AlreadyLinkedError
+    discovered = await repository.get_discovered(
+        db, workspace_id, payload.bank_code, payload.bank_account_fingerprint
+    )
+    if discovered is None:
+        raise DiscoveredNotFoundError
+    account.bank_code = payload.bank_code
+    account.bank_account_fingerprint = payload.bank_account_fingerprint
+    # строка отвечала «что в банке есть, а у нас нет»; ответ изменился
+    await db.delete(discovered)
     await db.commit()
     operations_sum = await repository.account_operations_sum(db, workspace_id, account_id)
     return account, _visible_balance(account, operations_sum)

@@ -35,6 +35,17 @@ class AccountCreate(BaseModel):
         return self
 
 
+class AccountLink(BaseModel):
+    """Привязка уже заведённого счёта к счёту банка.
+
+    Отдельно от AccountUpdate: та меняет то, что человек правит в форме счёта,
+    а привязка — разовое событие со своими отказами.
+    """
+
+    bank_code: str = Field(pattern=BANK_CODE_PATTERN)
+    bank_account_fingerprint: str = Field(pattern=FINGERPRINT)
+
+
 class AccountUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     is_archived: bool | None = None
@@ -57,6 +68,9 @@ class AccountOut(BaseModel):
     card_masks: list[str]
     # банк счёта; null — наличные или банк без плагина
     bank_code: str | None
+    # привязан ли счёт к счёту банка: фронт предлагает привязывать только
+    # непривязанные. Сам отпечаток наружу не отдаём — он там не нужен
+    is_bank_linked: bool
 
 
 class BankOut(BaseModel):
