@@ -73,6 +73,18 @@
 Индексы:
 - `ix_counterparties_workspace` (обычный): `workspace_id`
 
+## `credit_limit_observations`
+
+- `id` · `UUID` · обязательна · первичный ключ
+- `workspace_id` · `UUID` · обязательна · → `workspaces.id`
+- `account_id` · `UUID` · обязательна · → `accounts.id`
+- `value` · `NUMERIC(20, 4)` · обязательна
+- `observed_at` · `TIMESTAMP WITH TIME ZONE` · обязательна
+- `confirmed_at` · `TIMESTAMP WITH TIME ZONE` · обязательна
+
+Индексы:
+- `ix_credit_limit_observations_latest` (обычный): `workspace_id`, `account_id`, `confirmed_at`
+
 ## `imports`
 
 - `id` · `UUID` · обязательна · первичный ключ
