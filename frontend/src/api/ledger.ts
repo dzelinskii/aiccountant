@@ -12,6 +12,24 @@ export interface Account {
   reported_at: string | null
   // последние четыре цифры карт счёта; пусто у счетов без карт
   card_masks: string[]
+  // код банка счёта; null — наличные или банк, для которого плагина нет
+  bank_code: string | null
+}
+
+export interface Bank {
+  code: string
+  name: string
+}
+
+// счёт, который банк показал коллектору, а в приложении его нет
+export interface DiscoveredAccount {
+  fingerprint: string
+  bank_code: string
+  bank_name: string
+  name: string
+  currency: string | null
+  balance: string | null
+  card_masks: string[]
 }
 
 export interface Category {
@@ -77,6 +95,9 @@ export interface Dashboard {
     balance: string
     reported_at: string | null
     card_masks: string[]
+    // и по той же причине, что у Account: список счетов и дашборд обязаны
+    // раскладывать одни и те же счета одинаково
+    bank_code: string | null
   }[]
   month_expenses: { category_id: string; category_name: string; total: string }[]
   recent: {
@@ -98,8 +119,21 @@ const q = (ws: string, extra: Record<string, string | number> = {}) =>
 
 export const getAccounts = (ws: string) => api<Account[]>(`/api/accounts?${q(ws)}`)
 
-export const createAccount = (ws: string, body: { name: string; type: string; currency: string }) =>
-  api<Account>(`/api/accounts?${q(ws)}`, { method: 'POST', body: JSON.stringify(body) })
+export const createAccount = (
+  ws: string,
+  body: {
+    name: string
+    type: string
+    currency: string
+    bank_code?: string | null
+    bank_account_fingerprint?: string
+  },
+) => api<Account>(`/api/accounts?${q(ws)}`, { method: 'POST', body: JSON.stringify(body) })
+
+export const getBanks = () => api<Bank[]>('/api/banks')
+
+export const getDiscovered = (ws: string) =>
+  api<DiscoveredAccount[]>(`/api/accounts/discovered?${q(ws)}`)
 
 // balance — строкой, как и остальные деньги: через float точность теряется.
 // Счёт с сообщённым остатком бэкенд править не даёт и отвечает 409
