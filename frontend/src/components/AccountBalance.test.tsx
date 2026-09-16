@@ -1,6 +1,7 @@
 import { MantineProvider } from '@mantine/core'
 import { render, screen } from '@testing-library/react'
 import { expect, test } from 'vitest'
+import { formatMoney } from '../lib/money'
 import { AccountBalance, type AccountBalanceProps } from './AccountBalance'
 
 const debit: AccountBalanceProps['account'] = {
@@ -22,9 +23,15 @@ const credit: AccountBalanceProps['account'] = {
   credit_available: '1936.1900',
 }
 
-// пробелы в русских числах Intl ставит неразрывные — сравниваем по цифрам
+// пробелы в русских числах Intl ставит неразрывные — приводим к обычным, чтобы
+// ожидание в тесте можно было написать руками. Той же нормализации подвергается
+// и число из formatMoney, иначе сравнение разошлось бы на невидимом символе
+function norm(text: string): string {
+  return text.replace(/\s+/gu, ' ')
+}
+
 function shown(): string {
-  return (document.body.textContent ?? '').replace(/\s+/gu, ' ')
+  return norm(document.body.textContent ?? '')
 }
 
 function renderBalance(account: AccountBalanceProps['account']) {
@@ -47,15 +54,18 @@ test('остаток кредитки с карточки не исчезает'
   // счетам — просто перестаёт быть главным числом
   renderBalance(credit)
 
-  expect(shown()).toMatch(/остаток −?-?148 063,81/u)
+  // минус обязателен: без него «остаток 148 063,81» читается как деньги на счёте
+  expect(shown()).toContain(norm(`остаток ${formatMoney('-148063.8100', 'RUB')}`))
 })
 
 test('лимит не показывается вместо доступного', () => {
   // сторож против перепутанного порядка: 150 000 главным числом означало бы
-  // «у меня есть 150 тысяч», хотя почти всё это долг
+  // «у меня есть 150 тысяч», хотя почти всё это долг. Проверяем по началу
+  // строки числа, а не по паре целиком: при перестановке знак валюты переезжает
+  // внутрь, и регулярка на пару перестала бы совпадать, ничего не поймав
   renderBalance(credit)
 
-  expect(shown()).not.toMatch(/150 000,00 \/ 1 936,19/u)
+  expect(shown()).not.toMatch(/150 000,00[^/]*\//u)
 })
 
 test('лимит известен на другой момент — доступное не показывается вовсе', () => {
