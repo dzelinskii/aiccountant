@@ -1,7 +1,8 @@
 import { Badge, Card, Grid, Group, Progress, Stack, Table, Text, Title } from '@mantine/core'
 import { useQuery } from '@tanstack/react-query'
 import { getDashboard } from '../api/ledger'
-import { accountLabel, formatMoment } from '../lib/account'
+import { AccountBalance } from '../components/AccountBalance'
+import { accountLabel } from '../lib/account'
 import { formatMoney } from '../lib/money'
 import { useWorkspaceStore } from '../store/workspace'
 
@@ -32,10 +33,7 @@ export function DashboardPage() {
                   <Text c="dimmed" size="sm">{accountLabel(a)}</Text>
                 )}
               </Group>
-              <Text fw={700} size="lg">{formatMoney(a.balance, a.currency)}</Text>
-              {a.reported_at && (
-                <Text c="dimmed" size="xs">остаток на {formatMoment(a.reported_at)}</Text>
-              )}
+              <AccountBalance account={a} />
             </Card>
           </Grid.Col>
         ))}
