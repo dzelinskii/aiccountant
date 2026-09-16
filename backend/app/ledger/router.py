@@ -6,11 +6,12 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.banks import BANK_CODE_PATTERN, BANKS
 from app.core.db import get_db
 from app.identity.deps import require_workspace_member
 from app.identity.models import User
 from app.ledger import repository, service
-from app.ledger.models import Account, Counterparty, Transaction
+from app.ledger.models import Account, Counterparty, DiscoveredAccount, Transaction
 from app.ledger.schemas import (
     AccountCreate,
     AccountOut,
@@ -24,6 +25,9 @@ from app.ledger.schemas import (
     DashboardOut,
     DescriptionRuleCreate,
     DescriptionRuleOut,
+    DiscoveredAccountOut,
+    DiscoveredSyncIn,
+    DiscoveredSyncOut,
     SimilarAppliedOut,
     SimilarUncategorizedOut,
     TransactionCreate,
@@ -59,6 +63,39 @@ async def list_accounts(
 ) -> list[AccountOut]:
     rows = await service.list_accounts(db, workspace_id)
     return [_account_out(acc, bal) for acc, bal in rows]
+
+
+def _discovered_out(row: DiscoveredAccount) -> DiscoveredAccountOut:
+    return DiscoveredAccountOut(
+        fingerprint=row.fingerprint,
+        bank_code=row.bank_code,
+        bank_name=BANKS[row.bank_code],
+        name=row.name,
+        currency=row.currency,
+        balance=row.balance,
+        card_masks=row.card_masks,
+    )
+
+
+@router.put("/accounts/discovered")
+async def sync_discovered_accounts(
+    payload: DiscoveredSyncIn,
+    workspace_id: uuid.UUID,
+    bank: Annotated[str, Query(pattern=BANK_CODE_PATTERN)],
+    _user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> DiscoveredSyncOut:
+    linked = await service.sync_discovered(db, workspace_id, bank, payload.accounts)
+    return DiscoveredSyncOut(linked=linked)
+
+
+@router.get("/accounts/discovered")
+async def list_discovered_accounts(
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> list[DiscoveredAccountOut]:
+    return [_discovered_out(row) for row in await service.list_discovered(db, workspace_id)]
 
 
 @router.post("/accounts", status_code=201)

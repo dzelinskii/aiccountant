@@ -1,10 +1,11 @@
+import re
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, Field, field_serializer
+from pydantic import BaseModel, Field, field_serializer, field_validator
 
-from app.core.money import MoneyStr
+from app.core.money import Money, MoneyStr, reject_float
 
 ACCOUNT_TYPES = "^(card|cash|savings)$"
 CATEGORY_KINDS = "^(income|expense)$"
@@ -36,6 +37,64 @@ class AccountOut(BaseModel):
     # руками, и остаток считается по операциям
     reported_at: datetime | None
     # последние четыре цифры карт; пусто у счетов без карт
+    card_masks: list[str]
+
+
+# столько счетов не бывает ни у одного банка: ограничение отбивает пачку,
+# которая заведомо не про счета
+MAX_DISCOVERED_ACCOUNTS = 100
+FINGERPRINT = r"^[0-9a-f]{64}$"
+CARD_MASK = r"^[0-9]{4}$"
+MAX_CARD_MASKS = 10
+
+
+class DiscoveredAccountIn(BaseModel):
+    """Счёт, который банк показал коллектору.
+
+    Банковского типа счёта здесь нет: это слово банка, и в ядро оно не едет
+    (спека 2026-09-15, §5.2). Тип своего счёта человек выбирает при заведении.
+    """
+
+    fingerprint: str = Field(pattern=FINGERPRINT)
+    name: str = Field(max_length=200)
+    # плагин не всегда распознаёт валюту, и это не повод скрывать счёт
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    balance: Money | None = None
+    card_masks: list[str] = Field(default_factory=list, max_length=MAX_CARD_MASKS)
+
+    @field_validator("balance", mode="before")
+    @classmethod
+    def _balance_not_float(cls, value: object) -> object:
+        return reject_float(value)
+
+    @field_validator("card_masks")
+    @classmethod
+    def _masks_are_four_digits(cls, value: list[str]) -> list[str]:
+        for mask in value:
+            # хранить кусок номера карты сверх последних четырёх цифр мы не
+            # собираемся, а укороченная метка счёт не опознаёт
+            if not re.fullmatch(CARD_MASK, mask):
+                raise ValueError("метка карты — ровно четыре цифры")
+        return value
+
+
+class DiscoveredSyncIn(BaseModel):
+    accounts: list[DiscoveredAccountIn] = Field(max_length=MAX_DISCOVERED_ACCOUNTS)
+
+
+class DiscoveredSyncOut(BaseModel):
+    # отпечаток → счёт приложения: по нему коллектор понимает, куда слать импорт
+    linked: dict[str, uuid.UUID]
+
+
+class DiscoveredAccountOut(BaseModel):
+    fingerprint: str
+    bank_code: str
+    # название банка отдаёт бэкенд: словарь живёт в одном месте
+    bank_name: str
+    name: str
+    currency: str | None
+    balance: MoneyStr | None
     card_masks: list[str]
 
 

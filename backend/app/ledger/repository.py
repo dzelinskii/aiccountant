@@ -2,13 +2,20 @@ import uuid
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import SQLColumnExpression, func, select, text, update
+from sqlalchemy import SQLColumnExpression, delete, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.core.operation_kinds import IN_STATS_KINDS, counts_in_stats
-from app.ledger.models import Account, Category, Counterparty, DescriptionRule, Transaction
+from app.ledger.models import (
+    Account,
+    Category,
+    Counterparty,
+    DescriptionRule,
+    DiscoveredAccount,
+    Transaction,
+)
 
 
 def counts_in_stats_sql() -> ColumnElement[bool]:
@@ -66,6 +73,58 @@ async def account_operations_sum(
 
 def add_account(db: AsyncSession, account: Account) -> None:
     db.add(account)
+
+
+async def linked_bank_accounts(
+    db: AsyncSession, workspace_id: uuid.UUID, bank_code: str
+) -> dict[str, uuid.UUID]:
+    """Привязанные счета банка: отпечаток → счёт приложения."""
+    stmt = select(Account.bank_account_fingerprint, Account.id).where(
+        Account.workspace_id == workspace_id,
+        Account.bank_code == bank_code,
+        Account.bank_account_fingerprint.is_not(None),
+    )
+    rows = await db.execute(stmt)
+    return {fingerprint: account_id for fingerprint, account_id in rows.all()}
+
+
+async def replace_discovered(
+    db: AsyncSession, workspace_id: uuid.UUID, bank_code: str, rows: list[DiscoveredAccount]
+) -> None:
+    """Увиденное у этого банка заменяется целиком.
+
+    Замена, а не досыпание: иначе счёт, закрытый в банке, остался бы висеть
+    предложением завести его, и убрать его было бы нечем.
+    """
+    await db.execute(
+        delete(DiscoveredAccount).where(
+            DiscoveredAccount.workspace_id == workspace_id,
+            DiscoveredAccount.bank_code == bank_code,
+        )
+    )
+    db.add_all(rows)
+
+
+async def list_discovered(db: AsyncSession, workspace_id: uuid.UUID) -> list[DiscoveredAccount]:
+    stmt = (
+        select(DiscoveredAccount)
+        .where(DiscoveredAccount.workspace_id == workspace_id)
+        .order_by(DiscoveredAccount.bank_code, DiscoveredAccount.name)
+    )
+    return list(await db.scalars(stmt))
+
+
+async def get_discovered(
+    db: AsyncSession, workspace_id: uuid.UUID, bank_code: str, fingerprint: str
+) -> DiscoveredAccount | None:
+    row: DiscoveredAccount | None = await db.scalar(
+        select(DiscoveredAccount).where(
+            DiscoveredAccount.workspace_id == workspace_id,
+            DiscoveredAccount.bank_code == bank_code,
+            DiscoveredAccount.fingerprint == fingerprint,
+        )
+    )
+    return row
 
 
 async def existing_external_ids(

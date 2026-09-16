@@ -11,7 +11,14 @@ from app.core.category_hints import HINT_DEFAULTS
 from app.core.operation_kinds import OperationKind, kind_from_amount
 from app.ledger import repository
 from app.ledger.balance import adjustment_for, visible_balance
-from app.ledger.models import Account, Category, Counterparty, DescriptionRule, Transaction
+from app.ledger.models import (
+    Account,
+    Category,
+    Counterparty,
+    DescriptionRule,
+    DiscoveredAccount,
+    Transaction,
+)
 from app.ledger.schemas import (
     AccountCreate,
     AccountUpdate,
@@ -21,6 +28,7 @@ from app.ledger.schemas import (
     CounterpartyUpdate,
     DashboardAccount,
     DashboardOut,
+    DiscoveredAccountIn,
     MonthExpense,
     RecentTransaction,
     TransactionCreate,
@@ -110,6 +118,48 @@ async def apply_reported_balance(
     # только присваиванием: колонка — обычный JSONB, правку списка на месте
     # SQLAlchemy молча не заметит
     account.card_masks = card_masks
+
+
+async def sync_discovered(
+    db: AsyncSession,
+    workspace_id: uuid.UUID,
+    bank_code: str,
+    seen: list[DiscoveredAccountIn],
+) -> dict[str, uuid.UUID]:
+    """Запомнить, какие счета показал банк, и ответить привязками.
+
+    Привязанные в «увиденные» не попадают: этот список отвечает ровно на один
+    вопрос — что в банке есть, а в приложении нет.
+    """
+    linked = await repository.linked_bank_accounts(db, workspace_id, bank_code)
+    await repository.replace_discovered(
+        db,
+        workspace_id,
+        bank_code,
+        [
+            DiscoveredAccount(
+                workspace_id=workspace_id,
+                bank_code=bank_code,
+                fingerprint=item.fingerprint,
+                name=item.name,
+                currency=item.currency,
+                balance=item.balance,
+                card_masks=item.card_masks,
+            )
+            for item in seen
+            if item.fingerprint not in linked
+        ],
+    )
+    await db.commit()
+    # счёт, привязанный когда-то, но исчезнувший из банка, коллектору не
+    # отдаём: собирать по нему нечего, а запрос за его операциями закончился бы
+    # ошибкой банка посреди сбора
+    shown = {item.fingerprint for item in seen}
+    return {fp: account_id for fp, account_id in linked.items() if fp in shown}
+
+
+async def list_discovered(db: AsyncSession, workspace_id: uuid.UUID) -> list[DiscoveredAccount]:
+    return await repository.list_discovered(db, workspace_id)
 
 
 async def seed_categories(db: AsyncSession, workspace_id: uuid.UUID) -> None:
