@@ -58,7 +58,12 @@ export async function pushOperations(
 function requestBody(bank: string, operations: readonly CollectedOperation[], account: CollectedAccount | undefined): object {
   const body = { parser: `${bank}_collector`, operations }
   if (!account || account.balance === null) return body
-  return { ...body, account: { balance: account.balance, card_masks: account.cardMasks } }
+  const block: Record<string, unknown> = { balance: account.balance, card_masks: account.cardMasks }
+  // Лимита нет — про него в теле нет ничего. Для бэкенда отсутствие ключа и
+  // null равнозначны, так что выбор в пользу формы покороче: у дебетовых счетов
+  // сохранённый разбор остаётся таким же, каким был до появления лимита
+  if (account.creditLimit !== null) block['credit_limit'] = account.creditLimit
+  return { ...body, account: block }
 }
 
 function parseResult(data: unknown): PushResult {

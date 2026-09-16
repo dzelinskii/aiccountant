@@ -323,7 +323,7 @@ test('fetchAccounts разбирает вложенный ответ и уход
   const accounts = await plugin.fetchAccounts(CREDENTIALS)
 
   expect(accounts).toEqual([
-    { id: 'card:card-1', name: 'Дебетовая карта', type: 'debit', currency: 'RUB', balance: '1000.50', cardMasks: ['1234'] },
+    { id: 'card:card-1', name: 'Дебетовая карта', type: 'debit', currency: 'RUB', balance: '1000.50', creditLimit: null, cardMasks: ['1234'] },
   ])
   expect(requests).toHaveLength(1)
   expect(requests[0]?.method).toBe('POST')

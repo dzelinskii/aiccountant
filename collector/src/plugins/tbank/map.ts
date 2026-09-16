@@ -86,6 +86,7 @@ function toAccount(item: unknown): CollectedAccount {
     type: getStr(item, 'accountType') ?? '',
     currency: resolveCurrency(getRecord(item, 'currency')),
     balance: resolveBalance(item),
+    creditLimit: resolveCreditLimit(item),
     cardMasks: resolveCardMasks(item),
   }
 }
@@ -120,14 +121,36 @@ function resolveBalance(item: Record<string, unknown>): string | null {
   const available = toAmountString(moneyAmount['value'])
   if (available === undefined) return null
 
-  if ((getStr(item, 'accountType') ?? '').toLowerCase() !== CREDIT_CARD_ACCOUNT_TYPE) return available
+  if (!isCreditCard(item)) return available
 
-  const limit = getRecord(item, 'creditLimit')
-  const limitValue = limit ? toAmountString(limit['value']) : undefined
+  const limitValue = creditLimitValue(item)
   // без лимита пересчитать нечем, а вернуть доступное к трате — соврать на весь
   // кредитный лимит; null честно означает «остаток не показываем»
   if (limitValue === undefined) return null
   return subtractDecimal(available, limitValue)
+}
+
+function isCreditCard(item: Record<string, unknown>): boolean {
+  return (getStr(item, 'accountType') ?? '').toLowerCase() === CREDIT_CARD_ACCOUNT_TYPE
+}
+
+function creditLimitValue(item: Record<string, unknown>): string | undefined {
+  const limit = getRecord(item, 'creditLimit')
+  return limit ? toAmountString(limit['value']) : undefined
+}
+
+/**
+ * Кредитный лимит карты — то же поле, из которого получается чистая позиция,
+ * только здесь оно едет в приложение как есть: вместе с остатком оно даёт
+ * «сколько могу потратить».
+ *
+ * Берём только у кредитной карты. У CashLoan и BNPL слово «лимит» означает
+ * другое (у BNPL приходят approvedLimit/availableLimit, а долга нет вовсе), и
+ * они остаются отдельным вопросом беклога.
+ */
+function resolveCreditLimit(item: Record<string, unknown>): string | null {
+  if (!isCreditCard(item)) return null
+  return creditLimitValue(item) ?? null
 }
 
 const MASK_LENGTH = 4

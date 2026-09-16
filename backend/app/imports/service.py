@@ -4,9 +4,10 @@ import uuid
 from collections.abc import Awaitable, Callable
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
-from typing import cast
+from typing import NamedTuple, cast
 
 import structlog
+from pydantic import TypeAdapter
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.operation_kinds import OPERATION_KINDS, OperationKind
@@ -23,12 +24,16 @@ from app.imports.schemas import (
     ImportResultOut,
     ImportStatus,
     ImportStatusOut,
+    Money,
     ParsedAccountIn,
     ParsedOperationIn,
 )
 from app.ledger import service as ledger_service
 
 logger = structlog.get_logger()
+
+# рамки денежной колонки одним источником со схемой запроса
+_MONEY = TypeAdapter(Money)
 
 
 class ImportNotReadyError(Exception):
@@ -38,6 +43,14 @@ class ImportNotReadyError(Exception):
 
 class ImportNotFoundError(Exception):
     """Импорт не найден или принадлежит чужому workspace — снаружи неотличимо."""
+
+
+class ReportedAccount(NamedTuple):
+    """Что источник сообщил о счёте на момент сбора."""
+
+    balance: Decimal
+    card_masks: list[str]
+    credit_limit: Decimal | None
 
 
 def _external_ids(account_id: uuid.UUID, operations: list[ParsedOperation]) -> list[str]:
@@ -128,15 +141,14 @@ def _card_masks(raw: object, import_id: uuid.UUID) -> list[str]:
     return masks
 
 
-def _payload_account(
-    payload: dict[str, object], import_id: uuid.UUID
-) -> tuple[Decimal, list[str]] | None:
-    """Остаток счёта и метки карт из сохранённого разбора; None — источник о счёте
-    ничего не сообщал (выписка из PDF про сам счёт не знает).
+def _payload_account(payload: dict[str, object], import_id: uuid.UUID) -> ReportedAccount | None:
+    """Что источник сообщил о счёте, из сохранённого разбора; None — источник о
+    счёте ничего не сообщал (выписка из PDF про сам счёт не знает).
 
     Остаток — деньги, и его порча роняет разбор так же, как порча суммы операции
     в _payload_to_statement: молча оставить счёт с прежним числом нельзя. Метки
-    рядом переживают порчу по-другому — см. _card_masks."""
+    карт и кредитный лимит рядом переживают порчу по-другому — см. _card_masks
+    и _credit_limit."""
     stored = payload.get("account")
     if stored is None:
         return None
@@ -146,7 +158,34 @@ def _payload_account(
         balance = _finite_decimal(stored["balance"])
     except (KeyError, ValueError, TypeError, InvalidOperation) as exc:
         raise StatementParseError("повреждён сохранённый разбор выписки") from exc
-    return balance, _card_masks(stored.get("card_masks"), import_id)
+    return ReportedAccount(
+        balance=balance,
+        card_masks=_card_masks(stored.get("card_masks"), import_id),
+        credit_limit=_credit_limit(stored.get("credit_limit"), import_id),
+    )
+
+
+def _credit_limit(raw: object, import_id: uuid.UUID) -> Decimal | None:
+    """Кредитный лимит из сохранённого разбора; None — его там не было.
+
+    Негодное значение отбрасываем, а не роняем им подтверждение: лимит поясняет
+    счёт, но деньгами счёта не является, — та же граница, что у меток карт.
+    Отброшенное видно в логе по идентификатору импорта; самого значения там нет
+    намеренно (см. _known_kind).
+
+    Рамки колонки перепроверяем здесь, а не только на входе: схема стережёт
+    запрос, но между отправкой и подтверждением значение лежит в JSONB, где
+    оказаться может что угодно. Без этой проверки лимит вне NUMERIC(20, 4) ронял
+    бы подтверждение переполнением — то есть ровно тем, чего обещано не делать.
+    Та же причина, по которой _card_masks заново сверяет «четыре цифры»."""
+    if raw is None:
+        return None
+    try:
+        # ValidationError у pydantic — наследник ValueError, отдельной ветки не нужно
+        return _MONEY.validate_python(_finite_decimal(raw))
+    except (ValueError, TypeError, InvalidOperation):
+        logger.warning("import_broken_credit_limit", import_id=str(import_id))
+        return None
 
 
 def _known_kind(raw: str, import_id: uuid.UUID) -> OperationKind:
@@ -279,7 +318,13 @@ async def create_parsed_import(
         # остаток применяется при подтверждении, а оно случится позже отдельным
         # запросом: не положив блок сюда, потеряли бы его по дороге. Деньги
         # строкой — Decimal в JSONB не хранится
-        payload["account"] = {"balance": str(account.balance), "card_masks": account.card_masks}
+        block: dict[str, object] = {
+            "balance": str(account.balance),
+            "card_masks": account.card_masks,
+        }
+        if account.credit_limit is not None:
+            block["credit_limit"] = str(account.credit_limit)
+        payload["account"] = block
 
     imp = Import(
         workspace_id=workspace_id,
@@ -542,10 +587,15 @@ async def commit_from_import(
         imported += 1
 
     if reported is not None:
-        balance, card_masks = reported
         # момент — время создания импорта: тогда коллектор и обращался в банк
         await ledger_service.apply_reported_balance(
-            db, workspace_id, imp.account_id, balance, card_masks, imp.created_at
+            db,
+            workspace_id,
+            imp.account_id,
+            reported.balance,
+            reported.card_masks,
+            imp.created_at,
+            credit_limit=reported.credit_limit,
         )
 
     duplicates = len(statement.operations) - imported

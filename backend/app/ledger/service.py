@@ -10,8 +10,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.category_hints import HINT_DEFAULTS
 from app.core.operation_kinds import OperationKind, kind_from_amount
 from app.ledger import repository
-from app.ledger.balance import adjustment_for, visible_balance
-from app.ledger.models import Account, Category, Counterparty, DescriptionRule, Transaction
+from app.ledger.balance import adjustment_for, credit_available, visible_balance
+from app.ledger.models import (
+    Account,
+    Category,
+    Counterparty,
+    CreditLimitObservation,
+    DescriptionRule,
+    Transaction,
+)
 from app.ledger.schemas import (
     AccountCreate,
     AccountUpdate,
@@ -43,14 +50,46 @@ def _visible_balance(account: Account, operations_sum: Decimal) -> Decimal:
     return visible_balance(account.reported_balance, account.balance_adjustment, operations_sum)
 
 
-async def list_accounts(db: AsyncSession, workspace_id: uuid.UUID) -> list[tuple[Account, Decimal]]:
+class CreditView(NamedTuple):
+    """Кредитная часть счёта: лимит, момент его наблюдения и доступное к трате."""
+
+    limit: Decimal | None
+    limit_at: datetime | None
+    available: Decimal | None
+
+
+NO_CREDIT = CreditView(None, None, None)
+
+
+def _credit_view(account: Account, observation: CreditLimitObservation | None) -> CreditView:
+    if observation is None:
+        return NO_CREDIT
+    return CreditView(
+        limit=observation.value,
+        limit_at=observation.confirmed_at,
+        available=credit_available(
+            observation.value,
+            observation.confirmed_at,
+            account.reported_balance,
+            account.reported_at,
+        ),
+    )
+
+
+async def list_accounts(
+    db: AsyncSession, workspace_id: uuid.UUID
+) -> list[tuple[Account, Decimal, CreditView]]:
     rows = await repository.list_accounts_with_operations_sum(db, workspace_id)
-    return [(account, _visible_balance(account, total)) for account, total in rows]
+    limits = await repository.latest_credit_limits(db, workspace_id)
+    return [
+        (account, _visible_balance(account, total), _credit_view(account, limits.get(account.id)))
+        for account, total in rows
+    ]
 
 
 async def create_account(
     db: AsyncSession, workspace_id: uuid.UUID, payload: AccountCreate
-) -> tuple[Account, Decimal]:
+) -> tuple[Account, Decimal, CreditView]:
     account = Account(
         workspace_id=workspace_id,
         name=payload.name,
@@ -59,12 +98,13 @@ async def create_account(
     )
     repository.add_account(db, account)
     await db.commit()
-    return account, Decimal(0)
+    # счёт только что создан — наблюдать его лимит было негде
+    return account, Decimal(0), NO_CREDIT
 
 
 async def update_account(
     db: AsyncSession, workspace_id: uuid.UUID, account_id: uuid.UUID, payload: AccountUpdate
-) -> tuple[Account, Decimal]:
+) -> tuple[Account, Decimal, CreditView]:
     account = await repository.get_account(db, workspace_id, account_id)
     if account is None:
         raise NotFoundError
@@ -81,7 +121,10 @@ async def update_account(
         account.balance_adjustment = adjustment_for(payload.balance, operations_sum)
     await db.commit()
     operations_sum = await repository.account_operations_sum(db, workspace_id, account_id)
-    return account, _visible_balance(account, operations_sum)
+    # лимит отдаём и здесь: без него переименование карты стёрло бы его с экрана
+    # до перезагрузки страницы
+    observation = await repository.latest_credit_limit(db, workspace_id, account_id)
+    return account, _visible_balance(account, operations_sum), _credit_view(account, observation)
 
 
 async def apply_reported_balance(
@@ -91,11 +134,14 @@ async def apply_reported_balance(
     balance: Decimal,
     card_masks: list[str],
     reported_at: datetime,
+    credit_limit: Decimal | None = None,
 ) -> None:
-    """Записать остаток и метки карт, сообщённые источником.
+    """Записать остаток, метки карт и кредитный лимит, сообщённые источником.
 
     Без commit: вызывается из подтверждения импорта, и остаток обязан появиться
-    ровно вместе с операциями, а не отдельной транзакцией.
+    ровно вместе с операциями, а не отдельной транзакцией. Лимит применяется тем
+    же вызовом намеренно: «доступно к трате» считается из пары «лимит + остаток»,
+    и разъехаться во времени они не должны.
     """
     account = await repository.get_account(db, workspace_id, account_id)
     if account is None:
@@ -103,13 +149,54 @@ async def apply_reported_balance(
     if account.reported_at is not None and reported_at <= account.reported_at:
         # верен последний сбор, а не последнее подтверждение: импорты ждут
         # своей очереди и подтверждаются в произвольном порядке, а список
-        # показывает их свежими вверх — то есть скорее в обратном
+        # показывает их свежими вверх — то есть скорее в обратном.
+        # Лимит из того же сбора устарел вместе с остатком, поэтому выходим
+        # до его применения, а не после
         return
     account.reported_balance = balance
     account.reported_at = reported_at
     # только присваиванием: колонка — обычный JSONB, правку списка на месте
     # SQLAlchemy молча не заметит
     account.card_masks = card_masks
+    if credit_limit is not None:
+        await _observe_credit_limit(db, workspace_id, account_id, credit_limit, reported_at)
+
+
+async def _observe_credit_limit(
+    db: AsyncSession,
+    workspace_id: uuid.UUID,
+    account_id: uuid.UUID,
+    value: Decimal,
+    observed_at: datetime,
+) -> None:
+    """Отметить, что сбор увидел у счёта такой лимит.
+
+    Новая запись появляется только при изменении значения — иначе таблица
+    распухла бы от повторов одного и того же числа. Повторное наблюдение того же
+    лимита двигает момент подтверждения: по нему проверяется, что лимит и
+    остаток пришли одним сбором, и без этого живой лимит через месяц без
+    изменений выглядел бы устаревшим.
+
+    Своей проверки «наблюдение из прошлого не переписывает настоящее» здесь нет
+    намеренно. Вызов один — из apply_reported_balance, уже после того, как тот
+    отсёк устаревший сбор целиком: вместе с остатком устарел и лимит. Вторая
+    такая проверка оказалась бы недостижимой, то есть непроверяемой, а код,
+    который выглядит защитой и никогда не исполняется, хуже её отсутствия.
+    """
+    latest = await repository.latest_credit_limit(db, workspace_id, account_id)
+    if latest is not None and latest.value == value:
+        latest.confirmed_at = observed_at
+        return
+    repository.add_credit_limit_observation(
+        db,
+        CreditLimitObservation(
+            workspace_id=workspace_id,
+            account_id=account_id,
+            value=value,
+            observed_at=observed_at,
+            confirmed_at=observed_at,
+        ),
+    )
 
 
 async def seed_categories(db: AsyncSession, workspace_id: uuid.UUID) -> None:
@@ -989,8 +1076,11 @@ async def build_dashboard(db: AsyncSession, workspace_id: uuid.UUID) -> Dashboar
                 balance=bal,
                 reported_at=a.reported_at,
                 card_masks=a.card_masks,
+                credit_limit=credit.limit,
+                credit_limit_at=credit.limit_at,
+                credit_available=credit.available,
             )
-            for a, bal in accounts
+            for a, bal, credit in accounts
         ],
         month_expenses=[
             MonthExpense(category_id=cid, category_name=name or "Без категории", total=total)

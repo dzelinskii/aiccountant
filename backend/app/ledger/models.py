@@ -43,6 +43,37 @@ class Account(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class CreditLimitObservation(Base):
+    """Кредитный лимит счёта, каким его увидел сбор.
+
+    История наблюдений, а не колонка у счёта: колонка плюс история — два места
+    для одного утверждения, и они разошлись бы. Текущий лимит — последнее
+    наблюдение.
+
+    Хранится история **наблюдений**, а не решений банка: лимит виден только в
+    момент сбора, и «замечено такого-то» — всё, что мы честно можем сказать.
+    Поэтому у записи два момента: observed_at — когда значение замечено впервые
+    (по нему читается история изменений), confirmed_at — когда банк называл его
+    в последний раз (по нему проверяется свежесть «доступно к трате»). Без
+    второго повторный сбор не создавал бы записи, и живой лимит выглядел бы
+    устаревшим.
+    """
+
+    __tablename__ = "credit_limit_observations"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspaces.id"))
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"))
+    value: Mapped[Decimal] = mapped_column(Numeric(20, 4))
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    confirmed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    # читаем всегда «последнее наблюдение счёта», поэтому индекс ведёт к нему
+    __table_args__ = (
+        Index("ix_credit_limit_observations_latest", "workspace_id", "account_id", "confirmed_at"),
+    )
+
+
 class Category(Base):
     __tablename__ = "categories"
 

@@ -141,15 +141,18 @@ class ParsedAccountIn(BaseModel):
     """
 
     balance: Money
+    # кредитный лимит карты; отсутствует у обычных счетов и у кредиток, про
+    # лимит которых банк промолчал. Вместе с остатком даёт «доступно к трате»
+    credit_limit: Money | None = None
     card_masks: list[str] = Field(default_factory=list, max_length=MAX_CARD_MASKS)
 
-    @field_validator("balance", mode="before")
+    @field_validator("balance", "credit_limit", mode="before")
     @classmethod
-    def _balance_not_float(cls, value: object) -> object:
+    def _money_not_float(cls, value: object) -> object:
         if isinstance(value, float):
             # к моменту валидации разряды уже потеряны — то же правило, что
             # у сумм операций (см. ParsedOperationIn)
-            raise ValueError("остаток должен быть строкой, а не числом JSON")
+            raise ValueError("сумма должна быть строкой, а не числом JSON")
         return value
 
     @field_validator("card_masks")
