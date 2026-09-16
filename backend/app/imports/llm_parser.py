@@ -1,19 +1,15 @@
 import json
 from datetime import date
 from decimal import Decimal
-from typing import Annotated
 
 import structlog
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ValidationError
 
 from app.ai.client import LLMClient
+from app.core.money import Money
 from app.imports.parser import ParsedOperation, ParsedStatement, StatementParseError
 
 logger = structlog.get_logger()
-
-# границы совпадают с NUMERIC(20,4) в ledger: за ними Postgres молча округлит
-# или упадёт уже на вставке — ловим это на разборе, а не после коммита
-Money = Annotated[Decimal, Field(max_digits=20, decimal_places=4)]
 
 SYSTEM_PROMPT = (
     "Ты разбираешь банковские выписки. По тексту выписки верни ТОЛЬКО JSON вида "
