@@ -105,14 +105,30 @@ async def test_browser_login_unchanged(client: AsyncClient) -> None:
 
     assert "session" in resp.cookies
     assert resp.json()["session_token"] is None
+    # браузерная кука недоступна скриптам страницы — иначе токен в куке
+    # ничем не лучше токена в теле
+    set_cookie = resp.headers["set-cookie"]
+    assert "HttpOnly" in set_cookie
+    assert "SameSite=lax" in set_cookie
+
+
+async def test_browser_register_does_not_return_token(client: AsyncClient) -> None:
+    resp = await client.post("/api/auth/register", json=ALICE)
+
+    assert resp.status_code == 201
+    assert resp.json()["session_token"] is None
+    assert "session" in resp.cookies
 
 
 async def test_app_register_returns_token(client: AsyncClient) -> None:
     resp = await client.post("/api/auth/register", json={**ALICE, "client": "app"})
 
     assert resp.status_code == 201
-    assert resp.json()["session_token"]
+    token = resp.json()["session_token"]
+    assert token
     assert "session" not in resp.cookies
+    me = await client.get("/api/me", headers={"Authorization": f"Session {token}"})
+    assert me.status_code == 200
 
 
 async def test_unknown_client_rejected(client: AsyncClient) -> None:
