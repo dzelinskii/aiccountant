@@ -248,6 +248,16 @@ mod tests {
             assert_eq!(OsKeyring.get(&p.0).unwrap().as_deref(), Some("two"));
         }
 
+        // Значение, которое хранилище отдаёт с ошибкой (не UTF-16), — это сбой, а
+        // не «секрета нет»: иначе чтение отправило бы на вход вместо сообщения.
+        #[test]
+        #[ignore = "пишет в хранилище ОС"]
+        fn unreadable_value_is_an_error_not_absence() {
+            let p = Probe::new("unreadable");
+            entry(&p.0).unwrap().set_secret(&[0x00, 0xd8]).unwrap();
+            assert!(OsKeyring.get(&p.0).is_err());
+        }
+
         // Печатает предел длины ASCII-записи; запуск с `--nocapture`.
         #[test]
         #[ignore = "пишет в хранилище ОС"]
