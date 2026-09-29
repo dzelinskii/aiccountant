@@ -47,3 +47,37 @@ async def test_logout_with_session_header_ends_that_session(client: AsyncClient)
     assert (await client.get("/api/me", headers=headers)).status_code == 200
     assert (await client.post("/api/auth/logout", headers=headers)).status_code == 204
     assert (await client.get("/api/me", headers=headers)).status_code == 401
+
+
+async def test_scheme_is_case_insensitive(client: AsyncClient) -> None:
+    token = await _session_token(client)
+    resp = await client.get("/api/me", headers={"Authorization": f"session {token}"})
+    assert resp.status_code == 200
+
+
+async def test_empty_session_header_does_not_fall_back_to_cookie(client: AsyncClient) -> None:
+    """Заголовок решает сам: пустая схема Session не должна тихо превращаться в
+    запрос от того, чья кука случайно лежит в том же клиенте."""
+    await client.post("/api/auth/register", json=ALICE)
+    assert (await client.get("/api/me")).status_code == 200  # кука действует
+    resp = await client.get("/api/me", headers={"Authorization": "Session "})
+    assert resp.status_code == 401
+
+
+async def test_api_token_is_not_accepted_as_session(client: AsyncClient) -> None:
+    """Утёкший машинный токен не должен получить права человека, если его
+    предъявить под схемой Session."""
+    await client.post("/api/auth/register", json=ALICE)
+    ws = (await client.get("/api/me")).json()["workspaces"][0]["id"]
+    api_token = (
+        await client.post("/api/tokens", params={"workspace_id": ws}, json={"name": "к"})
+    ).json()["token"]
+    client.cookies.clear()
+    resp = await client.get("/api/me", headers={"Authorization": f"Session {api_token}"})
+    assert resp.status_code == 401
+
+
+async def test_session_token_is_not_accepted_as_bearer(client: AsyncClient) -> None:
+    token = await _session_token(client)
+    resp = await client.get("/api/me", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 401
