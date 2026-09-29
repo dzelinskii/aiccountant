@@ -3,6 +3,7 @@ import { useDisclosure } from '@mantine/hooks'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { NavLink as RouterNavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { getMe, logout } from './api/auth'
+import { isDesktop } from './desktop/runtime'
 
 const LINKS = [
   { to: '/', label: 'Дашборд' },
@@ -20,11 +21,17 @@ export function AppLayout() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const { data: me } = useQuery({ queryKey: ['me'], queryFn: getMe })
+  const leave = () => {
+    queryClient.clear()
+    navigate('/login')
+  }
   const logoutMutation = useMutation({
     mutationFn: logout,
-    onSuccess: () => {
-      queryClient.clear()
-      navigate('/login')
+    onSuccess: leave,
+    // в приложении токен стёрт и при отказе сервера, так что оставаться на
+    // экранах нечем; в браузере cookie жива, и уходить со страницы нельзя
+    onError: () => {
+      if (isDesktop()) leave()
     },
   })
 

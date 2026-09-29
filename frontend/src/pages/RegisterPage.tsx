@@ -13,20 +13,26 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from 'react-router-dom'
 import { register } from '../api/auth'
 import { ApiError } from '../api/client'
+import { serverUrl, setServerUrl } from '../desktop/connection'
+import { isDesktop } from '../desktop/runtime'
 
 export function RegisterPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const form = useForm({
-    initialValues: { email: '', password: '' },
+    initialValues: { server: isDesktop() ? serverUrl() : '', email: '', password: '' },
     validate: {
+      server: (v) => (isDesktop() && v.trim() === '' ? 'Укажите адрес сервера' : null),
       email: (v) => (/^\S+@\S+$/.test(v) ? null : 'Некорректный email'),
       password: (v) => (v.length >= 8 ? null : 'Минимум 8 символов'),
     },
   })
   const mutation = useMutation({
-    mutationFn: (values: { email: string; password: string }) =>
-      register(values.email, values.password),
+    mutationFn: (values: { server: string; email: string; password: string }) => {
+      // адрес нужен до запроса: он сам идёт на этот сервер
+      if (isDesktop()) setServerUrl(values.server)
+      return register(values.email, values.password)
+    },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['me'] })
       navigate('/')
@@ -38,6 +44,9 @@ export function RegisterPage() {
       <Title ta="center">Регистрация</Title>
       <Paper withBorder shadow="sm" p="lg" mt="lg" radius="md">
         <form onSubmit={form.onSubmit((values) => mutation.mutate(values))}>
+          {isDesktop() && (
+            <TextInput label="Адрес сервера" mb="md" {...form.getInputProps('server')} />
+          )}
           <TextInput label="Email" placeholder="you@example.com" {...form.getInputProps('email')} />
           <PasswordInput
             label="Пароль"

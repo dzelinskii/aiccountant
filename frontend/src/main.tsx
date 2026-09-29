@@ -5,6 +5,8 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { createBrowserRouter, RouterProvider } from 'react-router-dom'
 import { AuthGuard } from './AuthGuard'
+import { loadSession } from './desktop/connection'
+import { isDesktop } from './desktop/runtime'
 import { AppLayout } from './AppLayout'
 import { WorkspaceGate } from './WorkspaceGate'
 import './index.css'
@@ -48,12 +50,28 @@ const router = createBrowserRouter([
   },
 ])
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <MantineProvider>
-      <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
-      </QueryClientProvider>
-    </MantineProvider>
-  </StrictMode>,
-)
+// сессия читается до первого рендера: иначе первый запрос к /api/me уйдёт без
+// заголовка и человека отправит на экран входа при живой сессии
+async function start(): Promise<void> {
+  if (isDesktop()) {
+    try {
+      await loadSession()
+    } catch (error) {
+      // хранилище ОС недоступно — окно не должно остаться пустым: показываем
+      // вход, как будто сессии нет
+      const reason = error instanceof Error ? error.message : String(error)
+      console.error(`Не удалось прочитать сессию из хранилища ОС: ${reason}`)
+    }
+  }
+  createRoot(document.getElementById('root')!).render(
+    <StrictMode>
+      <MantineProvider>
+        <QueryClientProvider client={queryClient}>
+          <RouterProvider router={router} />
+        </QueryClientProvider>
+      </MantineProvider>
+    </StrictMode>,
+  )
+}
+
+void start()

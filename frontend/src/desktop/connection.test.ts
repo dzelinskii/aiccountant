@@ -55,6 +55,12 @@ test('serverUrl отдаёт сохранённый адрес, а не умол
   expect(serverUrl()).toBe('http://saved:1')
 })
 
+test('сохранённая пустая строка не даёт пустой адрес', async () => {
+  localStorage.setItem('aiccountant.server', '')
+  const { serverUrl } = await freshConnection()
+  expect(serverUrl()).toBe('http://default.test:8000')
+})
+
 test('до загрузки токена нет', async () => {
   const { sessionToken } = await freshConnection()
   expect(sessionToken()).toBeNull()

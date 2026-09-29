@@ -16,7 +16,7 @@ let token: string | null = null
 
 /** Адрес сервера приложения. Не секрет — живёт в localStorage окна. */
 export function serverUrl(): string {
-  return localStorage.getItem(SERVER_KEY) ?? DEFAULT_SERVER
+  return localStorage.getItem(SERVER_KEY) || DEFAULT_SERVER
 }
 
 export function setServerUrl(url: string): void {
