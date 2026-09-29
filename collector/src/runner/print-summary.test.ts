@@ -30,8 +30,10 @@ function summary(overrides: Partial<CollectSummary> = {}): CollectSummary {
   return { bank: 'sber', session: 'stored', accounts: [result()], unboundCount: 0, ...overrides }
 }
 
-test('по счёту — сколько собрано и номер импорта', () => {
-  expect(capture(summary())).toContain('счёт app-a: собрано 3, импорт imp-1')
+test('по счёту — сколько собрано и номер импорта, а в конце просьба подтвердить импорт', () => {
+  const lines = capture(summary())
+  expect(lines).toContain('счёт app-a: собрано 3, импорт imp-1')
+  expect(lines).toContain('Готово. Подтвердите импорт в приложении.')
 })
 
 test('без операций за период — так и сказано, без номера импорта', () => {
