@@ -1,3 +1,6 @@
+import { serverUrl, sessionToken } from '../desktop/connection'
+import { isDesktop } from '../desktop/runtime'
+
 export class ApiError extends Error {
   status: number
 
@@ -7,10 +10,22 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Один путь запроса для браузера и приложения. В браузере — относительный адрес
+ * и cookie своего origin; в приложении — полный адрес сервера и сессия
+ * заголовком Session: cookie окна Tauri серверу не принадлежат.
+ */
+export function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  if (!isDesktop()) return fetch(path, { credentials: 'same-origin', ...init })
+  const headers = new Headers(init.headers)
+  const token = sessionToken()
+  if (token !== null) headers.set('Authorization', `Session ${token}`)
+  return fetch(`${serverUrl()}${path}`, { ...init, headers, credentials: 'omit' })
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
+  const res = await apiFetch(path, {
     headers: { 'Content-Type': 'application/json' },
-    credentials: 'same-origin',
     ...init,
   })
   if (!res.ok) {

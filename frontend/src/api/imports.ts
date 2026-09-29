@@ -1,4 +1,4 @@
-import { api, ApiError, detailToMessage } from './client'
+import { api, apiFetch, ApiError, detailToMessage } from './client'
 
 export interface ImportOperation {
   occurred_at: string
@@ -55,11 +55,7 @@ export async function startImport(ws: string, accountId: string, file: File): Pr
   const form = new FormData()
   form.append('file', file)
   const qs = q(ws, { account_id: accountId })
-  const res = await fetch(`/api/imports?${qs}`, {
-    method: 'POST',
-    credentials: 'same-origin',
-    body: form,
-  })
+  const res = await apiFetch(`/api/imports?${qs}`, { method: 'POST', body: form })
   if (!res.ok) {
     const body = await res.json().catch(() => null)
     throw new ApiError(res.status, detailToMessage(body?.detail) ?? res.statusText)
