@@ -17,7 +17,7 @@ export interface CollectedCounters {
   missingHints: number
   /** Всего трат — знаменатель для missingHints. */
   purchases: number
-  /** Приходов, которые банк не дал разобрать подробнее. */
+  /** Приходов, оставшихся доходом: подгруппу банка мы не знаем. */
   unrefinedIncome: number
 }
 
@@ -27,7 +27,8 @@ export interface CollectedCounters {
  */
 export function countCollected(operations: readonly CollectedOperation[]): CollectedCounters {
   // Не ошибка, а повод дополнить перевод словаря в плагине: банк завёл группу,
-  // которой мы не знаем
+  // которой мы не знаем. Молчать об этом нельзя: такие операции доедут до
+  // приложения с видом unknown и тихо испортят картину по видам трат
   const unknownKinds = operations.filter((operation) => operation.kind === 'unknown').length
 
   // Тест на полноту справочника ловит дырку в таблице, но только для той версии
@@ -55,8 +56,6 @@ export function countCollected(operations: readonly CollectedOperation[]): Colle
   return { unknownKinds, missingHints, purchases: purchases.length, unrefinedIncome }
 }
 
-// Молчать об этом нельзя: такие операции доедут до приложения с видом unknown
-// и тихо испортят картину по видам трат
 export function reportUnknownKinds(appAccountId: string, operations: readonly CollectedOperation[]): void {
   const { unknownKinds } = countCollected(operations)
   if (unknownKinds === 0) return

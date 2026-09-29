@@ -22,7 +22,7 @@ function operation(overrides: Partial<CollectedOperation> = {}): CollectedOperat
   }
 }
 
-// Счётчики пишут в консоль, и проверять их можно только через неё же
+// Печатающие счётчики проверяются через консоль
 function captureLog(): { lines: () => string[] } {
   const spy = vi.spyOn(console, 'log').mockImplementation(() => undefined)
   return { lines: () => spy.mock.calls.map((call) => String(call[0])) }
