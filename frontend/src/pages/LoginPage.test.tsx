@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { login } from '../api/auth'
+import { ApiError } from '../api/client'
 import { LoginPage } from './LoginPage'
 
 const desktop = { on: false }
@@ -64,7 +65,9 @@ test('в приложении адрес сервера запоминается
   await userEvent.type(screen.getByLabelText('Email'), 'a@b.c')
   await userEvent.type(screen.getByLabelText('Пароль'), 'password123')
   await userEvent.click(screen.getByRole('button', { name: 'Войти' }))
-  await waitFor(() => expect(localStorage.getItem('aiccountant.server')).toBe('http://localhost:18010'))
+  await waitFor(() =>
+    expect(localStorage.getItem('aiccountant.server')).toBe('http://localhost:18010'),
+  )
   expect(login).toHaveBeenCalledWith('a@b.c', 'password123')
 })
 
@@ -86,4 +89,56 @@ test('в браузере адрес сервера не проверяется 
   await userEvent.click(screen.getByRole('button', { name: 'Войти' }))
   await waitFor(() => expect(login).toHaveBeenCalled())
   expect(localStorage.getItem('aiccountant.server')).toBeNull()
+})
+
+// apiFetch берёт адрес сервера синхронно в момент запроса: сохранённый позже,
+// он отправил бы запрос на прежний сервер
+test('в приложении адрес сохраняется до запроса, а не после', async () => {
+  desktop.on = true
+  let seen: string | null = null
+  vi.mocked(login).mockImplementationOnce(async () => {
+    seen = localStorage.getItem('aiccountant.server')
+    return { id: 'u', email: 'a@b.c', session_token: null }
+  })
+  renderPage()
+  const field = screen.getByLabelText('Адрес сервера')
+  await userEvent.clear(field)
+  await userEvent.type(field, 'http://localhost:18010/')
+  await userEvent.type(screen.getByLabelText('Email'), 'a@b.c')
+  await userEvent.type(screen.getByLabelText('Пароль'), 'password123')
+  await userEvent.click(screen.getByRole('button', { name: 'Войти' }))
+  await waitFor(() => expect(seen).toBe('http://localhost:18010'))
+})
+
+test('в приложении поле адреса сервера предзаполнено сохранённым адресом', () => {
+  desktop.on = true
+  localStorage.setItem('aiccountant.server', 'http://saved:1')
+  renderPage()
+  expect((screen.getByLabelText('Адрес сервера') as HTMLInputElement).value).toBe('http://saved:1')
+})
+
+async function submitWithFailure(error: Error) {
+  vi.mocked(login).mockRejectedValueOnce(error)
+  renderPage()
+  await userEvent.type(screen.getByLabelText('Email'), 'a@b.c')
+  await userEvent.type(screen.getByLabelText('Пароль'), 'password123')
+  await userEvent.click(screen.getByRole('button', { name: 'Войти' }))
+}
+
+test('в приложении сбой связи объясняется адресом сервера и причиной', async () => {
+  desktop.on = true
+  await submitWithFailure(new TypeError('Failed to fetch'))
+  expect(await screen.findByText(/Не удалось связаться с сервером — проверьте адрес/)).toBeDefined()
+  expect(screen.getByText(/Failed to fetch/)).toBeDefined()
+})
+
+test('в приложении ответ сервера с ошибкой не выдаётся за проблему адреса', async () => {
+  desktop.on = true
+  await submitWithFailure(new ApiError(500, 'boom'))
+  expect(await screen.findByText('Не удалось войти, попробуйте ещё раз')).toBeDefined()
+})
+
+test('в браузере сбой связи остаётся общей ошибкой', async () => {
+  await submitWithFailure(new TypeError('Failed to fetch'))
+  expect(await screen.findByText('Не удалось войти, попробуйте ещё раз')).toBeDefined()
 })

@@ -16,6 +16,16 @@ import { ApiError } from '../api/client'
 import { serverUrl, setServerUrl } from '../desktop/connection'
 import { isDesktop } from '../desktop/runtime'
 
+// в приложении сбой не от сервера (нет связи, опечатка в адресе, сбой хранилища
+// ОС) общим «попробуйте ещё раз» не объяснить — показываем причину
+function errorMessage(error: Error): string {
+  if (error instanceof ApiError && error.status === 409) return 'Такой email уже зарегистрирован'
+  if (isDesktop() && !(error instanceof ApiError)) {
+    return `Не удалось связаться с сервером — проверьте адрес. ${error.message}`
+  }
+  return 'Не удалось зарегистрироваться, попробуйте ещё раз'
+}
+
 export function RegisterPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -56,9 +66,7 @@ export function RegisterPage() {
           />
           {mutation.isError && (
             <Alert color="red" mt="md">
-              {mutation.error instanceof ApiError && mutation.error.status === 409
-                ? 'Такой email уже зарегистрирован'
-                : 'Не удалось зарегистрироваться, попробуйте ещё раз'}
+              {errorMessage(mutation.error)}
             </Alert>
           )}
           <Button type="submit" fullWidth mt="xl" loading={mutation.isPending}>

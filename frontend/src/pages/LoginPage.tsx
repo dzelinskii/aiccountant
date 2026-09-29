@@ -16,6 +16,16 @@ import { ApiError } from '../api/client'
 import { serverUrl, setServerUrl } from '../desktop/connection'
 import { isDesktop } from '../desktop/runtime'
 
+// в приложении сбой не от сервера (нет связи, опечатка в адресе, сбой хранилища
+// ОС) общим «попробуйте ещё раз» не объяснить — показываем причину
+function errorMessage(error: Error): string {
+  if (error instanceof ApiError && error.status === 401) return 'Неверный email или пароль'
+  if (isDesktop() && !(error instanceof ApiError)) {
+    return `Не удалось связаться с сервером — проверьте адрес. ${error.message}`
+  }
+  return 'Не удалось войти, попробуйте ещё раз'
+}
+
 export function LoginPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -51,9 +61,7 @@ export function LoginPage() {
           <PasswordInput label="Пароль" mt="md" {...form.getInputProps('password')} />
           {mutation.isError && (
             <Alert color="red" mt="md">
-              {mutation.error instanceof ApiError && mutation.error.status === 401
-                ? 'Неверный email или пароль'
-                : 'Не удалось войти, попробуйте ещё раз'}
+              {errorMessage(mutation.error)}
             </Alert>
           )}
           <Button type="submit" fullWidth mt="xl" loading={mutation.isPending}>

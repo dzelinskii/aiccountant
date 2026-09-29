@@ -16,7 +16,7 @@ vi.mock('./api/auth', () => ({
 
 function renderLayout() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(
+  const view = render(
     <MantineProvider>
       <QueryClientProvider client={queryClient}>
         <MemoryRouter initialEntries={['/']}>
@@ -30,6 +30,7 @@ function renderLayout() {
       </QueryClientProvider>
     </MantineProvider>,
   )
+  return { ...view, queryClient }
 }
 
 beforeEach(() => {
@@ -62,4 +63,14 @@ test('в браузере после неудачного выхода оста�
   await waitFor(() => expect(logout).toHaveBeenCalled())
   expect(screen.queryByText('экран входа')).toBeNull()
   expect(screen.getByText('содержимое')).toBeDefined()
+})
+
+// clear() нужен, чтобы данные прежнего пользователя не показались следующему
+test('после выхода данные пользователя не остаются в кэше', async () => {
+  vi.mocked(logout).mockResolvedValueOnce(undefined)
+  const { queryClient } = renderLayout()
+  await waitFor(() => expect(queryClient.getQueryData(['me'])).toBeDefined())
+  await userEvent.click(screen.getByText('Выйти'))
+  await screen.findByText('экран входа')
+  expect(queryClient.getQueryData(['me'])).toBeUndefined()
 })
