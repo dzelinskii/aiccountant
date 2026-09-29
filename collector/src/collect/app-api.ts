@@ -1,4 +1,4 @@
-import type { FetchImpl } from '../http/bank-client'
+export type FetchImpl = typeof fetch
 import type { AppConnection } from './app-connection'
 
 // Сколько ошибок валидации показывать: бэкенд проверяет весь список операций

@@ -1,5 +1,5 @@
 import type { CollectedAccount } from '../core/contract'
-import type { FetchImpl } from '../http/bank-client'
+import type { FetchImpl } from './app-api'
 import { appRequest } from './app-api'
 import type { AppConnection } from './app-connection'
 import { accountFingerprint } from './fingerprint'

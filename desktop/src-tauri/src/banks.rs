@@ -26,6 +26,8 @@ pub struct Bank {
     /// private.auth.alfabank.ru), поэтому граница — домен, а не хост.
     pub domain: &'static str,
     /// Пары «метод, путь» — весь набор возможностей коллектора по банку.
+    /// С ручками плагинов сверяется в обе стороны тестом коллектора
+    /// `collector/src/plugins/shell-allowlist.test.ts`: он читает этот литерал.
     pub allowed: &'static [(&'static str, &'static str)],
     pub trust: Trust,
 }
@@ -41,14 +43,6 @@ pub const BANKS: &[Bank] = &[
             (
                 "GET",
                 "/mybank/api/operations/timeline/public/legacy/v1/operations",
-            ),
-            (
-                "GET",
-                "/mybank/api/operations/timeline/public/legacy/v1/operations_category_list_bank",
-            ),
-            (
-                "GET",
-                "/mybank/api/operations/timeline/public/legacy/v1/operations_category_list_user",
             ),
         ],
         trust: Trust::SystemAndRoot,
@@ -242,14 +236,9 @@ mod tests {
                 &[
                     ("GET", "/api/common/v1/accounts_light_ib"),
                     ("GET", "/api/common/v1/session_status"),
-                    ("GET", "/mybank/api/operations/timeline/public/legacy/v1/operations"),
                     (
                         "GET",
-                        "/mybank/api/operations/timeline/public/legacy/v1/operations_category_list_bank",
-                    ),
-                    (
-                        "GET",
-                        "/mybank/api/operations/timeline/public/legacy/v1/operations_category_list_user",
+                        "/mybank/api/operations/timeline/public/legacy/v1/operations",
                     ),
                 ],
             ),

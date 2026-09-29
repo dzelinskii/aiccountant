@@ -18,8 +18,6 @@ export class BankHttpError extends Error {
   }
 }
 
-export type FetchImpl = typeof fetch
-
 /**
  * Как предъявляется секрет банку. Для сбора это непрозрачное значение: он его
  * хранит и передаёт, но не толкует — у Т-Банка это токен в query, у Сбербанка

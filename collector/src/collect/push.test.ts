@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest'
-import type { FetchImpl } from '../http/bank-client'
+import type { FetchImpl } from './app-api'
 import type { CollectedAccount, CollectedOperation } from '../core/contract'
 import type { AppConnection } from './app-connection'
 import { pushOperations } from './push'

@@ -1,7 +1,7 @@
 import type { BankClient } from '../../http/bank-client'
 import type { Transport } from '../../http/transport'
 import type { BankPlugin, CollectedAccount, CollectedOperation, Credentials, LoginPrompt } from '../../core/contract'
-import { COMMON_PARAMS, createTBankClient } from './client'
+import { ACCOUNTS_PATH, COMMON_PARAMS, createTBankClient, OPERATIONS_PATH, SESSION_STATUS_PATH } from './client'
 import { obtainTBankToken } from './login'
 import { toAccounts, toOperations } from './map'
 
@@ -9,14 +9,14 @@ import { toAccounts, toOperations } from './map'
 export class SessionExpiredError extends Error {}
 
 export async function checkSession(client: BankClient): Promise<void> {
-  const raw = await client.getJson('/api/common/v1/session_status', { ...COMMON_PARAMS })
+  const raw = await client.getJson(SESSION_STATUS_PATH, { ...COMMON_PARAMS })
   const envelope = parseEnvelope(raw)
   assertOk(envelope.resultCode)
   assertSessionAlive(envelope.body)
 }
 
 export async function fetchAccounts(client: BankClient): Promise<CollectedAccount[]> {
-  const payload = await requestPayload(client, '/api/common/v1/accounts_light_ib', {})
+  const payload = await requestPayload(client, ACCOUNTS_PATH, {})
   return toAccounts(payload)
 }
 
@@ -28,7 +28,7 @@ export async function fetchOperations(
   since: number,
   until: number = Date.now(),
 ): Promise<CollectedOperation[]> {
-  const payload = await requestPayload(client, '/mybank/api/operations/timeline/public/legacy/v1/operations', {
+  const payload = await requestPayload(client, OPERATIONS_PATH, {
     account: accountId,
     start: String(since),
     end: String(until),

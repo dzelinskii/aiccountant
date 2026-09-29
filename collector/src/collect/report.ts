@@ -2,8 +2,7 @@ import type { CollectedOperation } from '../core/contract'
 
 /**
  * Счётчики по итогам сбора — то, чем коллектор сообщает о расхождении своих
- * словарей с ответом банка. В консоль идут только идентификаторы и числа:
- * ни сумм, ни описаний операций.
+ * словарей с ответом банка. Только числа: ни сумм, ни описаний операций.
  *
  * Живут отдельным модулем, а не рядом с тем, кто их показывает: так каждый
  * счётчик проверяется тестом сам по себе. А врущий счётчик хуже
@@ -22,8 +21,8 @@ export interface CollectedCounters {
 }
 
 /**
- * Считает счётчики итогов, ничего не печатая: экрану приложения нужны числа,
- * консоли — строки, и то и другое строится из этого подсчёта.
+ * Считает счётчики итогов. Подсчёт отделён от показа: число не зависит от
+ * того, кто его показывает.
  */
 export function countCollected(operations: readonly CollectedOperation[]): CollectedCounters {
   // Не ошибка, а повод дополнить перевод словаря в плагине: банк завёл группу,
@@ -54,37 +53,6 @@ export function countCollected(operations: readonly CollectedOperation[]): Colle
   const unrefinedIncome = operations.filter((operation) => operation.kind === 'income').length
 
   return { unknownKinds, missingHints, purchases: purchases.length, unrefinedIncome }
-}
-
-export function reportUnknownKinds(appAccountId: string, { unknownKinds }: CollectedCounters): void {
-  if (unknownKinds === 0) return
-  console.log(`счёт ${appAccountId}: вид операции не распознан у ${unknownKinds} — банк прислал незнакомую группу`)
-}
-
-export function reportMissingHints(appAccountId: string, { missingHints, purchases }: CollectedCounters): void {
-  if (missingHints === 0) return
-  console.log(`счёт ${appAccountId}: категория не определена у ${missingHints} трат из ${purchases}`)
-}
-
-export function reportUnrefinedIncome(appAccountId: string, { unrefinedIncome }: CollectedCounters): void {
-  if (unrefinedIncome === 0) return
-  console.log(`счёт ${appAccountId}: приход не разобран у ${unrefinedIncome} — банк прислал незнакомую подгруппу`)
-}
-
-/**
- * Единственный вход для печати итогов в консоль: звать его, а не счётчики
- * поодиночке.
- *
- * Причина в том, что проводку счётчиков нечем проверить, если каждый вызывается
- * отдельно: убрать один вызов можно было так, что весь набор оставался зелёным.
- * Три места, где легко забыть, сведены в одно, и это одно закреплено тестом.
- *
- * Заводя новый счётчик, добавляй его сюда — иначе он не будет вызван нигде.
- */
-export function reportCollected(appAccountId: string, counters: CollectedCounters): void {
-  reportUnknownKinds(appAccountId, counters)
-  reportMissingHints(appAccountId, counters)
-  reportUnrefinedIncome(appAccountId, counters)
 }
 
 /**

@@ -1,7 +1,8 @@
 import { expect, test, vi } from 'vitest'
-import type { FetchImpl } from '../http/bank-client'
 import { fetchTransport, type Transport } from '../http/transport'
 import { BANK_NAMES, pluginFor } from './registry'
+
+type FetchImpl = NonNullable<Parameters<typeof fetchTransport>[0]>
 
 function anyTransport(): Transport {
   return fetchTransport(vi.fn(async () => new Response('{}')) as unknown as FetchImpl)

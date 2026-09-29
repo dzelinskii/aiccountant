@@ -1,11 +1,12 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { expect, test, vi } from 'vitest'
-import type { FetchImpl } from '../../http/bank-client'
 import { fetchTransport, type Transport } from '../../http/transport'
 import type { BrowserSession, LoginPrompt } from '../../core/contract'
 import { createTBankClient } from './client'
 import { checkSession, createTBankPlugin, fetchAccounts, fetchOperations, SessionExpiredError } from './index'
+
+type FetchImpl = NonNullable<Parameters<typeof fetchTransport>[0]>
 
 function readFixtureText(name: string): string {
   const path = fileURLToPath(new URL(`../../../tests/fixtures/${name}`, import.meta.url))
