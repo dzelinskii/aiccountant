@@ -148,6 +148,8 @@ async def test_preflight_from_app_allowed(client: AsyncClient) -> None:
     )
     assert resp.status_code == 200
     assert resp.headers["access-control-allow-origin"] == TAURI_ORIGIN
+    # приложение ходит без cookie: разрешать странице слать их cross-origin незачем
+    assert "access-control-allow-credentials" not in resp.headers
 
 
 async def test_preflight_from_foreign_origin_not_allowed(client: AsyncClient) -> None:
