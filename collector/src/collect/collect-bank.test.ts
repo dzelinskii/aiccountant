@@ -1,7 +1,7 @@
 import { expect, test, vi } from 'vitest'
 import type { BankPlugin, CollectedAccount, CollectedOperation, Credentials } from '../core/contract'
 import type { FetchImpl } from '../http/allowlist-client'
-import { collectBank, type CollectHost, type SessionStore } from './collect-bank'
+import { BankSessionExpiredError, collectBank, type CollectHost, type SessionStore } from './collect-bank'
 import { accountFingerprint } from './fingerprint'
 
 const LIVE: Credentials = { kind: 'header', name: 'Cookie', value: 'live' }
@@ -182,6 +182,24 @@ test('сессия банка умерла посреди сбора — сбо�
     /кончилась посреди сбора/,
   )
   expect(p.fetchOperations).toHaveBeenCalledTimes(1)
+})
+
+test('сессия банка умерла посреди сбора — ошибка несёт счета, по которым импорты уже созданы', async () => {
+  // экран должен сказать человеку, что часть работы сделана и лежит в приложении
+  const isAlive = vi.fn<BankPlugin['isAlive']>().mockResolvedValueOnce(true).mockResolvedValue(false)
+  const p = plugin({
+    isAlive,
+    fetchOperations: vi.fn(async (_c: Credentials, id: string) => {
+      if (id === 'b') throw new Error('Банк ответил 403')
+      return [operation(`${id}-1`)]
+    }),
+  })
+  const error = await collectBank(host({ plugin: p, fetchImpl: await appFetch(['a', 'b']) })).catch((e: unknown) => e)
+  expect(error).toBeInstanceOf(BankSessionExpiredError)
+  expect((error as BankSessionExpiredError).message).toMatch(/кончилась посреди сбора/)
+  expect((error as BankSessionExpiredError).partial).toEqual([
+    expect.objectContaining({ appAccountId: 'app-a', collected: 1, importId: 'imp-1', error: null }),
+  ])
 })
 
 test('отказы счетов при живой сессии — частичный успех, живость проверена один раз', async () => {

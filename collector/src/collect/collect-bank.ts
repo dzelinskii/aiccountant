@@ -49,12 +49,27 @@ export interface CollectSummary {
 }
 
 /**
+ * Сессия банка умерла посреди сбора. Отличается от прочих отказов тем, что часть
+ * счетов к этому моменту уже собрана и их импорты созданы в приложении: человеку
+ * нужно и войти заново, и знать, что сделанное не пропало.
+ */
+export class BankSessionExpiredError extends Error {
+  /** Счета, собранные до смерти сессии; счёт, на котором она вскрылась, сюда не входит. */
+  readonly partial: AccountResult[]
+
+  constructor(partial: AccountResult[]) {
+    super('Сессия банка кончилась посреди сбора — войдите заново')
+    this.partial = partial
+  }
+}
+
+/**
  * Сбор одного банка: сессия, счета, сверка с приложением, операции по
  * привязанным счетам. Итог отдаётся объектом — печатает его CLI, рисует экран.
  *
  * Бросает, когда продолжать бессмысленно для всех счетов разом: банк не признал
- * вход или недоступен, сессия банка умерла посреди сбора, приложение отвергло
- * сессию. Отказ по одному счёту — не исключение, а строка итога.
+ * вход или недоступен, сессия банка умерла посреди сбора (`BankSessionExpiredError`),
+ * приложение отвергло сессию. Отказ по одному счёту — не исключение, а строка итога.
  */
 export async function collectBank(host: CollectHost): Promise<CollectSummary> {
   const { credentials, source } = await connect(host)
@@ -75,7 +90,7 @@ export async function collectBank(host: CollectHost): Promise<CollectSummary> {
     if (sessionChecked) return
     sessionChecked = true
     if (!(await host.plugin.isAlive(credentials))) {
-      throw new Error('Сессия банка кончилась посреди сбора — войдите заново')
+      throw new BankSessionExpiredError([...accounts])
     }
   }
   for (const account of bankAccounts) {
