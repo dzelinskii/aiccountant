@@ -56,46 +56,35 @@ export function countCollected(operations: readonly CollectedOperation[]): Colle
   return { unknownKinds, missingHints, purchases: purchases.length, unrefinedIncome }
 }
 
-export function reportUnknownKinds(appAccountId: string, operations: readonly CollectedOperation[]): void {
-  const { unknownKinds } = countCollected(operations)
+export function reportUnknownKinds(appAccountId: string, { unknownKinds }: CollectedCounters): void {
   if (unknownKinds === 0) return
   console.log(`счёт ${appAccountId}: вид операции не распознан у ${unknownKinds} — банк прислал незнакомую группу`)
 }
 
-export function reportMissingHints(appAccountId: string, operations: readonly CollectedOperation[]): void {
-  const { missingHints, purchases } = countCollected(operations)
+export function reportMissingHints(appAccountId: string, { missingHints, purchases }: CollectedCounters): void {
   if (missingHints === 0) return
   console.log(`счёт ${appAccountId}: категория не определена у ${missingHints} трат из ${purchases}`)
 }
 
-export function reportUnrefinedIncome(
-  appAccountId: string,
-  operations: readonly CollectedOperation[],
-): void {
-  const { unrefinedIncome } = countCollected(operations)
+export function reportUnrefinedIncome(appAccountId: string, { unrefinedIncome }: CollectedCounters): void {
   if (unrefinedIncome === 0) return
   console.log(`счёт ${appAccountId}: приход не разобран у ${unrefinedIncome} — банк прислал незнакомую подгруппу`)
 }
 
 /**
- * Единственный вход для сбора: main.ts зовёт его, а не счётчики поодиночке.
+ * Единственный вход для печати итогов: print-summary.ts зовёт его, а не
+ * счётчики поодиночке.
  *
- * Причина в том, что проводку счётчиков нечем проверить. main.ts — точка входа,
- * он запускает сбор прямо при импорте, и тестом оттуда ничего не достать: убрать
- * вызов счётчика можно было так, что весь набор оставался зелёным. Три места,
- * где легко забыть, сведены в одно, и это одно закреплено тестом ниже. Осталась
- * одна непокрытая строка — вызов отсюда в main.ts, — и её стережёт линтер:
- * импорт без вызова роняет сборку.
+ * Причина в том, что проводку счётчиков нечем проверить, если каждый вызывается
+ * отдельно: убрать один вызов можно было так, что весь набор оставался зелёным.
+ * Три места, где легко забыть, сведены в одно, и это одно закреплено тестом.
  *
  * Заводя новый счётчик, добавляй его сюда — иначе он не будет вызван нигде.
  */
-export function reportCollected(
-  appAccountId: string,
-  operations: readonly CollectedOperation[],
-): void {
-  reportUnknownKinds(appAccountId, operations)
-  reportMissingHints(appAccountId, operations)
-  reportUnrefinedIncome(appAccountId, operations)
+export function reportCollected(appAccountId: string, counters: CollectedCounters): void {
+  reportUnknownKinds(appAccountId, counters)
+  reportMissingHints(appAccountId, counters)
+  reportUnrefinedIncome(appAccountId, counters)
 }
 
 /**

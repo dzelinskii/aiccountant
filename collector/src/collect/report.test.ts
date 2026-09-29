@@ -37,13 +37,13 @@ test('в счётчик трат без подсказки не попадают
   // на каждом сборе рапортовал бы о дырке в справочнике, которой нет
   const log = captureLog()
 
-  reportMissingHints('acc-app', [
+  reportMissingHints('acc-app', countCollected([
     operation({ external_id: 'op-1', category_hint: null }),
     operation({ external_id: 'op-2', kind: 'transfer_person', category_hint: null }),
     operation({ external_id: 'op-3', kind: 'cash', category_hint: null }),
     operation({ external_id: 'op-4', kind: 'income', category_hint: null }),
     operation({ external_id: 'op-5' }),
-  ])
+  ]))
 
   expect(log.lines()).toEqual(['счёт acc-app: категория не определена у 1 трат из 2'])
 })
@@ -51,7 +51,7 @@ test('в счётчик трат без подсказки не попадают
 test('когда подсказка есть у всех трат, счётчик молчит', () => {
   const log = captureLog()
 
-  reportMissingHints('acc-app', [operation(), operation({ kind: 'transfer_person', category_hint: null })])
+  reportMissingHints('acc-app', countCollected([operation(), operation({ kind: 'transfer_person', category_hint: null })]))
 
   expect(log.lines()).toEqual([])
 })
@@ -61,7 +61,7 @@ test('в счётчике нет сумм и описаний операций',
   // там не место
   const log = captureLog()
 
-  reportMissingHints('acc-app', [operation({ amount: '-4242.42', description: 'Кофейня', category_hint: null })])
+  reportMissingHints('acc-app', countCollected([operation({ amount: '-4242.42', description: 'Кофейня', category_hint: null })]))
 
   const text = log.lines().join('\n')
   expect(text).not.toContain('4242.42')
@@ -71,11 +71,11 @@ test('в счётчике нет сумм и описаний операций',
 test('нераспознанные виды операций считаются по всей пачке', () => {
   const log = captureLog()
 
-  reportUnknownKinds('acc-app', [
+  reportUnknownKinds('acc-app', countCollected([
     operation({ kind: 'unknown' }),
     operation({ kind: 'unknown' }),
     operation({ kind: 'purchase' }),
-  ])
+  ]))
 
   expect(log.lines()).toEqual([
     'счёт acc-app: вид операции не распознан у 2 — банк прислал незнакомую группу',
@@ -85,7 +85,7 @@ test('нераспознанные виды операций считаются 
 test('когда все виды операций распознаны, счётчик молчит', () => {
   const log = captureLog()
 
-  reportUnknownKinds('acc-app', [operation()])
+  reportUnknownKinds('acc-app', countCollected([operation()]))
 
   expect(log.lines()).toEqual([])
 })
@@ -93,12 +93,12 @@ test('когда все виды операций распознаны, счёт
 test('счётчик называет приходы, оставшиеся доходом', () => {
   const log = captureLog()
 
-  reportUnrefinedIncome('acc-app', [
+  reportUnrefinedIncome('acc-app', countCollected([
     operation({ external_id: 'op-1', kind: 'income' }),
     operation({ external_id: 'op-2', kind: 'income' }),
     operation({ external_id: 'op-3', kind: 'transfer_person' }),
     operation({ external_id: 'op-4' }),
-  ])
+  ]))
 
   expect(log.lines()).toEqual([
     'счёт acc-app: приход не разобран у 2 — банк прислал незнакомую подгруппу',
@@ -110,10 +110,10 @@ test('счётчик молчит, когда все приходы разобр
   // мы не знаем, и в обычный день таких нет
   const log = captureLog()
 
-  reportUnrefinedIncome('acc-app', [
+  reportUnrefinedIncome('acc-app', countCollected([
     operation({ external_id: 'op-1', kind: 'transfer_person' }),
     operation({ external_id: 'op-2', kind: 'cash' }),
-  ])
+  ]))
 
   expect(log.lines()).toEqual([])
 })
@@ -121,31 +121,30 @@ test('счётчик молчит, когда все приходы разобр
 test('в выводе счётчика нет сумм и описаний', () => {
   const log = captureLog()
 
-  reportUnrefinedIncome('acc-app', [
+  reportUnrefinedIncome('acc-app', countCollected([
     operation({
       external_id: 'op-1',
       kind: 'income',
       amount: '9999.99',
       description: 'Зарплата за август',
     }),
-  ])
+  ]))
 
   expect(log.lines().join(' ')).not.toContain('9999')
   expect(log.lines().join(' ')).not.toContain('Зарплата')
 })
 
 test('при сборе срабатывают все счётчики, а не часть', () => {
-  // проводку счётчиков в main.ts проверить нечем: он запускает сбор при импорте.
-  // Забытый вызов там оставлял весь набор зелёным, поэтому вызов сведён сюда —
-  // и вот это уже проверяемо. Заведут новый счётчик, забудут добавить в
+  // каждый счётчик, забытый при печати итога, остался бы незамеченным: вызов
+  // сведён в reportCollected, и вот это уже проверяемо. Заведут новый счётчик, забудут добавить в
   // reportCollected — упадёт здесь
   const log = captureLog()
 
-  reportCollected('acc-app', [
+  reportCollected('acc-app', countCollected([
     operation({ external_id: 'op-1', kind: 'unknown' }),
     operation({ external_id: 'op-2', category_hint: null }),
     operation({ external_id: 'op-3', kind: 'income' }),
-  ])
+  ]))
 
   const lines = log.lines()
   expect(lines).toHaveLength(3)

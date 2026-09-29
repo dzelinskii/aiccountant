@@ -1,0 +1,153 @@
+import { expect, test, vi } from 'vitest'
+import type { BankPlugin, CollectedAccount, CollectedOperation, Credentials } from '../core/contract'
+import type { FetchImpl } from '../http/allowlist-client'
+import { collectBank, type CollectHost, type SessionStore } from './collect-bank'
+import { accountFingerprint } from './fingerprint'
+
+const LIVE: Credentials = { kind: 'header', name: 'Cookie', value: 'live' }
+const FRESH: Credentials = { kind: 'header', name: 'Cookie', value: 'fresh' }
+
+function account(id: string): CollectedAccount {
+  return { id, name: `Счёт ${id}`, type: 'card', currency: 'RUB', balance: '10.00', creditLimit: null, cardMasks: [] }
+}
+
+function operation(external_id: string): CollectedOperation {
+  return {
+    occurred_at: '2026-09-01T10:00:00+03:00',
+    amount: '-1.00',
+    currency: 'RUB',
+    description: 'кофе',
+    external_id,
+    kind: 'purchase',
+    category_hint: null,
+  }
+}
+
+function plugin(overrides: Partial<BankPlugin> = {}): BankPlugin {
+  return {
+    name: 'sber',
+    login: vi.fn(async () => FRESH),
+    isAlive: vi.fn(async (c: Credentials) => c.kind === 'header' && (c.value === 'live' || c.value === 'fresh')),
+    fetchAccounts: vi.fn(async () => [account('a'), account('b')]),
+    fetchOperations: vi.fn(async (_c: Credentials, id: string) => [operation(`${id}-1`)]),
+    ...overrides,
+  }
+}
+
+function sessions(initial: Credentials | null): SessionStore & { saved: Credentials | null } {
+  const store = {
+    saved: initial,
+    async read() {
+      return store.saved
+    },
+    async write(_bank: string, credentials: Credentials) {
+      store.saved = credentials
+    },
+  }
+  return store
+}
+
+/** Приложение: привязаны только перечисленные счета; импорты создаются с порядковым id. */
+async function appFetch(linkedIds: string[], failImportFor: string | null = null, importStatus = 422): Promise<FetchImpl> {
+  const linked: Record<string, string> = {}
+  for (const id of linkedIds) linked[await accountFingerprint('sber', id)] = `app-${id}`
+  let imports = 0
+  return vi.fn(async (input: RequestInfo | URL) => {
+    const url = new URL(String(input))
+    if (url.pathname === '/api/accounts/discovered') return new Response(JSON.stringify({ linked }))
+    const target = url.searchParams.get('account_id')
+    if (target === failImportFor) {
+      return new Response(JSON.stringify({ detail: 'Валюта не совпадает' }), { status: importStatus })
+    }
+    imports += 1
+    return new Response(JSON.stringify({ import_id: `imp-${imports}`, status: 'pending' }), { status: 201 })
+  }) as unknown as FetchImpl
+}
+
+function host(overrides: Partial<CollectHost>): CollectHost {
+  return {
+    plugin: plugin(),
+    sessions: sessions(LIVE),
+    prompt: {
+      withBrowser: vi.fn(async () => {
+        throw new Error('окно не должно открываться')
+      }),
+    },
+    app: { baseUrl: 'http://app.local', workspaceId: 'ws-1', authorization: 'Session t' },
+    days: 30,
+    now: () => Date.parse('2026-09-29T00:00:00Z'),
+    ...overrides,
+  }
+}
+
+test('живая сессия — вход не нужен, собираются только привязанные счета', async () => {
+  const summary = await collectBank(host({ fetchImpl: await appFetch(['a']) }))
+  expect(summary.session).toBe('stored')
+  expect(summary.accounts).toEqual([
+    expect.objectContaining({ appAccountId: 'app-a', collected: 1, importId: 'imp-1', error: null }),
+  ])
+  expect(summary.unboundCount).toBe(1)
+})
+
+test('мёртвая сессия — вход, свежий секрет сохранён, итог говорит о свежем входе', async () => {
+  const store = sessions({ kind: 'header', name: 'Cookie', value: 'dead' })
+  const summary = await collectBank(host({ sessions: store, fetchImpl: await appFetch(['a']) }))
+  expect(summary.session).toBe('login')
+  expect(store.saved).toEqual(FRESH)
+})
+
+test('банк не признал сессию после входа — ошибка, секрет не сохранён', async () => {
+  const store = sessions(null)
+  const p = plugin({ isAlive: vi.fn(async () => false) })
+  await expect(collectBank(host({ plugin: p, sessions: store, fetchImpl: await appFetch(['a']) }))).rejects.toThrow(
+    /не признал/,
+  )
+  expect(store.saved).toBeNull()
+})
+
+test('недоступность банка при проверке сессии — ошибка без входа', async () => {
+  const p = plugin({
+    isAlive: vi.fn(async () => {
+      throw new Error('Банк недоступен (таймаут)')
+    }),
+  })
+  await expect(collectBank(host({ plugin: p, fetchImpl: await appFetch(['a']) }))).rejects.toThrow(/недоступен/)
+  expect(p.login).not.toHaveBeenCalled()
+})
+
+test('отказ импорта по одному счёту не мешает другому', async () => {
+  const summary = await collectBank(host({ fetchImpl: await appFetch(['a', 'b'], 'app-a') }))
+  expect(summary.accounts).toEqual([
+    expect.objectContaining({ appAccountId: 'app-a', importId: null, error: expect.stringMatching(/422/) }),
+    expect.objectContaining({ appAccountId: 'app-b', importId: 'imp-1', error: null }),
+  ])
+})
+
+test('сессия приложения кончилась на отправке импорта — сбор останавливается целиком, а не по счетам', async () => {
+  // сверка счетов проходит, 401 приходит уже из collectAccount: если бы его
+  // глотали как отказ одного счёта, сбор вернул бы итог с ошибками по счетам
+  const fetchImpl = await appFetch(['a', 'b'], 'app-a', 401)
+  await expect(collectBank(host({ fetchImpl }))).rejects.toMatchObject({ status: 401 })
+})
+
+test('сессия приложения кончилась на сверке счетов — сбор останавливается до банка', async () => {
+  const fetchImpl = vi.fn(async () => new Response('{}', { status: 401 })) as unknown as FetchImpl
+  const p = plugin()
+  await expect(collectBank(host({ plugin: p, fetchImpl }))).rejects.toMatchObject({ status: 401 })
+  expect(p.fetchOperations).not.toHaveBeenCalled()
+})
+
+test('ни одного привязанного счёта — операции не запрашиваются', async () => {
+  const p = plugin()
+  const summary = await collectBank(host({ plugin: p, fetchImpl: await appFetch([]) }))
+  expect(summary.accounts).toEqual([])
+  expect(summary.unboundCount).toBe(2)
+  expect(p.fetchOperations).not.toHaveBeenCalled()
+})
+
+test('период сбора — последние days дней от now', async () => {
+  const p = plugin()
+  await collectBank(host({ plugin: p, fetchImpl: await appFetch(['a']) }))
+  const until = Date.parse('2026-09-29T00:00:00Z')
+  expect(p.fetchOperations).toHaveBeenCalledWith(LIVE, 'a', until - 30 * 86_400_000, until)
+})
