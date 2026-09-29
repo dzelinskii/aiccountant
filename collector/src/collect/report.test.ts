@@ -2,6 +2,7 @@ import { afterEach, expect, test, vi } from 'vitest'
 import type { CollectedOperation } from '../core/contract'
 import {
   accountsWord,
+  countCollected,
   reportCollected,
   reportMissingHints,
   reportUnknownKinds,
@@ -151,6 +152,23 @@ test('при сборе срабатывают все счётчики, а не 
   expect(lines.some((line) => line.includes('вид операции не распознан'))).toBe(true)
   expect(lines.some((line) => line.includes('категория не определена'))).toBe(true)
   expect(lines.some((line) => line.includes('приход не разобран'))).toBe(true)
+})
+
+test('счётчики считаются числами, без печати', () => {
+  // экрану приложения нужны числа, а не строки консоли: подсчёт отделён от печати.
+  // У не-трат подсказка пустая намеренно: считай счётчик по всем операциям,
+  // а не по тратам — и missingHints разъедется
+  const log = captureLog()
+
+  const counters = countCollected([
+    operation({ external_id: 'op-1', kind: 'unknown', category_hint: null }),
+    operation({ external_id: 'op-2', category_hint: null }),
+    operation({ external_id: 'op-3' }),
+    operation({ external_id: 'op-4', kind: 'income', category_hint: null }),
+  ])
+
+  expect(counters).toEqual({ unknownKinds: 1, missingHints: 1, purchases: 2, unrefinedIncome: 1 })
+  expect(log.lines()).toEqual([])
 })
 
 test('счета склоняются по-русски, включая второй десяток', () => {
