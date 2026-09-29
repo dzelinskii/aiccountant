@@ -1,6 +1,7 @@
-pub mod banks;
+mod banks;
 mod http;
 mod secrets;
+mod windows;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -13,6 +14,13 @@ pub fn run() {
             secrets::app_token_read,
             secrets::app_token_write,
             secrets::app_token_clear,
+            windows::bank_window_open,
+            windows::bank_window_goto,
+            windows::bank_window_url,
+            windows::bank_window_cookies,
+            windows::bank_window_clear_cookie,
+            windows::bank_window_close,
+            windows::bank_forget,
         ])
         .run(tauri::generate_context!())
         .expect("приложение не запустилось");
