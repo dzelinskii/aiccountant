@@ -10,6 +10,7 @@ use crate::banks;
 
 const SERVICE: &str = "aiccountant";
 const APP_TOKEN_KEY: &str = "app-token";
+const TOO_LONG: &str = "Секрет длиннее, чем принимает хранилище ОС";
 
 pub trait Backend {
     fn get(&self, key: &str) -> Result<Option<String>, String>;
@@ -44,7 +45,12 @@ fn get_entry(entry: &keyring::Entry) -> Result<Option<String>, String> {
 }
 
 fn set_entry(entry: &keyring::Entry, value: &str) -> Result<(), String> {
-    entry.set_password(value).map_err(unavailable)
+    entry.set_password(value).map_err(|e| match e {
+        // слишком длинное значение — не сбой хранилища: чинится не повтором, а
+        // другим размером, и сообщение должно это сказать
+        keyring::Error::TooLong(..) => TOO_LONG.to_string(),
+        other => unavailable(other),
+    })
 }
 
 // стирать нечего — не ошибка: «забыть доступ» работает и до первого входа
@@ -249,6 +255,13 @@ mod tests {
     }
 
     #[test]
+    fn too_long_value_is_reported_as_too_long_not_unavailable() {
+        let e = mock_entry();
+        fail_next(&e, keyring::Error::TooLong("secret".into(), 2560));
+        assert_eq!(set_entry(&e, "v").unwrap_err(), TOO_LONG);
+    }
+
+    #[test]
     fn storage_failure_on_set_is_an_error() {
         let e = mock_entry();
         fail_next(&e, platform_failure());
@@ -338,6 +351,8 @@ mod tests {
             // принятая запись читается целиком
             assert!(fits(ok));
             assert_eq!(OsKeyring.get(&p.0).unwrap().map(|s| s.len()), Some(ok));
+            // отказ по длине узнаваем по тексту, а не выглядит как сбой хранилища
+            assert_eq!(OsKeyring.set(&p.0, &"a".repeat(bad)).unwrap_err(), TOO_LONG);
             println!("МАКСИМУМ ASCII-записи: {ok} символов (отказ с {bad})");
         }
     }
