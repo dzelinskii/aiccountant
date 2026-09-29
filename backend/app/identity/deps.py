@@ -22,6 +22,28 @@ def token_scope(request: Request) -> uuid.UUID | None:
     return getattr(request.state, "token_workspace_id", None)
 
 
+def session_from_header(authorization: str | None) -> str | None:
+    """Токен сессии из `Authorization: Session <токен>`; None — заголовок не про
+    сессию. Нужен двоим: входу по заголовку и выходу, который обязан закрыть
+    именно предъявленную сессию."""
+    if authorization is None:
+        return None
+    scheme, _, raw = authorization.partition(" ")
+    if scheme.lower() != "session" or not raw.strip():
+        return None
+    return raw.strip()
+
+
+async def _user_by_session(db: AsyncSession, redis: Redis, token: str) -> User:
+    user_id = await get_session_user_id(redis, token)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="Сессия истекла")
+    user = await db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Пользователь не найден")
+    return user
+
+
 async def get_current_user(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -34,6 +56,12 @@ async def get_current_user(
     # иначе исполнитель запроса зависит от форматирования заголовка, а не от
     # факта авторизации
     if authorization is not None:
+        # приложение (десктоп, телефон) предъявляет ту же серверную сессию, что
+        # браузер держит в cookie: это человек, а не машинный токен, поэтому
+        # token_workspace_id не выставляется и запреты для токенов его не касаются
+        session_token = session_from_header(authorization)
+        if session_token is not None:
+            return await _user_by_session(db, redis, session_token)
         scheme, _, raw = authorization.partition(" ")
         if scheme.lower() != "bearer" or not raw.strip():
             raise HTTPException(status_code=401, detail="Неверный токен")
@@ -48,13 +76,7 @@ async def get_current_user(
         return user
     if session is None:
         raise HTTPException(status_code=401, detail="Не авторизован")
-    user_id = await get_session_user_id(redis, session)
-    if user_id is None:
-        raise HTTPException(status_code=401, detail="Сессия истекла")
-    session_user = await db.get(User, user_id)
-    if session_user is None:
-        raise HTTPException(status_code=401, detail="Пользователь не найден")
-    return session_user
+    return await _user_by_session(db, redis, session)
 
 
 async def require_session_user(

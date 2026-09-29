@@ -1,7 +1,7 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, Response
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +15,7 @@ from app.identity.deps import (
     require_owner,
     require_session_user,
     require_workspace_member,
+    session_from_header,
     token_scope,
 )
 from app.identity.models import User
@@ -83,9 +84,11 @@ async def logout(
     response: Response,
     redis: Annotated[Redis, Depends(get_redis)],
     session: Annotated[str | None, Cookie()] = None,
+    authorization: Annotated[str | None, Header()] = None,
 ) -> None:
-    if session is not None:
-        await sessions.delete_session(redis, session)
+    token = session_from_header(authorization) or session
+    if token is not None:
+        await sessions.delete_session(redis, token)
     response.delete_cookie(SESSION_COOKIE)
 
 
