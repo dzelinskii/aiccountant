@@ -39,7 +39,10 @@ impl Backend for OsKeyring {
 fn get_entry(entry: &keyring::Entry) -> Result<Option<String>, String> {
     match entry.get_password() {
         Ok(value) => Ok(Some(value)),
-        Err(keyring::Error::NoEntry) => Ok(None),
+        // Запись, которую не разобрать, — не сбой, а «секрета нет»: человек
+        // просто войдёт заново, а не будет чистить хранилище руками (так же
+        // читается негодная запись в `collector/src/collect/credentials-codec.ts`).
+        Err(keyring::Error::NoEntry | keyring::Error::BadEncoding(_)) => Ok(None),
         Err(e) => Err(unavailable(e)),
     }
 }
@@ -247,6 +250,13 @@ mod tests {
     }
 
     #[test]
+    fn unreadable_record_reads_as_absence() {
+        let e = mock_entry();
+        fail_next(&e, keyring::Error::BadEncoding(vec![0xff]));
+        assert_eq!(get_entry(&e).unwrap(), None);
+    }
+
+    #[test]
     fn storage_failure_on_delete_is_an_error_not_forgotten() {
         let e = mock_entry();
         set_entry(&e, "v").unwrap();
@@ -345,14 +355,14 @@ mod tests {
             assert_eq!(OsKeyring.get(&p.0).unwrap().as_deref(), Some("two"));
         }
 
-        // Значение, которое хранилище отдаёт с ошибкой (не UTF-16), — это сбой, а
-        // не «секрета нет»: иначе чтение отправило бы на вход вместо сообщения.
+        // Запись, которую не разобрать как текст (здесь — одинокий суррогат
+        // UTF-16), читается как «секрета нет».
         #[test]
         #[ignore = "пишет в хранилище ОС"]
-        fn unreadable_value_is_an_error_not_absence() {
+        fn unreadable_value_reads_as_absence() {
             let p = Probe::new("unreadable");
             entry(&p.0).unwrap().set_secret(&[0x00, 0xd8]).unwrap();
-            assert!(OsKeyring.get(&p.0).is_err());
+            assert_eq!(OsKeyring.get(&p.0).unwrap(), None);
         }
 
         // Печатает предел длины ASCII-записи; запуск с `--nocapture`.
