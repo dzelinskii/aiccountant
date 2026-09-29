@@ -57,10 +57,13 @@ test('второй сбор того же банка, пока идёт перв
       }),
   )
   const first = runExclusive('sber', () => invoke('bank_window_open'))
-  await expect(runExclusive('sber', async () => undefined)).rejects.toThrow(BUSY)
-  await expect(runExclusive('alfa', async () => 'другой банк')).resolves.toBe('другой банк')
-  release()
-  await first
+  try {
+    await expect(runExclusive('sber', async () => undefined)).rejects.toThrow(BUSY)
+    await expect(runExclusive('alfa', async () => 'другой банк')).resolves.toBe('другой банк')
+  } finally {
+    release()
+    await first
+  }
   await expect(runExclusive('sber', async () => 'снова можно')).resolves.toBe('снова можно')
 })
 
@@ -115,24 +118,24 @@ test('без входа в приложение сбор отвергается 
 })
 
 test('хост сбора: приложение, сессия, период, плагин и транспорт именно этого банка', async () => {
-  const plugin = { name: 'sber' }
-  const summary = { bank: 'sber', session: 'stored', accounts: [], unboundCount: 0 }
+  const plugin = { name: 'alfa' }
+  const summary = { bank: 'alfa', session: 'stored', accounts: [], unboundCount: 0 }
   pluginFor.mockResolvedValueOnce(plugin)
   collectBank.mockResolvedValueOnce(summary)
 
-  await expect(collectFromApp('sber', 'ws-1')).resolves.toBe(summary)
+  await expect(collectFromApp('alfa', 'ws-1')).resolves.toBe(summary)
 
   expect(pluginFor).toHaveBeenCalledTimes(1)
   const [name, options] = pluginFor.mock.calls[0] as [string, { transport: (bank: string) => Promise<unknown> }]
-  expect(name).toBe('sber')
-  expect(await options.transport('sber')).toEqual({ kind: 'transport', bank: 'sber' })
+  expect(name).toBe('alfa')
+  expect(await options.transport('alfa')).toEqual({ kind: 'transport', bank: 'alfa' })
 
   expect(collectBank).toHaveBeenCalledTimes(1)
   const [host] = collectBank.mock.calls[0] as [Record<string, unknown>]
   expect(host).toEqual({
     plugin,
     sessions: osSessions,
-    prompt: { kind: 'prompt', bank: 'sber' },
+    prompt: { kind: 'prompt', bank: 'alfa' },
     app: { baseUrl: 'http://srv.test', workspaceId: 'ws-1', authorization: 'Session tok' },
     days: 30,
   })
