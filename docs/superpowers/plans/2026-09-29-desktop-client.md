@@ -2286,7 +2286,7 @@ use crate::secrets;
 
 /// Флаги WebView2, которые Tauri ставит сам: additional_browser_args их
 /// заменяет, а не дополняет, поэтому они повторены рядом с закреплением.
-const DEFAULT_ARGS: &str = "--disable-features=msWebOoUI,msPdfOOUI,msSmartScreenProtection";
+const DEFAULT_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection";
 
 #[derive(Serialize)]
 pub struct CookieOut {
@@ -2436,7 +2436,7 @@ mod tests {
     #[test]
     fn pin_keeps_tauri_defaults() {
         let args = browser_args();
-        assert!(args.contains("--disable-features=msWebOoUI,msPdfOOUI,msSmartScreenProtection"));
+        assert!(args.contains("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection"));
         assert!(args.ends_with(&format!("--ignore-certificate-errors-spki-list={}", banks::ROOT_SPKI_SHA256)));
     }
 }
