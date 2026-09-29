@@ -140,7 +140,7 @@ async def test_unknown_client_rejected(client: AsyncClient) -> None:
 
 
 @pytest.mark.parametrize("origin", TAURI_ORIGINS)
-@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
+@pytest.mark.parametrize("method", ["GET", "POST", "PUT", "PATCH", "DELETE"])
 async def test_preflight_from_app_allowed(client: AsyncClient, origin: str, method: str) -> None:
     resp = await client.options(
         "/api/auth/login",

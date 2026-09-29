@@ -191,8 +191,8 @@ origin отклоняется самим `CORSMiddleware` — `400` «Disallowed
 Порядок слоёв на это не влияет: проверка origin OPTIONS не трогает
 (`csrf.py:9`, `csrf.py:26`) и пропускает origin'ы из списка. Необработанная
 ошибка сервера CORS-заголовков не получает при любом порядке: её отвечает
-`ServerErrorMiddleware`, самый внешний слой (`starlette/applications.py`,
-`build_middleware_stack`), — окно приложения увидит `500` как сетевую ошибку
+`ServerErrorMiddleware`, самый внешний слой (FastAPI 0.139.0 по `uv.lock`,
+`fastapi/applications.py`, `FastAPI.build_middleware_stack`), — окно приложения увидит `500` как сетевую ошибку
 `fetch`, а не как ответ.
 
 ## Токен для программного доступа
