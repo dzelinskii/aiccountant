@@ -21,23 +21,37 @@ pub struct OsKeyring;
 
 impl Backend for OsKeyring {
     fn get(&self, key: &str) -> Result<Option<String>, String> {
-        match entry(key)?.get_password() {
-            Ok(value) => Ok(Some(value)),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(e) => Err(unavailable(e)),
-        }
+        get_entry(&entry(key)?)
     }
 
     fn set(&self, key: &str, value: &str) -> Result<(), String> {
-        entry(key)?.set_password(value).map_err(unavailable)
+        set_entry(&entry(key)?, value)
     }
 
-    // стирать нечего — не ошибка: «забыть доступ» работает и до первого входа
     fn delete(&self, key: &str) -> Result<(), String> {
-        match entry(key)?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(unavailable(e)),
-        }
+        delete_entry(&entry(key)?)
+    }
+}
+
+// Ветвление по ошибкам вынесено из `OsKeyring`, чтобы гонять его на
+// поддельной записи без ОС: живое хранилище ошибку по заказу не отдаёт.
+fn get_entry(entry: &keyring::Entry) -> Result<Option<String>, String> {
+    match entry.get_password() {
+        Ok(value) => Ok(Some(value)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(unavailable(e)),
+    }
+}
+
+fn set_entry(entry: &keyring::Entry, value: &str) -> Result<(), String> {
+    entry.set_password(value).map_err(unavailable)
+}
+
+// стирать нечего — не ошибка: «забыть доступ» работает и до первого входа
+fn delete_entry(entry: &keyring::Entry) -> Result<(), String> {
+    match entry.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(unavailable(e)),
     }
 }
 
@@ -193,6 +207,52 @@ mod tests {
         write_session(&m, "tbank", "t").unwrap();
         clear_session(&m, "tbank").unwrap();
         assert_eq!(read_session(&m, "tbank").unwrap(), None);
+    }
+
+    fn mock_entry() -> keyring::Entry {
+        keyring::Entry::new_with_credential(Box::new(keyring::mock::MockCredential::default()))
+    }
+
+    fn fail_next(entry: &keyring::Entry, error: keyring::Error) {
+        let mock: &keyring::mock::MockCredential = entry.get_credential().downcast_ref().unwrap();
+        mock.set_error(error);
+    }
+
+    fn platform_failure() -> keyring::Error {
+        keyring::Error::PlatformFailure("сбой".into())
+    }
+
+    #[test]
+    fn entry_roundtrip_and_absence() {
+        let e = mock_entry();
+        assert_eq!(get_entry(&e).unwrap(), None);
+        set_entry(&e, "v").unwrap();
+        assert_eq!(get_entry(&e).unwrap().as_deref(), Some("v"));
+        delete_entry(&e).unwrap();
+        assert_eq!(get_entry(&e).unwrap(), None);
+        delete_entry(&e).unwrap();
+    }
+
+    #[test]
+    fn storage_failure_on_get_is_an_error_not_absence() {
+        let e = mock_entry();
+        fail_next(&e, platform_failure());
+        assert!(get_entry(&e).is_err());
+    }
+
+    #[test]
+    fn storage_failure_on_delete_is_an_error_not_forgotten() {
+        let e = mock_entry();
+        set_entry(&e, "v").unwrap();
+        fail_next(&e, platform_failure());
+        assert!(delete_entry(&e).is_err());
+    }
+
+    #[test]
+    fn storage_failure_on_set_is_an_error() {
+        let e = mock_entry();
+        fail_next(&e, platform_failure());
+        assert!(set_entry(&e, "v").is_err());
     }
 
     // Живое хранилище ОС: `cargo test -- --ignored`. Обычный прогон его не
