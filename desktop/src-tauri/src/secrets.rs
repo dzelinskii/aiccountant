@@ -261,6 +261,30 @@ mod tests {
         assert_eq!(set_entry(&e, "v").unwrap_err(), TOO_LONG);
     }
 
+    // `BadEncoding` несёт байты самой записи, и `{error:?}` вывел бы их как список
+    // чисел, а не текстом, — поэтому ищем значение в обоих видах.
+    #[test]
+    fn error_text_does_not_carry_the_value() {
+        let value = b"S3CR3T-VALUE".to_vec();
+        let as_bytes = format!("{value:?}");
+        let leaks = |message: &str| {
+            message.contains("S3CR3T-VALUE") || message.contains(as_bytes.trim_matches(['[', ']']))
+        };
+        let bad_encoding = || keyring::Error::BadEncoding(value.clone());
+
+        let e = mock_entry();
+        fail_next(&e, bad_encoding());
+        assert!(!leaks(&set_entry(&e, "v").unwrap_err()));
+        set_entry(&e, "v").unwrap();
+        fail_next(&e, bad_encoding());
+        assert!(!leaks(&delete_entry(&e).unwrap_err()));
+        fail_next(&e, bad_encoding());
+        if let Err(message) = get_entry(&e) {
+            assert!(!leaks(&message));
+        }
+        assert!(!leaks(&unavailable(bad_encoding())));
+    }
+
     #[test]
     fn storage_failure_on_set_is_an_error() {
         let e = mock_entry();
