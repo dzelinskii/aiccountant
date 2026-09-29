@@ -20,7 +20,10 @@ const TIMEOUT: Duration = Duration::from_secs(30);
 /// управление соединением и длиной, `X-HTTP-Method-Override` и им подобные.
 const ALLOWED_HEADERS: &[&str] = &["accept", "content-type", "cookie", "x-xsrf-token"];
 
-#[derive(Debug, Serialize)]
+/// `Debug` только в тестах: случайный `{:?}` в коде приложения не должен
+/// вывести банковские данные в лог, и без `Debug` он не соберётся.
+#[cfg_attr(test, derive(Debug))]
+#[derive(Serialize)]
 pub struct BankResponse {
     pub status: u16,
     /// Тело только у успешного ответа: тело отказа ядру не нужно, а в нём
