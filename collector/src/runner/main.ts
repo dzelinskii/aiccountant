@@ -6,6 +6,7 @@ import { browserPrompt } from './browser'
 import { loadConfig, type CollectorConfig } from './config'
 import { readDeclined, rememberDeclined } from './declined'
 import { syncDiscovered } from './discovered'
+import { httpsTransport } from './https-transport'
 import { askAboutAccounts, decideCandidates } from './link-prompt'
 import { pushOperations } from './push'
 import { accountsWord, reportCollected } from './report'
@@ -17,18 +18,12 @@ const CA_CACHE = fileURLToPath(new URL('../../profile/russian_trusted_root_ca.pe
 
 async function main(): Promise<void> {
   const config = loadConfig()
-  // сертификат добывается лениво: банку, чей УЦ известен системе, он не нужен,
-  // и падать из-за недоступности точки раздачи сертификата такой сбор не должен.
-  // Побочно это же и определяет, надо ли закреплять ключ УЦ в окне входа: пин
-  // получает ровно тот банк, который попросил корень, — без списка банков в
-  // оболочке и без расширения доверия там, где оно не нужно
-  let pinnedSpki: string | undefined
-  const plugin = await pluginFor(config.bank, {
-    loadCa: async () => {
-      pinnedSpki = ROOT_SPKI_SHA256
-      return loadTrustAnchor(CA_CACHE)
-    },
-  })
+  // Т-Банк 2026-09-29 отдал цепочку от корня Минцифры (спека десктопного клиента,
+  // §3.1), поэтому до своего удаления CLI ходит во все три банка через этот корень
+  // и закрепляет его ключ в окне входа у всех трёх
+  const transport = httpsTransport(await loadTrustAnchor(CA_CACHE))
+  const plugin = await pluginFor(config.bank, { transport: async () => transport })
+  const pinnedSpki = ROOT_SPKI_SHA256
   const store = osSecretStore()
 
   const credentials = await connect(plugin, store, pinnedSpki)

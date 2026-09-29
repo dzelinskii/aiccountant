@@ -21,11 +21,11 @@ export const COMMON_PARAMS = {
 } as const
 
 interface CreateOptions {
-  transport?: Transport
+  transport: Transport
   timeoutMs?: number
 }
 
-export function createTBankClient(token: string, options: CreateOptions = {}): AllowlistClient {
+export function createTBankClient(token: string, options: CreateOptions): AllowlistClient {
   return new AllowlistClient({
     baseUrl: TBANK_BASE,
     allowed: TBANK_ALLOWED,

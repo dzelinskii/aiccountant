@@ -11,8 +11,11 @@ export class NotAllowedError extends Error {}
  * текста ошибки.
  */
 export class BankHttpError extends Error {
-  constructor(readonly status: number) {
+  readonly status: number
+
+  constructor(status: number) {
     super(`Банк ответил ${status}`)
+    this.status = status
   }
 }
 

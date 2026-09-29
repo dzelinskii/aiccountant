@@ -13,8 +13,7 @@ const PAGE_SIZE = 100
 const MAX_PAGES = 200
 
 interface PluginOptions {
-  ca: string
-  transport?: Transport
+  transport: Transport
   timeoutMs?: number
 }
 

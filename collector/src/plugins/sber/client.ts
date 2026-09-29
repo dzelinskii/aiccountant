@@ -1,7 +1,6 @@
 import { AllowlistClient } from '../../http/allowlist-client'
 import type { AllowedEndpoint, Credentials } from '../../http/allowlist-client'
 import type { Transport } from '../../http/transport'
-import { httpsTransport } from '../../http/transport'
 
 export const SBER_BASE = 'https://web-node3.online.sberbank.ru'
 
@@ -30,12 +29,11 @@ export const SBER_ALLOWED: readonly AllowedEndpoint[] = [
 ]
 
 interface CreateOptions {
-  ca: string
-  transport?: Transport
+  transport: Transport
   timeoutMs?: number
 }
 
-export function createSberClient(credentials: Credentials, { ca, transport, timeoutMs }: CreateOptions): AllowlistClient {
+export function createSberClient(credentials: Credentials, { transport, timeoutMs }: CreateOptions): AllowlistClient {
   if (credentials.kind !== 'header') {
     throw new Error('Сбербанк ожидает секрет заголовком — сохранённая запись не той формы')
   }
@@ -43,9 +41,7 @@ export function createSberClient(credentials: Credentials, { ca, transport, time
     baseUrl: SBER_BASE,
     allowed: SBER_ALLOWED,
     credentials,
-    // корень УЦ Минцифры заменяет системный набор: у Сбербанка его в системе
-    // нет, и одновременно это проверка строже системной — доверяем одному УЦ
-    transport: transport ?? httpsTransport(ca),
+    transport,
     timeoutMs,
   })
 }

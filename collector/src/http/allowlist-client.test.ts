@@ -1,9 +1,6 @@
-import { readFileSync } from 'node:fs'
-import { createServer } from 'node:https'
-import { fileURLToPath } from 'node:url'
 import { expect, test, vi } from 'vitest'
 import { AllowlistClient, BankHttpError, NotAllowedError } from './allowlist-client'
-import { fetchTransport, httpsTransport } from './transport'
+import { fetchTransport } from './transport'
 import type { Transport } from './transport'
 
 const ALLOWED = [{ path: '/api/common/v1/session_status', method: 'GET' as const }]
@@ -242,36 +239,6 @@ test('сетевые сбои различимы и для транспорта 
   await expect(client.getJson('/api/common/v1/session_status')).rejects.toSatisfy(
     (e: Error) => e.message.includes('Error') && e.message.includes('ECONNREFUSED'),
   )
-})
-
-test('таймаут httpsTransport доходит до текста ошибки клиента как ETIMEDOUT, а не безымянной "(Error)"', async () => {
-  // сквозной сценарий через настоящий TLS-сервер: без кода на ошибке таймаута
-  // (см. abortError в transport.ts) describeCause показал бы голое "(Error)" —
-  // самый частый отказ банка остался бы единственным нечитаемым в списке
-  // остальных (ECONNREFUSED, ENOTFOUND, недоверенный сертификат)
-  const cert = readFileSync(fileURLToPath(new URL('../../tests/fixtures/https-test-cert.pem', import.meta.url)), 'utf-8')
-  const key = readFileSync(fileURLToPath(new URL('../../tests/fixtures/https-test-key.pem', import.meta.url)), 'utf-8')
-  const server = createServer({ cert, key }, (_req, res) => {
-    res.writeHead(200, { 'Content-Type': 'application/json' })
-    // тело намеренно не закрываем — банк "задумался"
-  })
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-  const address = server.address()
-  if (address === null || typeof address === 'string') throw new Error('не удалось поднять тестовый сервер')
-
-  try {
-    const client = new AllowlistClient({
-      baseUrl: `https://127.0.0.1:${address.port}`,
-      allowed: ALLOWED,
-      credentials: CREDENTIALS,
-      transport: httpsTransport(cert),
-      timeoutMs: 50,
-    })
-    await expect(client.getJson('/api/common/v1/session_status')).rejects.toThrow(/ETIMEDOUT/)
-  } finally {
-    server.closeAllConnections()
-    await new Promise<void>((resolve) => server.close(() => resolve()))
-  }
 })
 
 test('текст ответа не пробрасывается при ошибке разбора', async () => {

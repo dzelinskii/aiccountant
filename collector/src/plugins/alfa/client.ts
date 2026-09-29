@@ -1,7 +1,6 @@
 import { AllowlistClient } from '../../http/allowlist-client'
 import type { AllowedEndpoint, Credentials } from '../../http/allowlist-client'
 import type { Transport } from '../../http/transport'
-import { httpsTransport } from '../../http/transport'
 
 export const ALFA_BASE = 'https://web.alfabank.ru'
 
@@ -24,8 +23,7 @@ export const ALFA_ALLOWED: readonly AllowedEndpoint[] = [
 ]
 
 interface CreateOptions {
-  ca: string
-  transport?: Transport
+  transport: Transport
   timeoutMs?: number
 }
 
@@ -35,7 +33,7 @@ interface CreateOptions {
  * повториться в заголовке X-XSRF-TOKEN. Извлекаем его из самой строки Cookie —
  * так второй копии секрета не заводим, и заголовок не разъедется с кукой.
  */
-export function createAlfaClient(credentials: Credentials, { ca, transport, timeoutMs }: CreateOptions): AllowlistClient {
+export function createAlfaClient(credentials: Credentials, { transport, timeoutMs }: CreateOptions): AllowlistClient {
   if (credentials.kind !== 'header') {
     throw new Error('Альфа ожидает секрет заголовком Cookie — сохранённая запись не той формы')
   }
@@ -44,8 +42,7 @@ export function createAlfaClient(credentials: Credentials, { ca, transport, time
     baseUrl: ALFA_BASE,
     allowed: ALFA_ALLOWED,
     credentials: { kind: 'headers', headers: { [credentials.name]: cookie, 'X-XSRF-TOKEN': xsrfFromCookie(cookie) } },
-    // корень УЦ Минцифры — тот же, что у Сбера; заменяет системный набор
-    transport: transport ?? httpsTransport(ca),
+    transport,
     timeoutMs,
   })
 }

@@ -1,4 +1,5 @@
 import type { AllowlistClient } from '../../http/allowlist-client'
+import type { Transport } from '../../http/transport'
 import type { BankPlugin, CollectedAccount, CollectedOperation, Credentials, LoginPrompt } from '../../core/contract'
 import { COMMON_PARAMS, createTBankClient } from './client'
 import { obtainTBankToken } from './login'
@@ -131,27 +132,43 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-export const tbankPlugin: BankPlugin = {
-  name: 'tbank',
+interface PluginOptions {
+  transport: Transport
+  timeoutMs?: number
+}
 
-  async login(prompt: LoginPrompt): Promise<Credentials> {
-    // проверка живости обновлённого в фоне токена — забота плагина, а не
-    // оболочки: она же и решает, нужен ли ещё видимый вход
-    const token = await obtainTBankToken(prompt, (candidate) => isSessionAlive(createTBankClient(candidate)))
-    return { kind: 'query', name: 'sessionid', value: token }
-  },
+export function createTBankPlugin(options: PluginOptions): BankPlugin {
+  const clientFor = (credentials: Credentials): AllowlistClient => {
+    if (credentials.kind !== 'query') {
+      throw new Error('Т-Банк ожидает секрет в query — сохранённая запись не той формы')
+    }
+    return createTBankClient(credentials.value, options)
+  }
 
-  isAlive(credentials: Credentials): Promise<boolean> {
-    return isSessionAlive(clientFor(credentials))
-  },
+  return {
+    name: 'tbank',
 
-  fetchAccounts(credentials: Credentials) {
-    return fetchAccounts(clientFor(credentials))
-  },
+    async login(prompt: LoginPrompt): Promise<Credentials> {
+      // проверка живости обновлённого в фоне токена — забота плагина, а не
+      // оболочки: она же и решает, нужен ли ещё видимый вход
+      const token = await obtainTBankToken(prompt, (candidate) =>
+        isSessionAlive(createTBankClient(candidate, options)),
+      )
+      return { kind: 'query', name: 'sessionid', value: token }
+    },
 
-  fetchOperations(credentials: Credentials, accountId: string, since: number, until: number) {
-    return fetchOperations(clientFor(credentials), accountId, since, until)
-  },
+    isAlive(credentials: Credentials): Promise<boolean> {
+      return isSessionAlive(clientFor(credentials))
+    },
+
+    fetchAccounts(credentials: Credentials) {
+      return fetchAccounts(clientFor(credentials))
+    },
+
+    fetchOperations(credentials: Credentials, accountId: string, since: number, until: number) {
+      return fetchOperations(clientFor(credentials), accountId, since, until)
+    },
+  }
 }
 
 async function isSessionAlive(client: AllowlistClient): Promise<boolean> {
@@ -162,11 +179,4 @@ async function isSessionAlive(client: AllowlistClient): Promise<boolean> {
     if (error instanceof SessionExpiredError) return false
     throw error
   }
-}
-
-function clientFor(credentials: Credentials): AllowlistClient {
-  if (credentials.kind !== 'query') {
-    throw new Error('Т-Банк ожидает секрет в query — сохранённая запись не той формы')
-  }
-  return createTBankClient(credentials.value)
 }
