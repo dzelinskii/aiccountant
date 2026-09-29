@@ -11,7 +11,9 @@
   },
   "app": {
     "windows": [{ "label": "main", "title": "AIccountant", "width": 1280, "height": 800 }],
-    "security": { "csp": null }
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost https: http:"
+    }
   },
   "bundle": { "active": false, "icon": ["icons/icon.png", "icons/icon.ico"] }
 }

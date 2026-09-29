@@ -3,7 +3,6 @@
   "description": "Окно приложения. Окна банков сюда не входят намеренно.",
   "windows": ["main"],
   "permissions": [
-    "core:default",
     "allow-bank-request",
     "allow-secret-session-read",
     "allow-secret-session-write",
