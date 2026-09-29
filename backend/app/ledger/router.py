@@ -43,8 +43,9 @@ from app.ledger.schemas import (
 router = APIRouter(prefix="/api")
 
 
-def _account_out(account: Account, balance: Decimal) -> AccountOut:
-    # balance нет в модели Account — это результат правила остатка, подставляем отдельно
+def _account_out(account: Account, balance: Decimal, credit: service.CreditView) -> AccountOut:
+    # ни balance, ни кредитной части нет в модели Account — это результаты
+    # правил остатка и лимита, подставляем отдельно
     return AccountOut(
         id=account.id,
         name=account.name,
@@ -56,6 +57,9 @@ def _account_out(account: Account, balance: Decimal) -> AccountOut:
         card_masks=account.card_masks,
         bank_code=account.bank_code,
         is_bank_linked=account.bank_account_fingerprint is not None,
+        credit_limit=credit.limit,
+        credit_limit_at=credit.limit_at,
+        credit_available=credit.available,
     )
 
 
@@ -66,7 +70,7 @@ async def list_accounts(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> list[AccountOut]:
     rows = await service.list_accounts(db, workspace_id)
-    return [_account_out(acc, bal) for acc, bal in rows]
+    return [_account_out(acc, bal, credit) for acc, bal, credit in rows]
 
 
 def _discovered_out(row: DiscoveredAccount) -> DiscoveredAccountOut:
@@ -110,12 +114,12 @@ async def create_account(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> AccountOut:
     try:
-        account, balance = await service.create_account(db, workspace_id, payload)
+        account, balance, credit = await service.create_account(db, workspace_id, payload)
     except service.DiscoveredNotFoundError:
         raise HTTPException(
             status_code=404, detail="Счёт банка не найден среди увиденных"
         ) from None
-    return _account_out(account, balance)
+    return _account_out(account, balance, credit)
 
 
 @router.patch("/accounts/{account_id}")
@@ -127,12 +131,14 @@ async def update_account(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> AccountOut:
     try:
-        account, balance = await service.update_account(db, workspace_id, account_id, payload)
+        account, balance, credit = await service.update_account(
+            db, workspace_id, account_id, payload
+        )
     except service.NotFoundError:
         raise HTTPException(status_code=404, detail="Счёт не найден") from None
     except service.ReportedBalanceError:
         raise HTTPException(status_code=409, detail="Остаток счёта приходит от источника") from None
-    return _account_out(account, balance)
+    return _account_out(account, balance, credit)
 
 
 @router.post("/accounts/{account_id}/link")
@@ -144,7 +150,7 @@ async def link_account(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> AccountOut:
     try:
-        account, balance = await service.link_account(db, workspace_id, account_id, payload)
+        account, balance, credit = await service.link_account(db, workspace_id, account_id, payload)
     except service.NotFoundError:
         raise HTTPException(status_code=404, detail="Счёт не найден") from None
     except service.DiscoveredNotFoundError:
@@ -153,7 +159,7 @@ async def link_account(
         ) from None
     except service.AlreadyLinkedError:
         raise HTTPException(status_code=409, detail="Счёт уже привязан к счёту банка") from None
-    return _account_out(account, balance)
+    return _account_out(account, balance, credit)
 
 
 @router.get("/categories")

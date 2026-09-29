@@ -21,7 +21,16 @@ const config: CollectorConfig = {
 }
 
 function account(id: string, extra: Partial<CollectedAccount> = {}): CollectedAccount {
-  return { id, name: `Счёт ${id}`, type: 'CURRENT', currency: 'RUB', balance: null, cardMasks: [], ...extra }
+  return {
+    id,
+    name: `Счёт ${id}`,
+    type: 'CURRENT',
+    currency: 'RUB',
+    balance: null,
+    creditLimit: null,
+    cardMasks: [],
+    ...extra,
+  }
 }
 
 // ---- decideCandidates -------------------------------------------------

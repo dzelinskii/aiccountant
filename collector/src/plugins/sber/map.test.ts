@@ -215,6 +215,7 @@ test('карта превращается в счёт с идентификат�
     type: 'debit',
     currency: 'RUB',
     balance: '1500.55',
+    creditLimit: null,
     cardMasks: ['1234'],
   })
 })
@@ -222,8 +223,10 @@ test('карта превращается в счёт с идентификат�
 // Блок creditType, каким его отдаёт cardInfo: долг у карты в обороте велик, а
 // собственных средств почти нет — ровно тот случай, на котором прежнее правило
 // («остаток равен собственным средствам») показывало почти ноль вместо долга
-function creditInfo(debt = '147601.23', own = '250.00'): Map<string, unknown> {
-  return new Map([['3300131089810779', { creditOwnSum: { amount: own }, creditDebt: { amount: debt } }]])
+function creditInfo(debt = '147601.23', own = '250.00', limit = '150000.00'): Map<string, unknown> {
+  return new Map([
+    ['3300131089810779', { creditLimit: { amount: limit }, creditOwnSum: { amount: own }, creditDebt: { amount: debt } }],
+  ])
 }
 
 test('у кредитной карты остаток — чистая позиция: собственные минус долг, при долге минус', () => {
@@ -242,6 +245,32 @@ test('в остаток кредитки не просачивается ни д
 test('тип карты сравнивается регистронезависимо', () => {
   const [account] = toAccounts(parse([creditCard({ type: 'CREDIT' })]) as Record<string, unknown>[], creditInfo())
   expect(account?.balance).toBe('-147351.23')
+})
+
+test('кредитный лимит собирается из того же блока, что и долг', () => {
+  const [account] = toAccounts(parse([creditCard()]) as Record<string, unknown>[], creditInfo())
+  expect(account?.creditLimit).toBe('150000.00')
+})
+
+test('у дебетовой карты лимита нет', () => {
+  // сторож против «взять creditLimit у всех подряд»: заёмные деньги на
+  // дебетовой карте выглядели бы доступными к трате. Блок в карте намеренно
+  // есть — иначе проверка типа не проверялась бы, её спасал бы промах по карте
+  const withBlock = new Map([['1200010304635762', { creditLimit: { amount: '150000.00' } }]])
+  const [account] = toAccounts(parse([debitCard()]) as Record<string, unknown>[], withBlock)
+  expect(account?.creditLimit).toBeNull()
+})
+
+test('незнакомый тип карты лимита не получает', () => {
+  // тот же выбор, что у остатка: на незнакомом значении type не гадаем
+  const [account] = toAccounts(parse([creditCard({ type: 'prepaid' })]) as Record<string, unknown>[], creditInfo())
+  expect(account?.creditLimit).toBeNull()
+})
+
+test('cardInfo не ответил — лимит null, и сбор не падает', () => {
+  const [account] = toAccounts(parse([creditCard()]) as Record<string, unknown>[])
+  expect(account?.creditLimit).toBeNull()
+  expect(account?.id).toBe('card:3300131089810779')
 })
 
 test('долг не пришёл — остаток кредитки null, а не ноль', () => {

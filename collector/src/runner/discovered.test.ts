@@ -19,6 +19,7 @@ function account(id: string, extra: Partial<CollectedAccount> = {}): CollectedAc
     type: 'CURRENT',
     currency: 'RUB',
     balance: '1000.00',
+    creditLimit: null,
     cardMasks: ['1234'],
     ...extra,
   }

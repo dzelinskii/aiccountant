@@ -71,6 +71,13 @@ class AccountOut(BaseModel):
     # привязан ли счёт к счёту банка: фронт предлагает привязывать только
     # непривязанные. Сам отпечаток наружу не отдаём — он там не нужен
     is_bank_linked: bool
+    # кредитный лимит и момент, когда его в последний раз называл банк; пусто —
+    # лимита у счёта не наблюдали
+    credit_limit: MoneyStr | None
+    credit_limit_at: datetime | None
+    # сколько можно потратить: лимит плюс остаток. Пусто — лимит и остаток
+    # известны на разные моменты, и считать их вместе значило бы соврать
+    credit_available: MoneyStr | None
 
 
 class BankOut(BaseModel):
@@ -299,6 +306,9 @@ class DashboardAccount(BaseModel):
     # и по той же причине — банк: список счетов и дашборд обязаны раскладывать
     # одни и те же счета одинаково
     bank_code: str | None
+    credit_limit: MoneyStr | None
+    credit_limit_at: datetime | None
+    credit_available: MoneyStr | None
 
 
 class MonthExpense(BaseModel):

@@ -1,6 +1,20 @@
 import { api } from './client'
 
-export interface Account {
+/**
+ * Кредитная часть счёта. Считает её бэкенд: «доступно» — это сложение денег, а
+ * во фронте деньги через Number не проходят (правило проекта).
+ */
+export interface CreditFields {
+  // последний известный лимит и момент, когда его называл банк; null — лимита
+  // у счёта не наблюдали
+  credit_limit: string | null
+  credit_limit_at: string | null
+  // сколько можно потратить; null — лимит и остаток известны на разные моменты,
+  // и складывать их значило бы показать достоверно выглядящую неправду
+  credit_available: string | null
+}
+
+export interface Account extends CreditFields {
   id: string
   name: string
   type: string
@@ -89,7 +103,7 @@ export interface TransactionList {
 }
 
 export interface Dashboard {
-  accounts: {
+  accounts: (CreditFields & {
     id: string
     name: string
     type: string
@@ -100,7 +114,7 @@ export interface Dashboard {
     // и по той же причине, что у Account: список счетов и дашборд обязаны
     // раскладывать одни и те же счета одинаково
     bank_code: string | null
-  }[]
+  })[]
   month_expenses: { category_id: string; category_name: string; total: string }[]
   recent: {
     id: string

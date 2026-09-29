@@ -456,9 +456,10 @@ test('toAccounts приводит счета к нашей модели', () => 
       type: 'Current',
       currency: 'RUB',
       balance: '10000.50',
+      creditLimit: null,
       cardMasks: ['1234'],
     },
-    { id: 'acc-2', name: 'Накопительный', type: 'Saving', currency: 'RUB', balance: '500', cardMasks: [] },
+    { id: 'acc-2', name: 'Накопительный', type: 'Saving', currency: 'RUB', balance: '500', creditLimit: null, cardMasks: [] },
   ])
 })
 
@@ -475,8 +476,8 @@ test('счёт с незнакомым числовым кодом валюты 
     { id: 'acc-1', name: 'Счёт для трат', accountType: 'Current', currency: { strCode: '643' } },
   ])
   expect(accounts).toEqual([
-    { id: 'acc-x', name: 'Валютный счёт', type: 'Current', currency: null, balance: null, cardMasks: [] },
-    { id: 'acc-1', name: 'Счёт для трат', type: 'Current', currency: 'RUB', balance: null, cardMasks: [] },
+    { id: 'acc-x', name: 'Валютный счёт', type: 'Current', currency: null, balance: null, creditLimit: null, cardMasks: [] },
+    { id: 'acc-1', name: 'Счёт для трат', type: 'Current', currency: 'RUB', balance: null, creditLimit: null, cardMasks: [] },
   ])
 })
 
@@ -493,6 +494,87 @@ test('остаток счёта берётся из moneyAmount строкой �
   ])
   expect(account?.balance).toBe('12345678901234.5678')
   expect(typeof account?.balance).toBe('string')
+})
+
+// Кредитная карта, как её отдаёт банк: moneyAmount — доступное к трате
+// (лимит + собственные − долг), а не деньги владельца. Числа взяты с живой
+// карты: 139999.53 + 2000.47 долга = ровно лимит 142000.00
+function creditCard(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return baseAccount({
+    id: 'acc-credit',
+    name: 'Platinum',
+    accountType: 'Credit',
+    moneyAmount: { value: '139999.53', currency: { strCode: '643' } },
+    creditLimit: { value: '142000.00', currency: { strCode: '643' } },
+    debtAmount: { value: '2000.47', currency: { strCode: '643' } },
+    ...overrides,
+  })
+}
+
+test('у кредитной карты остаток — чистая позиция: доступное минус лимит, при долге минус', () => {
+  const [account] = toAccounts([creditCard()])
+  expect(account?.balance).toBe('-2000.47')
+})
+
+test('в остаток кредитки не просачивается доступное к трате', () => {
+  // сторож против прежнего поведения: 139999.53 — это почти весь кредитный
+  // лимит, и показать его значило бы выдать заёмные деньги за свои
+  const [account] = toAccounts([creditCard()])
+  expect(account?.balance).not.toBe('139999.53')
+  expect(account?.balance).not.toBe('139999.5300')
+})
+
+test('собственные средства на кредитке дают положительный остаток', () => {
+  // до трат доступное превышало лимит ровно на собственные деньги
+  const [account] = toAccounts([creditCard({ moneyAmount: { value: '142599.53', currency: { strCode: '643' } }, debtAmount: { value: '0.00', currency: { strCode: '643' } } })])
+  expect(account?.balance).toBe('599.53')
+})
+
+test('тип счёта сравнивается регистронезависимо', () => {
+  const [account] = toAccounts([creditCard({ accountType: 'CREDIT' })])
+  expect(account?.balance).toBe('-2000.47')
+})
+
+test('кредитка без лимита даёт остаток null, а не доступное к трате', () => {
+  const withoutLimit = creditCard()
+  delete withoutLimit['creditLimit']
+  const [account] = toAccounts([withoutLimit])
+  expect(account?.balance).toBeNull()
+})
+
+test('кредитный лимит карты собирается строкой', () => {
+  const [account] = toAccounts([creditCard()])
+  expect(account?.creditLimit).toBe('142000.00')
+})
+
+test('лимит собирается и при другом регистре типа счёта', () => {
+  const [account] = toAccounts([creditCard({ accountType: 'CREDIT' })])
+  expect(account?.creditLimit).toBe('142000.00')
+})
+
+test('у обычного счёта лимита нет, даже если поле пришло', () => {
+  // сторож против «взять creditLimit у всех подряд»: лимит дебетовой карты
+  // приложение показало бы как «сколько можно потратить в долг»
+  const [account] = toAccounts([baseAccount({ creditLimit: { value: '999.00', currency: { strCode: '643' } } })])
+  expect(account?.creditLimit).toBeNull()
+})
+
+test('кредитка без поля лимита отдаёт лимит null', () => {
+  const withoutLimit = creditCard()
+  delete withoutLimit['creditLimit']
+  const [account] = toAccounts([withoutLimit])
+  expect(account?.creditLimit).toBeNull()
+})
+
+test('обычный счёт пересчёт не затрагивает — остаток как прислал банк', () => {
+  // лимит у обычного счёта не появляется, но даже появись он, вычитать нельзя
+  const [account] = toAccounts([baseAccount({ creditLimit: { value: '999.00', currency: { strCode: '643' } } })])
+  expect(account?.balance).toBe('1000.50')
+})
+
+test('кредит наличными остаётся без остатка — moneyAmount у него нет', () => {
+  const [account] = toAccounts([{ id: 'acc-loan', name: 'Кредит наличными', accountType: 'CashLoan', currency: { strCode: '643' }, debtAmount: { value: '-50000.00' } }])
+  expect(account?.balance).toBeNull()
 })
 
 test('счёт без moneyAmount даёт остаток null, а не падение', () => {

@@ -12,6 +12,7 @@ from app.ledger.models import (
     Account,
     Category,
     Counterparty,
+    CreditLimitObservation,
     DescriptionRule,
     DiscoveredAccount,
     Transaction,
@@ -125,6 +126,44 @@ async def get_discovered(
         )
     )
     return row
+
+
+async def latest_credit_limit(
+    db: AsyncSession, workspace_id: uuid.UUID, account_id: uuid.UUID
+) -> CreditLimitObservation | None:
+    """Последнее наблюдение лимита у счёта; None — лимит у счёта не наблюдали."""
+    observation: CreditLimitObservation | None = await db.scalar(
+        select(CreditLimitObservation)
+        .where(
+            CreditLimitObservation.workspace_id == workspace_id,
+            CreditLimitObservation.account_id == account_id,
+        )
+        .order_by(CreditLimitObservation.confirmed_at.desc())
+        .limit(1)
+    )
+    return observation
+
+
+async def latest_credit_limits(
+    db: AsyncSession, workspace_id: uuid.UUID
+) -> dict[uuid.UUID, CreditLimitObservation]:
+    """Последние наблюдения лимита по всем счетам workspace одним запросом.
+
+    Счета без наблюдений в словаре отсутствуют. Запросом на счёт это было бы
+    N+1 на каждый показ списка счетов и дашборда.
+    """
+    stmt = (
+        select(CreditLimitObservation)
+        .where(CreditLimitObservation.workspace_id == workspace_id)
+        .distinct(CreditLimitObservation.account_id)
+        .order_by(CreditLimitObservation.account_id, CreditLimitObservation.confirmed_at.desc())
+    )
+    rows = await db.scalars(stmt)
+    return {observation.account_id: observation for observation in rows}
+
+
+def add_credit_limit_observation(db: AsyncSession, observation: CreditLimitObservation) -> None:
+    db.add(observation)
 
 
 async def existing_external_ids(

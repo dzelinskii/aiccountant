@@ -1,4 +1,32 @@
+from datetime import datetime
 from decimal import Decimal
+
+
+def credit_available(
+    limit: Decimal | None,
+    limit_at: datetime | None,
+    reported_balance: Decimal | None,
+    reported_at: datetime | None,
+) -> Decimal | None:
+    """Сколько можно потратить по кредитной карте: лимит плюс остаток.
+
+    Остаток кредитки — чистая позиция владельца, при долге отрицательная, так
+    что сложение и даёт доступное к трате.
+
+    None означает «считать нельзя», и это главное правило здесь: лимит и остаток
+    обязаны быть замечены **одним сбором**. Иначе свежий остаток сложился бы со
+    старым лимитом — подняли лимит, а в ответе банка его в этот раз не было, — и
+    получилось бы достоверно выглядящее неверное число. Лучше не показать
+    ничего, чем показать такое.
+
+    Отрицательный результат не обрезается: карта сверх лимита — это факт,
+    а не ошибка расчёта, и прятать его нельзя.
+    """
+    if limit is None or limit_at is None or reported_balance is None or reported_at is None:
+        return None
+    if limit_at != reported_at:
+        return None
+    return limit + reported_balance
 
 
 def visible_balance(

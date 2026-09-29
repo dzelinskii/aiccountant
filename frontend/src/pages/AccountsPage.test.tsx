@@ -31,6 +31,7 @@ const base: Account = {
   id: 'a1', name: 'Т-Банк', type: 'card', currency: 'RUB', is_archived: false,
   balance: '4900.0000', reported_at: null, card_masks: [], bank_code: null,
   is_bank_linked: false,
+  credit_limit: null, credit_limit_at: null, credit_available: null,
 }
 
 beforeEach(() => {
@@ -249,4 +250,20 @@ test('счёт, показанный банком, привязывается к
     bank_code: 'alfa',
     bank_account_fingerprint: 'a'.repeat(64),
   })
+})
+
+test('кредитка в списке счетов показывает «доступно / лимит»', async () => {
+  // стык страницы и общего блока: счёт может доехать до него обрезанным, и
+  // тогда кредитная часть молча пропадёт
+  renderPage([{
+    ...base,
+    balance: '-148063.8100',
+    reported_at: '2026-09-15T10:15:00+03:00',
+    credit_limit: '150000.0000',
+    credit_limit_at: '2026-09-15T10:15:00+03:00',
+    credit_available: '1936.1900',
+  }])
+
+  expect(await screen.findByText('доступно к трате')).toBeDefined()
+  expect((document.body.textContent ?? '').replace(/\s+/gu, ' ')).toContain('1 936,19 / 150 000,00')
 })

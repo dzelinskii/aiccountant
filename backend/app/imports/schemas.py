@@ -124,11 +124,14 @@ class ParsedAccountIn(BaseModel):
     """
 
     balance: Money
+    # кредитный лимит карты; отсутствует у обычных счетов и у кредиток, про
+    # лимит которых банк промолчал. Вместе с остатком даёт «доступно к трате»
+    credit_limit: Money | None = None
     card_masks: list[str] = Field(default_factory=list, max_length=MAX_CARD_MASKS)
 
-    @field_validator("balance", mode="before")
+    @field_validator("balance", "credit_limit", mode="before")
     @classmethod
-    def _balance_not_float(cls, value: object) -> object:
+    def _money_not_float(cls, value: object) -> object:
         return reject_float(value)
 
     @field_validator("card_masks")

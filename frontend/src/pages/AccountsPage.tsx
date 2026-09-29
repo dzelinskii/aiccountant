@@ -13,7 +13,8 @@ import {
   type Account,
   type DiscoveredAccount,
 } from '../api/ledger'
-import { ACCOUNT_TYPES, accountLabel, formatMoment, groupAccountsByBank } from '../lib/account'
+import { AccountBalance } from '../components/AccountBalance'
+import { ACCOUNT_TYPES, accountLabel, groupAccountsByBank } from '../lib/account'
 import { formatMoney } from '../lib/money'
 import { useWorkspaceStore } from '../store/workspace'
 
@@ -176,14 +177,7 @@ export function AccountsPage() {
                   )}
                 </div>
                 <Group>
-                  <div>
-                    <Text fw={700} ta="right">{formatMoney(a.balance, a.currency)}</Text>
-                    {a.reported_at && (
-                      <Text c="dimmed" size="xs" ta="right">
-                        остаток на {formatMoment(a.reported_at)}
-                      </Text>
-                    )}
-                  </div>
+                  <AccountBalance account={a} align="right" size="md" />
                   <Button variant="light" size="xs" onClick={() => openEdit(a)}>Изменить</Button>
                 </Group>
               </Group>

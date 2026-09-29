@@ -1,5 +1,6 @@
 import { hintFromMcc, type CategoryHint } from '../../core/category-hints'
 import type { CollectedAccount, CollectedOperation } from '../../core/contract'
+import { subtractDecimal } from '../../core/money'
 
 /**
  * Отображение ответа Т-Банка в нашу модель. Вход — результат parseLossless,
@@ -85,17 +86,71 @@ function toAccount(item: unknown): CollectedAccount {
     type: getStr(item, 'accountType') ?? '',
     currency: resolveCurrency(getRecord(item, 'currency')),
     balance: resolveBalance(item),
+    creditLimit: resolveCreditLimit(item),
     cardMasks: resolveCardMasks(item),
   }
 }
 
-// Остаток — та же строка, что и суммы операций: через число деньги не проходят.
-// Нет блока или значение не строкой — null, а не остановка: остаток дополняет
-// сбор, и терять из-за него операции счёта несоразмерно
+// Тип счёта, у которого «остаток» означает не то же, что у обычного: там это
+// доступное к трате, а не деньги владельца. Прочие кредитные виды (CashLoan,
+// BNPL) сюда не попадают намеренно — у них поля moneyAmount нет вовсе, и
+// пересчитывать нечего
+const CREDIT_CARD_ACCOUNT_TYPE = 'credit'
+
+/**
+ * Остаток — та же строка, что и суммы операций: через число деньги не проходят.
+ * Нет блока или значение не строкой — null, а не остановка: остаток дополняет
+ * сбор, и терять из-за него операции счёта несоразмерно.
+ *
+ * **У кредитной карты `moneyAmount` — не деньги владельца, а доступное к
+ * трате.** Замерено на живой карте: `moneyAmount` 139999.53 плюс `debtAmount`
+ * 2000.47 дают ровно `creditLimit` 142000.00, а до трат `moneyAmount` превышал
+ * лимит на величину собственных средств. То есть поле равно
+ * `лимит + собственные − долг`, и класть его в остаток значит выдать весь
+ * кредитный лимит за деньги человека.
+ *
+ * Чистая позиция получается вычитанием лимита: `moneyAmount − creditLimit`
+ * равно «собственные минус долг» — при долге отрицательно, при собственных
+ * средствах положительно. Долг отдельным полем для этого не нужен, и его
+ * знак (у карты положительный, у кредита наличными отрицательный) нас не
+ * касается.
+ */
 function resolveBalance(item: Record<string, unknown>): string | null {
   const moneyAmount = getRecord(item, 'moneyAmount')
   if (!moneyAmount) return null
-  return toAmountString(moneyAmount['value']) ?? null
+  const available = toAmountString(moneyAmount['value'])
+  if (available === undefined) return null
+
+  if (!isCreditCard(item)) return available
+
+  const limitValue = creditLimitValue(item)
+  // без лимита пересчитать нечем, а вернуть доступное к трате — соврать на весь
+  // кредитный лимит; null честно означает «остаток не показываем»
+  if (limitValue === undefined) return null
+  return subtractDecimal(available, limitValue)
+}
+
+function isCreditCard(item: Record<string, unknown>): boolean {
+  return (getStr(item, 'accountType') ?? '').toLowerCase() === CREDIT_CARD_ACCOUNT_TYPE
+}
+
+function creditLimitValue(item: Record<string, unknown>): string | undefined {
+  const limit = getRecord(item, 'creditLimit')
+  return limit ? toAmountString(limit['value']) : undefined
+}
+
+/**
+ * Кредитный лимит карты — то же поле, из которого получается чистая позиция,
+ * только здесь оно едет в приложение как есть: вместе с остатком оно даёт
+ * «сколько могу потратить».
+ *
+ * Берём только у кредитной карты. У CashLoan и BNPL слово «лимит» означает
+ * другое (у BNPL приходят approvedLimit/availableLimit, а долга нет вовсе), и
+ * они остаются отдельным вопросом беклога.
+ */
+function resolveCreditLimit(item: Record<string, unknown>): string | null {
+  if (!isCreditCard(item)) return null
+  return creditLimitValue(item) ?? null
 }
 
 const MASK_LENGTH = 4

@@ -12,6 +12,7 @@ vi.mock('../api/ledger', () => ({ getDashboard: vi.fn(), getBanks: vi.fn() }))
 const account = {
   id: 'a1', name: 'Т-Банк', type: 'card', currency: 'RUB', balance: '4900.0000',
   reported_at: null, card_masks: [] as string[], bank_code: null,
+  credit_limit: null, credit_limit_at: null, credit_available: null,
 }
 
 beforeEach(() => {
@@ -51,4 +52,21 @@ test('момент показан рядом с остатком от источ
   renderPage([{ ...account, reported_at: '2026-09-03T10:15:00+03:00' }])
 
   expect(await screen.findByText(/остаток на/)).toBeDefined()
+})
+
+test('кредитка на дашборде показывает «доступно / лимит»', async () => {
+  // дашборд и список счетов обязаны говорить об одном счёте одно и то же
+  renderPage([
+    {
+      ...account,
+      balance: '-148063.8100',
+      reported_at: '2026-09-15T10:15:00+03:00',
+      credit_limit: '150000.0000',
+      credit_limit_at: '2026-09-15T10:15:00+03:00',
+      credit_available: '1936.1900',
+    },
+  ])
+
+  expect(await screen.findByText('доступно к трате')).toBeDefined()
+  expect((document.body.textContent ?? '').replace(/\s+/gu, ' ')).toContain('1 936,19 / 150 000,00')
 })
