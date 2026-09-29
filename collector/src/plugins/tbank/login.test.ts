@@ -6,9 +6,9 @@ const COOKIE = 'psid'
 const MYBANK_URL = 'https://www.tbank.ru/mybank/'
 const LOGIN_URL = 'https://www.tbank.ru/login/'
 
-// Часы подделки не дают опросу зависнуть: цикл без ожидания не возвращает
-// управление в цикл событий, и без предохранителя дефект в опросе выглядел бы
-// как зависший прогон, а не как упавший тест
+// Часы подделки не дают опросу зависнуть: цикл, который не смотрит на срок или
+// не ждёт, не возвращает управление в цикл событий, и без предохранителя
+// дефект в опросе выглядел бы как зависший прогон, а не как упавший тест
 function fakeTiming(): LoginTiming & { waits: number[] } {
   let clock = 0
   let reads = 0
@@ -20,6 +20,7 @@ function fakeTiming(): LoginTiming & { waits: number[] } {
       return clock
     },
     wait: async (ms) => {
+      if (waits.length >= 10_000) throw new Error('опрос не кончается')
       waits.push(ms)
       clock += ms
     },
