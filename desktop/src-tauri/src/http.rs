@@ -13,20 +13,12 @@ use crate::banks::{self, Bank, Trust};
 
 const TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Заголовки, которые окну ставить нельзя. `Host` hyper подставляет сам, но
-/// только если его нет: иначе скрипт отправил бы запрос на разрешённый хост
-/// с чужим `Host`. Остальные — управление соединением и длиной тела, их
-/// выставляет клиент, а не вызывающий.
-const FORBIDDEN_HEADERS: &[&str] = &[
-    "host",
-    "connection",
-    "keep-alive",
-    "te",
-    "trailer",
-    "transfer-encoding",
-    "upgrade",
-    "content-length",
-];
+/// Заголовки, которые окну можно ставить, — ровно те, что шлёт коллектор
+/// (`AllowlistClient` и клиенты Сбера и Альфы). Список, а не запрет: hyper
+/// подставляет `Host` только если его нет, и скрипт окна мог бы отправить
+/// запрос на разрешённый хост с чужим `Host`; так же закрыты `:authority`,
+/// управление соединением и длиной, `X-HTTP-Method-Override` и им подобные.
+const ALLOWED_HEADERS: &[&str] = &["accept", "content-type", "cookie", "x-xsrf-token"];
 
 #[derive(Debug, Serialize)]
 pub struct BankResponse {
@@ -58,17 +50,12 @@ pub fn client_for(bank: &Bank) -> Result<reqwest::Client, String> {
         .map_err(|e| format!("HTTP-клиент не собрался: {e}"))
 }
 
-/// Заголовки из окна проходят как есть, кроме служебных (см.
-/// `FORBIDDEN_HEADERS`). В тексте отказа только имя: значение — это куки
-/// или токен.
+/// Проходят только заголовки из `ALLOWED_HEADERS`, регистр имени не важен.
+/// В тексте отказа только имя: значение — это куки или токен.
 fn check_headers(headers: &HashMap<String, String>) -> Result<HeaderMap, String> {
     let mut checked = HeaderMap::new();
     for (name, value) in headers {
-        let lower = name.to_ascii_lowercase();
-        if lower.starts_with(':')
-            || lower.starts_with("proxy-")
-            || FORBIDDEN_HEADERS.contains(&lower.as_str())
-        {
+        if !ALLOWED_HEADERS.contains(&name.to_ascii_lowercase().as_str()) {
             return Err(format!("Заголовок не разрешён: {name}"));
         }
         let invalid = || format!("Неверный заголовок: {name}");
@@ -341,29 +328,33 @@ mod tests {
     }
 
     #[test]
-    fn service_headers_are_rejected_by_name_only() {
+    fn headers_outside_the_list_are_rejected_by_name_only() {
         for name in [
             "Host",
             "host",
             "HOST",
-            "Content-Length",
-            "content-length",
             ":authority",
             ":path",
+            "Content-Length",
             "Connection",
-            "Keep-Alive",
             "Proxy-Authorization",
-            "proxy-connection",
-            "TE",
-            "Trailer",
             "Transfer-Encoding",
             "Upgrade",
+            "X-HTTP-Method-Override",
+            "X-Original-URL",
+            "Accept-Encoding",
         ] {
             let err = check_headers(&headers(&[(name, "secret-value")])).unwrap_err();
             assert!(err.starts_with("Заголовок не разрешён"), "{name}: {err}");
             assert!(err.contains(name), "{name}: {err}");
             assert!(!err.contains("secret-value"), "{name}: {err}");
         }
+    }
+
+    #[test]
+    fn header_names_are_case_insensitive() {
+        let checked = check_headers(&headers(&[("COOKIE", "a=b"), ("x-xsrf-token", "t")])).unwrap();
+        assert_eq!(checked.len(), 2);
     }
 
     #[test]
