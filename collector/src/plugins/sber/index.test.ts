@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest'
-import { BankHttpError } from '../../http/allowlist-client'
+import { BankHttpError } from '../../http/bank-client'
 import type { Transport } from '../../http/transport'
-import { SBER_ALLOWED, SBER_BASE } from './client'
+import { SBER_BASE } from './client'
 import { createSberPlugin, toSberDate } from './index'
 
 const CREDENTIALS = { kind: 'header', name: 'Cookie', value: 'UFS-SESSION=a; UFS-TOKEN=b' } as const
@@ -179,16 +179,6 @@ test('200 с телом не той формы обязан бросать, а �
 test('секрет не той формы отвергается понятной ошибкой', async () => {
   const plugin = createSberPlugin({ transport: pagingTransport([0]).transport })
   await expect(plugin.fetchAccounts({ kind: 'query', name: 'sessionid', value: 'x' })).rejects.toThrowError(/заголовк/i)
-})
-
-test('в allowlist только чтение истории, списка продуктов и деталей карты', () => {
-  // третий адрес добавлен ради долга по кредитке: в списке продуктов его нет.
-  // Список закреплён целиком — расширение allowlist обязано быть заметным
-  expect(SBER_ALLOWED.map((endpoint) => endpoint.path)).toEqual([
-    '/uoh-bh/v1/operations/list',
-    '/main-screen/rest/v2/m1/web/section/meta',
-    '/ufs-carddetail/rest/card/v1/cardInfo',
-  ])
 })
 
 test('базовый адрес Сбербанка закреплён, и транспорт получает URL именно этого origin', async () => {

@@ -1,15 +1,13 @@
 import { expect, test, vi } from 'vitest'
-import { AllowlistClient, BankHttpError, NotAllowedError } from './allowlist-client'
+import { BankClient, BankHttpError, NotAllowedError } from './bank-client'
 import { fetchTransport } from './transport'
 import type { Transport } from './transport'
 
-const ALLOWED = [{ path: '/api/common/v1/session_status', method: 'GET' as const }]
 const CREDENTIALS = { kind: 'query' as const, name: 'sessionid', value: 'token' }
 
 function clientWith(fetchImpl: typeof fetch) {
-  return new AllowlistClient({
+  return new BankClient({
     baseUrl: 'https://bank.example',
-    allowed: ALLOWED,
     credentials: CREDENTIALS,
     transport: fetchTransport(fetchImpl),
   })
@@ -29,18 +27,11 @@ function recordingTransport(body = '{"ok":true}'): {
   return { transport, calls }
 }
 
-test('разрешённый путь уходит в сеть', async () => {
-  const fetchImpl = vi.fn(async () => new Response('{"ok":true}', { status: 200 }))
-  const client = clientWith(fetchImpl as unknown as typeof fetch)
-  await client.getJson('/api/common/v1/session_status')
-  expect(fetchImpl).toHaveBeenCalledTimes(1)
-})
-
-test('путь вне списка не доходит до сети', async () => {
-  const fetchImpl = vi.fn()
-  const client = clientWith(fetchImpl as unknown as typeof fetch)
-  await expect(client.getJson('/api/common/v1/transfer')).rejects.toBeInstanceOf(NotAllowedError)
-  expect(fetchImpl).not.toHaveBeenCalled()
+test('путь уходит в сеть относительно базового адреса, секрет — в query', async () => {
+  const { transport, calls } = recordingTransport()
+  const client = new BankClient({ baseUrl: 'https://bank.example', credentials: CREDENTIALS, transport })
+  await client.getJson('/api/common/v1/session_status', { page: '2' })
+  expect(calls.map((call) => call.url)).toEqual(['https://bank.example/api/common/v1/session_status?page=2&sessionid=token'])
 })
 
 test('чужой хост не доходит до сети', async () => {
@@ -52,20 +43,13 @@ test('чужой хост не доходит до сети', async () => {
   expect(fetchImpl).not.toHaveBeenCalled()
 })
 
-test('проверка origin реально отрабатывает, а не маскируется проверкой пути', async () => {
-  // предыдущий тест отсекается уже на allowlist пути (полный URL не совпадает
-  // ни с одной строкой из списка) — проверка origin в нём не участвует.
-  // здесь путь протокольно-относительный ("//evil.example/x"), поэтому проходит
-  // allowlist как строка, но при разрешении относительно baseUrl указывает
-  // на чужой хост — и должен быть отбит именно проверкой origin
+test('протокольно-относительный путь не уводит секрет на чужой хост', async () => {
+  // "//evil.example/x" выглядит путём, но при разрешении относительно baseUrl
+  // указывает на чужой хост — а секрет уходит с каждым запросом
   const fetchImpl = vi.fn()
-  const client = new AllowlistClient({
-    baseUrl: 'https://bank.example',
-    allowed: [{ path: '//evil.example/x', method: 'GET' }],
-    credentials: CREDENTIALS,
-    transport: fetchTransport(fetchImpl as unknown as typeof fetch),
-  })
+  const client = clientWith(fetchImpl as unknown as typeof fetch)
   await expect(client.getJson('//evil.example/x')).rejects.toBeInstanceOf(NotAllowedError)
+  await expect(client.postJson('//evil.example/x', {})).rejects.toBeInstanceOf(NotAllowedError)
   expect(fetchImpl).not.toHaveBeenCalled()
 })
 
@@ -107,10 +91,10 @@ test(
   // название описывает не то, что здесь проверяется: обрыв чтения тела при
   // срабатывании сигнала здесь реализует сам фейковый fetchImpl (см. его
   // обработчик abort ниже), а не транспорт под проверкой. Тест на деле
-  // подтверждает, что таймер AllowlistClient (см. комментарий у fetchText)
+  // подтверждает, что таймер BankClient (см. комментарий у fetchText)
   // не гасится к моменту чтения тела, а продолжает действовать и после
   // получения заголовков
-  'сигнал таймаута AllowlistClient остаётся рабочим и во время чтения тела, не только до получения заголовков',
+  'сигнал таймаута BankClient остаётся рабочим и во время чтения тела, не только до получения заголовков',
   async () => {
     // заголовки пришли (fetchImpl уже зарезолвился), а тело — нет: банк
     // "задумался" на середине выписки или мобильная сеть оборвалась.
@@ -130,9 +114,8 @@ test(
       })
       return Promise.resolve(new Response(stream))
     })
-    const client = new AllowlistClient({
+    const client = new BankClient({
       baseUrl: 'https://bank.example',
-      allowed: ALLOWED,
       credentials: CREDENTIALS,
       transport: fetchTransport(fetchImpl as unknown as typeof fetch),
       timeoutMs: 20,
@@ -176,9 +159,8 @@ test('при not-ok ответе тело не читается', async () => {
 
 test('токен не попадает в текст ошибки при not-ok ответе', async () => {
   const TOKEN = 'SEKRET-SESSION-VALUE-DO-NOT-LEAK'
-  const client = new AllowlistClient({
+  const client = new BankClient({
     baseUrl: 'https://bank.example',
-    allowed: ALLOWED,
     credentials: { kind: 'query', name: 'sessionid', value: TOKEN },
     transport: fetchTransport(vi.fn(async () => new Response('nope', { status: 500 })) as unknown as typeof fetch),
   })
@@ -194,9 +176,8 @@ test('ошибка самого fetchImpl не пробрасывается ка
   const fetchImpl = vi.fn(async () => {
     throw new Error(`fetch failed: https://bank.example/api/common/v1/session_status?sessionid=${TOKEN}`)
   })
-  const client = new AllowlistClient({
+  const client = new BankClient({
     baseUrl: 'https://bank.example',
-    allowed: ALLOWED,
     credentials: { kind: 'query', name: 'sessionid', value: TOKEN },
     transport: fetchTransport(fetchImpl as unknown as typeof fetch),
   })
@@ -218,21 +199,19 @@ test('сетевые сбои различимы по имени ошибки и
   )
 })
 
-test('сетевые сбои различимы и для транспорта в форме node:https, где код лежит прямо на ошибке', async () => {
-  // undici (fetchTransport) кладёт код причины в e.cause.code, а node:https
-  // (httpsTransport) — прямо в e.code, без cause вообще (проверено руками:
-  // реальная ошибка connect ECONNREFUSED от node:https имеет именно такую
-  // форму, включая e.name === 'Error' — у Error-наследников name не
-  // становится именем класса сам по себе)
+test('сетевые сбои различимы и для транспорта, у которого код лежит прямо на ошибке', async () => {
+  // undici (fetchTransport) кладёт код причины в e.cause.code, а ошибки node и
+  // транспорт оболочки — прямо в e.code, без cause вообще; e.name у такой
+  // ошибки — 'Error': у Error-наследников name не становится именем класса
+  // сам по себе
   const refused = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:1'), { code: 'ECONNREFUSED' })
   const transport: Transport = {
     send: vi.fn(async () => {
       throw refused
     }),
   }
-  const client = new AllowlistClient({
+  const client = new BankClient({
     baseUrl: 'https://bank.example',
-    allowed: ALLOWED,
     credentials: CREDENTIALS,
     transport,
   })
@@ -254,9 +233,8 @@ test('текст ответа не пробрасывается при ошиб�
 
 test('секрет-заголовок уходит в заголовках, а не в адресе', async () => {
   const { transport, calls } = recordingTransport()
-  const client = new AllowlistClient({
+  const client = new BankClient({
     baseUrl: 'https://bank.test',
-    allowed: [{ path: '/data', method: 'POST' }],
     credentials: { kind: 'header', name: 'Cookie', value: 'SESSION=secret' },
     transport,
   })
@@ -272,9 +250,8 @@ test('вариант headers шлёт все заголовки сразу, а �
   // Альфе на POST нужны и Cookie, и производный X-XSRF-TOKEN. Если код кладёт
   // лишь один из них (как хватало Сберу), этот тест падает
   const { transport, calls } = recordingTransport()
-  const client = new AllowlistClient({
+  const client = new BankClient({
     baseUrl: 'https://bank.test',
-    allowed: [{ path: '/data', method: 'POST' }],
     credentials: { kind: 'headers', headers: { Cookie: 'GW_SESSION_AO=s', 'X-XSRF-TOKEN': 'x' } },
     transport,
   })
@@ -285,17 +262,4 @@ test('вариант headers шлёт все заголовки сразу, а �
   expect(calls[0]?.headers['X-XSRF-TOKEN']).toBe('x')
   expect(calls[0]?.headers['Accept']).toBe('application/json')
   expect(calls[0]?.url).not.toContain('GW_SESSION_AO')
-})
-
-test('POST по пути, разрешённому только для GET, не отправляется', async () => {
-  const { transport, calls } = recordingTransport()
-  const client = new AllowlistClient({
-    baseUrl: 'https://bank.test',
-    allowed: [{ path: '/data', method: 'GET' }],
-    credentials: { kind: 'header', name: 'Cookie', value: 'SESSION=secret' },
-    transport,
-  })
-
-  await expect(client.postJson('/data', {})).rejects.toBeInstanceOf(NotAllowedError)
-  expect(calls).toHaveLength(0)
 })

@@ -1,4 +1,4 @@
-import type { FetchImpl } from '../http/allowlist-client'
+import type { FetchImpl } from '../http/bank-client'
 import type { CollectedAccount, CollectedOperation } from '../core/contract'
 import { appRequest } from './app-api'
 import type { AppConnection } from './app-connection'

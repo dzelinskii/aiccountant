@@ -1,7 +1,6 @@
 import { expect, test } from 'vitest'
-import { NotAllowedError } from '../../http/allowlist-client'
 import type { Transport } from '../../http/transport'
-import { ACCOUNTS_PATH, OPERATIONS_PATH, createAlfaClient } from './client'
+import { OPERATIONS_PATH, createAlfaClient } from './client'
 
 function recordingTransport(): { transport: Transport; calls: { headers: Record<string, string> }[] } {
   const calls: { headers: Record<string, string> }[] = []
@@ -34,18 +33,4 @@ test('без XSRF-TOKEN в куке клиент не собирается — �
 
 test('секрет не той формы (query) отвергается', () => {
   expect(() => createAlfaClient({ kind: 'query', name: 'token', value: 'x' }, { transport: recordingTransport().transport })).toThrow(/заголовк/i)
-})
-
-test('allowlist: POST-путь нельзя дёрнуть методом GET', async () => {
-  const { transport } = recordingTransport()
-  const client = createAlfaClient({ kind: 'header', name: 'Cookie', value: COOKIE }, { transport })
-  await expect(client.getJson(OPERATIONS_PATH)).rejects.toBeInstanceOf(NotAllowedError)
-})
-
-test('allowlist: неразрешённый путь до сети не доходит', async () => {
-  const { transport, calls } = recordingTransport()
-  const client = createAlfaClient({ kind: 'header', name: 'Cookie', value: COOKIE }, { transport })
-  await expect(client.getJson('/api/v1/transfers/new')).rejects.toBeInstanceOf(NotAllowedError)
-  await client.getJson(ACCOUNTS_PATH)
-  expect(calls).toHaveLength(1)
 })

@@ -1,7 +1,7 @@
 // Вход для приложения: всё, что ему нужно от коллектора, одним модулем.
 // Фронт импортирует только его, и если в граф попадут встроенные модули Node
-// или их глобалы, это увидит tsc фронта. Нативные пакеты вроде keyring он не
-// ловит — их держим вне этого графа сами.
+// или их глобалы, это увидит tsc фронта. Нативные пакеты Node он не ловит —
+// в этот граф их не пускаем сами.
 export { BankSessionExpiredError, collectBank } from './collect/collect-bank'
 export type { AccountResult, CollectHost, CollectSummary, SessionSource, SessionStore } from './collect/collect-bank'
 export type { AppConnection } from './collect/app-connection'

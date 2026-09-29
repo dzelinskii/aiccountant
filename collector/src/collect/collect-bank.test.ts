@@ -1,6 +1,6 @@
 import { expect, test, vi } from 'vitest'
 import type { BankPlugin, CollectedAccount, CollectedOperation, Credentials } from '../core/contract'
-import type { FetchImpl } from '../http/allowlist-client'
+import type { FetchImpl } from '../http/bank-client'
 import { BankSessionExpiredError, collectBank, type CollectHost, type SessionStore } from './collect-bank'
 import { accountFingerprint } from './fingerprint'
 

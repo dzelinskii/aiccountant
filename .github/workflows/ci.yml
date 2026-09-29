@@ -72,12 +72,7 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: collector/pnpm-lock.yaml
-      # браузер не скачиваем: тесты работают на записанных ответах, а вход в банк
-      # требует человека и в CI невоспроизводим по замыслу. Отключаем именно
-      # загрузку браузера, а не скрипты целиком — сборка esbuild нужна vitest
       - run: pnpm install --frozen-lockfile
-        env:
-          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
       - run: pnpm lint
       - run: pnpm test
       - run: pnpm build

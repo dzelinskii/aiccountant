@@ -1,10 +1,10 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { expect, test, vi } from 'vitest'
-import { NotAllowedError, type FetchImpl } from '../../http/allowlist-client'
+import type { FetchImpl } from '../../http/bank-client'
 import { fetchTransport, type Transport } from '../../http/transport'
 import type { BrowserSession, LoginPrompt } from '../../core/contract'
-import { createTBankClient, TBANK_ALLOWED } from './client'
+import { createTBankClient } from './client'
 import { checkSession, createTBankPlugin, fetchAccounts, fetchOperations, SessionExpiredError } from './index'
 
 function readFixtureText(name: string): string {
@@ -59,7 +59,7 @@ test('сумма с числом значащих цифр за пределам
   // предыдущая версия этого теста подавала toOperations объект, где value уже
   // строка, минуя parseLossless — тест бил мимо шва, который и должен ловить
   // подмену parseLossless на обычный JSON.parse. Здесь проходит полный путь:
-  // фикстура-текст → AllowlistClient → parseLossless → toOperations
+  // фикстура-текст → BankClient → parseLossless → toOperations
   const fetchImpl = vi.fn(async () => jsonResponse(readFixtureText('operations.json')))
   const client = createTBankClient('token', { transport: fetchTransport(fetchImpl as unknown as FetchImpl) })
 
@@ -185,24 +185,6 @@ test('нечисловой millisLeft — обычная ошибка, а не S
   const client = createTBankClient('token', { transport: fetchTransport(fetchImpl as unknown as FetchImpl) })
 
   await expect(checkSession(client)).rejects.not.toBeInstanceOf(SessionExpiredError)
-})
-
-test('клиент отказывается ходить по неразрешённому пути — allowlist реально ограничивает', async () => {
-  const fetchImpl = vi.fn()
-  const client = createTBankClient('token', { transport: fetchTransport(fetchImpl as unknown as FetchImpl) })
-
-  await expect(client.getJson('/api/common/v1/transfer')).rejects.toBeInstanceOf(NotAllowedError)
-  expect(fetchImpl).not.toHaveBeenCalled()
-})
-
-test('TBANK_ALLOWED содержит ровно пять задокументированных адресов, все на чтение', () => {
-  expect(TBANK_ALLOWED).toEqual([
-    { path: '/api/common/v1/accounts_light_ib', method: 'GET' },
-    { path: '/api/common/v1/session_status', method: 'GET' },
-    { path: '/mybank/api/operations/timeline/public/legacy/v1/operations', method: 'GET' },
-    { path: '/mybank/api/operations/timeline/public/legacy/v1/operations_category_list_bank', method: 'GET' },
-    { path: '/mybank/api/operations/timeline/public/legacy/v1/operations_category_list_user', method: 'GET' },
-  ])
 })
 
 const ALIVE_SESSION = JSON.stringify({ resultCode: 'OK', payload: { accessLevel: 'CLIENT', millisLeft: 60_000 } })

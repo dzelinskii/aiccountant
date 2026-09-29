@@ -1,5 +1,5 @@
 import type { BankPlugin, CollectedAccount, Credentials, LoginPrompt } from '../core/contract'
-import type { FetchImpl } from '../http/allowlist-client'
+import type { FetchImpl } from '../http/bank-client'
 import { AppHttpError } from './app-api'
 import type { AppConnection } from './app-connection'
 import { syncDiscovered } from './discovered'
@@ -14,7 +14,7 @@ export interface SessionStore {
   write(bank: string, credentials: Credentials): Promise<void>
 }
 
-/** Всё, что сбору нужно от места, где он работает: приложение, CLI, тест. */
+/** Всё, что сбору нужно от места, где он работает: приложение или тест. */
 export interface CollectHost {
   plugin: BankPlugin
   sessions: SessionStore
@@ -68,7 +68,7 @@ export class BankSessionExpiredError extends Error {
 
 /**
  * Сбор одного банка: сессия, счета, сверка с приложением, операции по
- * привязанным счетам. Итог отдаётся объектом — печатает его CLI, рисует экран.
+ * привязанным счетам. Итог отдаётся объектом, а рисует его экран приложения.
  *
  * Бросает, когда продолжать бессмысленно для всех счетов разом: банк не признал
  * вход или недоступен, сессия банка умерла посреди сбора (`BankSessionExpiredError`),

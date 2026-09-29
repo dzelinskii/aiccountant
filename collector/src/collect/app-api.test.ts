@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import type { FetchImpl } from '../http/allowlist-client'
+import type { FetchImpl } from '../http/bank-client'
 import { AppHttpError, appRequest } from './app-api'
 import type { AppConnection } from './app-connection'
 

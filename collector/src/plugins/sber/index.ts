@@ -1,5 +1,5 @@
-import type { AllowlistClient } from '../../http/allowlist-client'
-import { BankHttpError } from '../../http/allowlist-client'
+import type { BankClient } from '../../http/bank-client'
+import { BankHttpError } from '../../http/bank-client'
 import type { Transport } from '../../http/transport'
 import type { BankPlugin, CollectedAccount, CollectedOperation, Credentials, LoginPrompt } from '../../core/contract'
 import { CARD_INFO_PATH, createSberClient, OPERATIONS_PATH, PRODUCTS_PATH } from './client'
@@ -18,7 +18,7 @@ interface PluginOptions {
 }
 
 export function createSberPlugin(options: PluginOptions): BankPlugin {
-  const clientFor = (credentials: Credentials): AllowlistClient => createSberClient(credentials, options)
+  const clientFor = (credentials: Credentials): BankClient => createSberClient(credentials, options)
 
   return {
     name: 'sber',
@@ -76,7 +76,7 @@ interface OperationsQuery {
   resource?: string
 }
 
-async function requestOperations(client: AllowlistClient, query: OperationsQuery): Promise<unknown[]> {
+async function requestOperations(client: BankClient, query: OperationsQuery): Promise<unknown[]> {
   const body: Record<string, unknown> = {
     paginationOffset: query.offset,
     paginationSize: query.size,
@@ -110,7 +110,7 @@ async function requestOperations(client: AllowlistClient, query: OperationsQuery
  * ноль — см. map.ts), но молча это не проходит: в вывод идёт строка с
  * идентификатором карты.
  */
-async function creditInfo(client: AllowlistClient, cards: readonly unknown[]): Promise<Map<string, unknown>> {
+async function creditInfo(client: BankClient, cards: readonly unknown[]): Promise<Map<string, unknown>> {
   const found = new Map<string, unknown>()
   for (const id of creditCardIds(cards)) {
     // Банк ждёт cardIds именно числом: со строкой он отвечает 500 (проверено

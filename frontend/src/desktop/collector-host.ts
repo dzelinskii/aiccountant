@@ -11,7 +11,8 @@ import { bankLoginPrompt } from './bank-window'
 import { serverUrl, sessionToken } from './connection'
 import { invoke } from './runtime'
 
-// тот же период, что по умолчанию у CLI (DEFAULT_DAYS в collector/src/runner/config.ts)
+// Сбор не помнит, где остановился, поэтому период — с запасом на перерыв
+// между сборами; дубли от перекрытия периодов отсекает приложение
 const COLLECT_DAYS = 30
 
 /** Секрет сессии банка — в хранилище ОС через оболочку. */

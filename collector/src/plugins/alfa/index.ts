@@ -1,5 +1,5 @@
-import type { AllowlistClient } from '../../http/allowlist-client'
-import { BankHttpError } from '../../http/allowlist-client'
+import type { BankClient } from '../../http/bank-client'
+import { BankHttpError } from '../../http/bank-client'
 import type { Transport } from '../../http/transport'
 import type { BankPlugin, CollectedAccount, CollectedOperation, Credentials, LoginPrompt } from '../../core/contract'
 import { ACCOUNTS_PATH, CARDS_PATH, OPERATIONS_PATH, createAlfaClient } from './client'
@@ -18,7 +18,7 @@ interface PluginOptions {
 }
 
 export function createAlfaPlugin(options: PluginOptions): BankPlugin {
-  const clientFor = (credentials: Credentials): AllowlistClient => createAlfaClient(credentials, options)
+  const clientFor = (credentials: Credentials): BankClient => createAlfaClient(credentials, options)
 
   return {
     name: 'alfa',

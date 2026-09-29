@@ -2,11 +2,9 @@ export interface HttpResponse {
   readonly status: number
   readonly ok: boolean
   /**
-   * Тело ответа. На 2xx оба транспорта отдают настоящий текст. На не-2xx
-   * поведение расходится: fetchTransport по-прежнему отдаёт тело, а
-   * httpsTransport — всегда пустую строку (поток сливается, а не копится,
-   * см. httpsTransport). Сегодня разница безвредна: AllowlistClient бросает
-   * BankHttpError по статусу раньше, чем вызывает text().
+   * Тело ответа. На не-2xx транспорт вправе отдать пустую строку — оболочка
+   * так и делает: BankClient бросает BankHttpError по статусу раньше, чем
+   * вызывает text().
    */
   text(): Promise<string>
 }
@@ -28,6 +26,7 @@ export interface Transport {
   send(url: URL, options: SendOptions): Promise<HttpResponse>
 }
 
+/** Транспорт поверх fetch — для тестов ядра: в окне приложения к банку он не годится (см. Transport). */
 export function fetchTransport(fetchImpl: typeof fetch = fetch): Transport {
   return {
     async send(url, { method, headers, body, signal }) {
@@ -36,10 +35,9 @@ export function fetchTransport(fetchImpl: typeof fetch = fetch): Transport {
         headers,
         body,
         // без этого fetch молча следует за Location, в том числе на чужой
-        // origin — allowlist проверяется один раз, до запроса, и редирект его
-        // обходит. 'manual' (а не 'error') отдаёт редирект наверх как обычный
-        // ответ со статусом 3xx — так же, как это делает httpsTransport, и
-        // клиент выше видит одну и ту же BankHttpError вместо двух разных форм
+        // origin, унося туда секрет. 'manual' (а не 'error') отдаёт редирект
+        // наверх как обычный ответ со статусом 3xx — так же, как транспорт
+        // оболочки, и клиент выше видит одну и ту же BankHttpError
         redirect: 'manual',
         signal,
       })

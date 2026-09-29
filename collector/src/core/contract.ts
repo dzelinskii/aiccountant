@@ -1,5 +1,5 @@
-export type { Credentials } from '../http/allowlist-client'
-import type { Credentials } from '../http/allowlist-client'
+export type { Credentials } from '../http/bank-client'
+import type { Credentials } from '../http/bank-client'
 
 /** Операция в том виде, в каком её принимает наше приложение. */
 export interface CollectedOperation {
@@ -33,7 +33,7 @@ export interface CollectedAccount {
 }
 
 /**
- * Окно браузера глазами плагина. Плагин не знает ни про Playwright, ни про то,
+ * Окно браузера глазами плагина. Плагин не знает ни про оболочку, ни про то,
  * какой браузер открыт: ему нужно привести человека на страницу входа и забрать
  * оттуда секрет. Это же место подменяется, когда вход станет безлюдным.
  */

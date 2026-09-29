@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest'
-import type { FetchImpl } from '../http/allowlist-client'
+import type { FetchImpl } from '../http/bank-client'
 import { fetchTransport, type Transport } from '../http/transport'
 import { BANK_NAMES, pluginFor } from './registry'
 

@@ -1,6 +1,6 @@
 import { expect, test, vi } from 'vitest'
 import type { CollectedAccount } from '../core/contract'
-import type { FetchImpl } from '../http/allowlist-client'
+import type { FetchImpl } from '../http/bank-client'
 import type { AppConnection } from './app-connection'
 import { syncDiscovered } from './discovered'
 

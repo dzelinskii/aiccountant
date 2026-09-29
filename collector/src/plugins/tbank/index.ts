@@ -1,4 +1,4 @@
-import type { AllowlistClient } from '../../http/allowlist-client'
+import type { BankClient } from '../../http/bank-client'
 import type { Transport } from '../../http/transport'
 import type { BankPlugin, CollectedAccount, CollectedOperation, Credentials, LoginPrompt } from '../../core/contract'
 import { COMMON_PARAMS, createTBankClient } from './client'
@@ -8,14 +8,14 @@ import { toAccounts, toOperations } from './map'
 /** Токен протух: сессия Т-Банка истекла и нужен новый вход через браузер. */
 export class SessionExpiredError extends Error {}
 
-export async function checkSession(client: AllowlistClient): Promise<void> {
+export async function checkSession(client: BankClient): Promise<void> {
   const raw = await client.getJson('/api/common/v1/session_status', { ...COMMON_PARAMS })
   const envelope = parseEnvelope(raw)
   assertOk(envelope.resultCode)
   assertSessionAlive(envelope.body)
 }
 
-export async function fetchAccounts(client: AllowlistClient): Promise<CollectedAccount[]> {
+export async function fetchAccounts(client: BankClient): Promise<CollectedAccount[]> {
   const payload = await requestPayload(client, '/api/common/v1/accounts_light_ib', {})
   return toAccounts(payload)
 }
@@ -23,7 +23,7 @@ export async function fetchAccounts(client: AllowlistClient): Promise<CollectedA
 // since/until здесь — epoch-миллисекунды, как и требует контракт (BankPlugin.fetchOperations);
 // это же формат уходит в query банка (start/end) без промежуточного преобразования
 export async function fetchOperations(
-  client: AllowlistClient,
+  client: BankClient,
   accountId: string,
   since: number,
   until: number = Date.now(),
@@ -36,7 +36,7 @@ export async function fetchOperations(
   return toOperations(payload)
 }
 
-async function requestPayload(client: AllowlistClient, path: string, params: Record<string, string>): Promise<unknown[]> {
+async function requestPayload(client: BankClient, path: string, params: Record<string, string>): Promise<unknown[]> {
   const raw = await client.getJson(path, { ...COMMON_PARAMS, ...params })
   const envelope = parseEnvelope(raw)
   assertOk(envelope.resultCode)
@@ -138,7 +138,7 @@ interface PluginOptions {
 }
 
 export function createTBankPlugin(options: PluginOptions): BankPlugin {
-  const clientFor = (credentials: Credentials): AllowlistClient => {
+  const clientFor = (credentials: Credentials): BankClient => {
     if (credentials.kind !== 'query') {
       throw new Error('Т-Банк ожидает секрет в query — сохранённая запись не той формы')
     }
@@ -171,7 +171,7 @@ export function createTBankPlugin(options: PluginOptions): BankPlugin {
   }
 }
 
-async function isSessionAlive(client: AllowlistClient): Promise<boolean> {
+async function isSessionAlive(client: BankClient): Promise<boolean> {
   try {
     await checkSession(client)
     return true

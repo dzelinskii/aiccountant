@@ -21,24 +21,18 @@ export class BankHttpError extends Error {
 export type FetchImpl = typeof fetch
 
 /**
- * Как предъявляется секрет банку. Для раннера это непрозрачное значение: он
- * его хранит и передаёт, но не толкует — у Т-Банка это токен в query, у
- * Сбербанка заголовок с куками, у Альфы — несколько заголовков сразу (кука
- * плюс производный от неё X-XSRF-TOKEN), и оболочка про разницу знать не должна.
+ * Как предъявляется секрет банку. Для сбора это непрозрачное значение: он его
+ * хранит и передаёт, но не толкует — у Т-Банка это токен в query, у Сбербанка
+ * заголовок с куками, у Альфы — несколько заголовков сразу (кука плюс
+ * производный от неё X-XSRF-TOKEN), и оболочка про разницу знать не должна.
  */
 export type Credentials =
   | { readonly kind: 'query'; readonly name: string; readonly value: string }
   | { readonly kind: 'header'; readonly name: string; readonly value: string }
   | { readonly kind: 'headers'; readonly headers: Readonly<Record<string, string>> }
 
-export interface AllowedEndpoint {
-  readonly path: string
-  readonly method: 'GET' | 'POST'
-}
-
 interface Options {
   baseUrl: string
-  allowed: readonly AllowedEndpoint[]
   credentials: Credentials
   transport: Transport
   timeoutMs?: number
@@ -47,45 +41,42 @@ interface Options {
 const DEFAULT_TIMEOUT_MS = 30_000
 
 /**
- * HTTP-клиент, который физически не способен на лишнее: только перечисленные
- * адреса, только разрешённым для каждого методом. За редиректом клиент сам не
- * следит — это свойство обеспечивают транспорты (fetchTransport и
- * httpsTransport), а не он: оба возвращают 3xx как обычный ответ со статусом.
- * Проверяемое ограничение вместо обещания.
+ * HTTP-клиент банка: предъявляет секрет, разбирает ответ без потери разрядов и
+ * не выпускает наружу ни секрета, ни тела ответа в тексте ошибок.
  *
- * Оговорка про Сбербанк: там чтение идёт через POST, поэтому метод сам по себе
- * безвредности больше не доказывает — гарантией остаётся сам список адресов.
+ * Куда банку можно ходить, клиент не решает: список адресов и методов стоит у
+ * транспорта, которому скрипт окна не указ (desktop/src-tauri/src/banks.rs).
+ * Копия списка здесь разошлась бы с ним и продолжала бы выглядеть гарантией.
+ * За редиректом клиент тоже не следит — транспорт возвращает 3xx обычным
+ * ответом со статусом.
  */
-export class AllowlistClient {
+export class BankClient {
   private readonly baseUrl: string
-  private readonly allowed: readonly AllowedEndpoint[]
   private readonly credentials: Credentials
   private readonly transport: Transport
   private readonly timeoutMs: number
 
-  constructor({ baseUrl, allowed, credentials, transport, timeoutMs = DEFAULT_TIMEOUT_MS }: Options) {
+  constructor({ baseUrl, credentials, transport, timeoutMs = DEFAULT_TIMEOUT_MS }: Options) {
     this.baseUrl = baseUrl
-    this.allowed = allowed
     this.credentials = credentials
     this.transport = transport
     this.timeoutMs = timeoutMs
   }
 
   async getJson(path: string, params: Record<string, string> = {}): Promise<unknown> {
-    const url = this.buildUrl(path, 'GET', params)
+    const url = this.buildUrl(path, params)
     return this.send(url, 'GET', undefined, path)
   }
 
   async postJson(path: string, body: unknown): Promise<unknown> {
-    const url = this.buildUrl(path, 'POST', {})
+    const url = this.buildUrl(path, {})
     return this.send(url, 'POST', JSON.stringify(body), path)
   }
 
-  private buildUrl(path: string, method: 'GET' | 'POST', params: Record<string, string>): URL {
-    if (!this.allowed.some((endpoint) => endpoint.path === path && endpoint.method === method)) {
-      // в сообщение кладём только путь и метод: ни секрета, ни параметров
-      throw new NotAllowedError(`Не разрешено: ${method} ${path}`)
-    }
+  // секрет уходит с каждым запросом, поэтому путь, который при разрешении
+  // уводит с базового origin (полный или протокольно-относительный адрес),
+  // отвергается до сети
+  private buildUrl(path: string, params: Record<string, string>): URL {
     const url = new URL(path, this.baseUrl)
     if (url.origin !== new URL(this.baseUrl).origin) {
       throw new NotAllowedError('Чужой origin')
@@ -145,10 +136,10 @@ export class AllowlistClient {
 function describeCause(e: unknown): string {
   const name = hasStringProp(e, 'name') ? e.name : undefined
   const cause = hasProp(e, 'cause') ? e.cause : undefined
-  // undici (fetchTransport) кладёт код причины в e.cause.code, node:https
-  // (httpsTransport) — прямо в e.code. Без проверки обоих мест httpsTransport
-  // всегда терял код, и таймаут, ECONNREFUSED, недоверенный сертификат и
-  // обрыв тела выглядели одной и той же строкой
+  // fetch (undici) кладёт код причины в e.cause.code, а транспорт оболочки и
+  // ошибки node — прямо в e.code. Без проверки обоих мест таймаут, отказ в
+  // соединении, недоверенный сертификат и обрыв тела выглядели бы одной и той
+  // же строкой
   const code = (hasStringProp(cause, 'code') ? cause.code : undefined) ?? (hasStringProp(e, 'code') ? e.code : undefined)
   const parts = [name, code].filter((part): part is string => Boolean(part))
   return parts.length > 0 ? ` (${parts.join(': ')})` : ''
