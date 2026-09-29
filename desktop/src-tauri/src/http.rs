@@ -36,19 +36,24 @@ pub struct BankResponse {
     pub body: String,
 }
 
+/// Берётся ли к корню Минцифры ещё и встроенный набор корней.
+fn uses_built_in_roots(trust: Trust) -> bool {
+    match trust {
+        Trust::RootOnly => false,
+        Trust::SystemAndRoot => true,
+    }
+}
+
 /// Клиент под доверие банка. Редирект не проходится: 3xx возвращается ответом,
 /// как и в прежних транспортах коллектора, — иначе редирект обошёл бы список.
+/// Таймаут стоит на самом запросе (`build_request`), а не на клиенте.
 pub fn client_for(bank: &Bank) -> Result<reqwest::Client, String> {
     let root = reqwest::Certificate::from_pem(banks::ROOT_PEM.as_bytes())
         .map_err(|e| format!("Корень УЦ не читается: {e}"))?;
-    let mut builder = reqwest::Client::builder()
+    reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(TIMEOUT)
-        .add_root_certificate(root);
-    if bank.trust == Trust::RootOnly {
-        builder = builder.tls_built_in_root_certs(false);
-    }
-    builder
+        .add_root_certificate(root)
+        .tls_built_in_root_certs(uses_built_in_roots(bank.trust))
         .build()
         .map_err(|e| format!("HTTP-клиент не собрался: {e}"))
 }
@@ -88,6 +93,28 @@ async fn read_response(response: reqwest::Response) -> Result<BankResponse, Stri
     })
 }
 
+/// Проверяет запрос по списку банка и собирает его без отправки. Отправляется
+/// сам проверенный `Url`, а не его строка: проверенное и отправленное
+/// совпадают без повторного разбора.
+fn build_request(
+    bank: &Bank,
+    method: &str,
+    url: Url,
+    headers: &HashMap<String, String>,
+    body: Option<String>,
+) -> Result<reqwest::Request, String> {
+    banks::check_request(bank, method, &url)?;
+    let method =
+        reqwest::Method::from_bytes(method.as_bytes()).map_err(|_| "Неверный метод".to_string())?;
+    let headers = check_headers(headers)?;
+
+    let mut request = reqwest::Request::new(method, url);
+    *request.headers_mut() = headers;
+    *request.body_mut() = body.map(reqwest::Body::from);
+    *request.timeout_mut() = Some(TIMEOUT);
+    Ok(request)
+}
+
 #[tauri::command]
 pub async fn bank_request(
     bank: String,
@@ -98,18 +125,11 @@ pub async fn bank_request(
 ) -> Result<BankResponse, String> {
     let bank = banks::bank(&bank)?;
     let url = Url::parse(&url).map_err(|_| "Неверный адрес запроса".to_string())?;
-    banks::check_request(bank, &method, &url)?;
-    let method =
-        reqwest::Method::from_bytes(method.as_bytes()).map_err(|_| "Неверный метод".to_string())?;
-    let headers = check_headers(&headers)?;
-
-    // Отправляется сам проверенный Url, а не его строка: проверенное и
-    // отправленное совпадают без повторного разбора.
-    let mut request = client_for(bank)?.request(method, url).headers(headers);
-    if let Some(body) = body {
-        request = request.body(body);
-    }
-    let response = request.send().await.map_err(|e| describe(&e))?;
+    let request = build_request(bank, &method, url, &headers, body)?;
+    let response = client_for(bank)?
+        .execute(request)
+        .await
+        .map_err(|e| describe(&e))?;
     read_response(response).await
 }
 
@@ -174,18 +194,81 @@ mod tests {
         assert!(err.starts_with("Не разрешено"));
     }
 
-    #[tokio::test]
-    async fn forbidden_header_stops_allowed_request() {
-        let err = bank_request(
-            "tbank".into(),
-            "GET".into(),
-            "https://www.tbank.ru/api/common/v1/session_status".into(),
-            headers(&[("Host", "evil.example")]),
+    const TBANK_SESSION: &str = "https://www.tbank.ru/api/common/v1/session_status?sessionid=S";
+
+    fn tbank_request(headers: &HashMap<String, String>) -> Result<reqwest::Request, String> {
+        let url = Url::parse(TBANK_SESSION).unwrap();
+        build_request(banks::bank("tbank").unwrap(), "GET", url, headers, None)
+    }
+
+    #[test]
+    fn forbidden_header_stops_allowed_request() {
+        let err = tbank_request(&headers(&[("Host", "evil.example")])).unwrap_err();
+        assert!(err.starts_with("Заголовок не разрешён"));
+    }
+
+    #[test]
+    fn built_request_goes_exactly_to_checked_address() {
+        let req = tbank_request(&HashMap::new()).unwrap();
+        assert_eq!(req.url().as_str(), TBANK_SESSION);
+        assert_eq!(req.method(), reqwest::Method::GET);
+    }
+
+    #[test]
+    fn built_request_carries_headers_body_and_timeout() {
+        let sent = headers(&[("Accept", "application/json"), ("Cookie", "a=b")]);
+        let url =
+            Url::parse("https://web-node3.online.sberbank.ru/uoh-bh/v1/operations/list").unwrap();
+        let req = build_request(
+            banks::bank("sber").unwrap(),
+            "POST",
+            url,
+            &sent,
+            Some("{}".into()),
+        )
+        .unwrap();
+        assert_eq!(req.headers().len(), 2);
+        assert_eq!(req.headers()["accept"], "application/json");
+        assert_eq!(req.headers()["cookie"], "a=b");
+        assert_eq!(req.body().and_then(|b| b.as_bytes()), Some(&b"{}"[..]));
+        assert_eq!(req.timeout(), Some(&TIMEOUT));
+    }
+
+    #[test]
+    fn build_request_refuses_foreign_address() {
+        let url = Url::parse("https://evil.example/api/common/v1/session_status").unwrap();
+        let err = build_request(
+            banks::bank("tbank").unwrap(),
+            "GET",
+            url,
+            &HashMap::new(),
             None,
         )
-        .await
         .unwrap_err();
-        assert!(err.starts_with("Заголовок не разрешён"));
+        assert!(err.starts_with("Не разрешено"));
+    }
+
+    #[test]
+    fn trust_decides_built_in_roots() {
+        assert!(!uses_built_in_roots(Trust::RootOnly));
+        assert!(uses_built_in_roots(Trust::SystemAndRoot));
+    }
+
+    /// Сетевые проверки доверия: `cargo test -- --ignored`. example.com
+    /// подписан публичным УЦ, которого нет в корне Минцифры.
+    #[tokio::test]
+    #[ignore = "нужна сеть"]
+    async fn root_only_client_rejects_public_ca() {
+        let client = client_for(banks::bank("sber").unwrap()).unwrap();
+        assert!(client.get("https://example.com/").send().await.is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "нужна сеть"]
+    async fn system_and_root_client_accepts_public_ca() {
+        let client = client_for(banks::bank("tbank").unwrap()).unwrap();
+        let resp = client.get("https://example.com/").send().await.unwrap();
+        assert!(resp.status().is_success());
     }
 
     #[test]
