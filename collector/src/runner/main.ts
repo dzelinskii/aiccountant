@@ -32,14 +32,15 @@ async function main(): Promise<void> {
   // какие счета вести, решает человек на экране «Счета» приложения —
   // коллектор только рассказывает, что показал банк
   const linked = await syncDiscovered(connection, plugin.name, accounts)
-  const unbound = accounts.filter((account) => !linked.has(account.id)).length
-  if (unbound > 0) console.log(`В банке ещё ${accountsWord(unbound)} не ведётся. Привяжите их на экране «Счета».`)
 
   if (linked.size === 0) {
     console.log('Ни один счёт банка не привязан к счёту приложения.')
     console.log('Заведите нужные счета на экране «Счета» и запустите сбор снова.')
     return
   }
+  // при нуле привязок выше уже сказано, что не ведётся ничего, — число тут было бы повтором
+  const unbound = accounts.filter((account) => !linked.has(account.id)).length
+  if (unbound > 0) console.log(`В банке ещё ${accountsWord(unbound)} не ведётся. Привяжите их на экране «Счета».`)
   await collect(config, connection, plugin, credentials, accounts, linked)
   console.log('Готово. Подтвердите импорт в приложении.')
 }

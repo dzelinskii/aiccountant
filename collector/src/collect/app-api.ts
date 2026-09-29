@@ -15,6 +15,7 @@ export class AppHttpError extends Error {
 
   constructor(status: number, detail: string) {
     super(`Приложение ответило ${status}${detail}`)
+    this.name = 'AppHttpError'
     this.status = status
   }
 }

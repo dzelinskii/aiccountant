@@ -119,6 +119,7 @@ test('отказ приложения — ошибка со статусом п�
 
   expect(error).toBeInstanceOf(AppHttpError)
   expect((error as AppHttpError).status).toBe(401)
+  expect((error as AppHttpError).name).toBe('AppHttpError')
   expect((error as AppHttpError).message).toBe('Приложение ответило 401: Сессия недействительна')
 })
 
