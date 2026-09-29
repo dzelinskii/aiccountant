@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-bank-forget"
+description = "Enables the bank_forget command without any pre-configured scope."
+commands.allow = ["bank_forget"]
+
+[[permission]]
+identifier = "deny-bank-forget"
+description = "Denies the bank_forget command without any pre-configured scope."
+commands.deny = ["bank_forget"]
