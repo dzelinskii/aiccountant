@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     session_ttl_days: int = 30
     cookie_secure: bool = False
     # origin'ы, которым разрешены изменяющие запросы и CORS: dev-сервер Vite и
-    # окно Tauri (http://tauri.localhost — Windows, tauri://localhost — macOS/iOS)
+    # окно Tauri (его адрес зависит от платформы — отсюда два варианта)
     allowed_origins: list[str] = [
         "http://localhost:5173",
         "http://tauri.localhost",

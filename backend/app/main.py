@@ -28,11 +28,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="AIccountant", lifespan=lifespan)
 app.add_middleware(OriginCheckMiddleware)
 app.add_middleware(LogContextMiddleware)
-# CORS добавляется последним и потому стоит снаружи остальных: preflight он
-# отвечает сам, не доходя до роутера, а для origin'ов из списка его заголовки
-# ложатся и на ответы с ошибками, которые возвращают внутренние слои.
-# allow_credentials=False намеренно: приложение не ходит с cookie, сессию оно
-# предъявляет заголовком
+# Порядок слоёв сейчас ни на что не влияет: проверка origin не трогает OPTIONS
+# и пропускает origin'ы из списка. CORS добавлен последним, то есть стоит снаружи:
+# для origin'ов из списка его заголовки ложатся и на ответы внутренних слоёв.
+# allow_credentials=False намеренно: приложению незачем читать ответ на запрос
+# с cookie — сессию оно предъявляет заголовком
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_settings().allowed_origins,
