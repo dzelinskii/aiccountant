@@ -1,6 +1,6 @@
 import { MantineProvider } from '@mantine/core'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, expect, test, vi } from 'vitest'
@@ -278,4 +278,217 @@ test('сбор банка целиком провалился: «Имя банк
   await userEvent.click(row('sber').getByRole('button', { name: 'Собрать' }))
 
   expect(await row('sber').findByText('Сбербанк: Нет входа в приложение')).toBeDefined()
+})
+
+const isDisabled = (element: HTMLElement) => (element as HTMLButtonElement).disabled
+const collectButton = (code: string) => row(code).getByRole('button', { name: 'Собрать' })
+const forgetButton = (code: string) => row(code).getByRole('button', { name: /забыть/i })
+const collectAllButton = () => screen.getByRole('button', { name: 'Собрать всё' })
+
+// после любого исхода банк должен быть свободен: залипшая кнопка оставила бы
+// человека без сбора до перезапуска приложения
+async function expectAllIdle() {
+  await waitFor(() => expect(isDisabled(collectButton('sber'))).toBe(false))
+  expect(isDisabled(forgetButton('sber'))).toBe(false)
+  expect(isDisabled(collectButton('alfa'))).toBe(false)
+  expect(isDisabled(collectAllButton())).toBe(false)
+}
+
+// ждём, пока очередные микрозадачи и таймеры отработают: отсутствие вызова
+// нельзя дождаться через waitFor
+const settle = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 20)))
+
+test('401 в «Собрать всё» прерывает очередь: остальные банки не трогаются, кнопки свободны', async () => {
+  vi.mocked(collectFromApp).mockRejectedValueOnce(new AppHttpError(401, ''))
+  await renderPage()
+
+  await userEvent.click(collectAllButton())
+
+  await expectAllIdle()
+  await settle()
+  expect(collectFromApp).toHaveBeenCalledTimes(1)
+})
+
+test('после отказа сбора банк и «Собрать всё» снова активны', async () => {
+  vi.mocked(collectFromApp).mockRejectedValue(new Error('банк не отвечает'))
+  await renderPage()
+
+  await userEvent.click(collectButton('sber'))
+
+  await row('sber').findByText(/банк не отвечает/)
+  await expectAllIdle()
+})
+
+test('после смерти сессии банка кнопки снова активны', async () => {
+  vi.mocked(collectFromApp).mockRejectedValue(new BankSessionExpiredError([]))
+  await renderPage()
+
+  await userEvent.click(collectButton('sber'))
+
+  await row('sber').findByText(/войти заново/)
+  await expectAllIdle()
+})
+
+test('после отказа «Забыть доступ» кнопки снова активны, а ошибка показана', async () => {
+  vi.mocked(forgetBank).mockRejectedValue(new Error('хранилище недоступно'))
+  await renderPage()
+
+  await userEvent.click(forgetButton('sber'))
+  await userEvent.click(forgetButton('sber'))
+
+  await row('sber').findByText('Сбербанк: хранилище недоступно')
+  await expectAllIdle()
+})
+
+test('обновление данных идёт и после отказа сбора: импорты могли уйти до сбоя', async () => {
+  vi.mocked(collectFromApp).mockRejectedValue(new Error('банк не отвечает'))
+  const { invalidate } = await renderPage()
+
+  await userEvent.click(collectButton('sber'))
+
+  await waitFor(() => {
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['pending-imports', 'ws-1'] })
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['discovered', 'ws-1'] })
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['accounts', 'ws-1'] })
+  })
+})
+
+test('«Собрать всё» идёт строго по одному, и банк очереди занят до своего хода', async () => {
+  const pending: Array<(value: CollectSummary) => void> = []
+  vi.mocked(collectFromApp).mockImplementation(
+    () => new Promise<CollectSummary>((resolve) => { pending.push(resolve) }),
+  )
+  await renderPage()
+
+  await userEvent.click(collectAllButton())
+
+  await waitFor(() => expect(collectFromApp).toHaveBeenCalledTimes(1))
+  await settle()
+  expect(collectFromApp).toHaveBeenCalledTimes(1)
+  // у alfa своей работы ещё нет, но её очередь не должна перехватываться отдельным нажатием
+  expect(isDisabled(collectButton('alfa'))).toBe(true)
+  expect(isDisabled(forgetButton('alfa'))).toBe(true)
+
+  pending[0](summary())
+  await waitFor(() => expect(collectFromApp).toHaveBeenCalledTimes(2))
+  expect(isDisabled(collectButton('alfa'))).toBe(true)
+
+  pending[1](summary({ bank: 'alfa', accounts: [result({ appAccountId: 'a-alfa' })] }))
+  await expectAllIdle()
+})
+
+test('итог банка в очереди не пропадает, пока до него не дошла очередь', async () => {
+  vi.mocked(collectFromApp).mockResolvedValueOnce(summary({ bank: 'alfa', accounts: [result({ appAccountId: 'a-alfa' })] }))
+  await renderPage()
+  await userEvent.click(collectButton('alfa'))
+  await row('alfa').findByText(/собрано 3/)
+
+  let release: (value: CollectSummary) => void = () => {}
+  vi.mocked(collectFromApp).mockReturnValueOnce(new Promise<CollectSummary>((resolve) => { release = resolve }))
+  await userEvent.click(collectAllButton())
+
+  await waitFor(() => expect(collectFromApp).toHaveBeenCalledTimes(2))
+  expect(row('alfa').getByText(/собрано 3/)).toBeDefined()
+  release(summary())
+})
+
+test('смерть сессии: счёт с ошибкой и без импорта тоже виден, а «ждут решения» — только при импорте', async () => {
+  vi.mocked(collectFromApp).mockRejectedValue(
+    new BankSessionExpiredError([
+      result({ collected: 5, importId: 'imp-9' }),
+      result({ appAccountId: 'a-alfa', collected: 0, importId: null, error: 'банк отказал' }),
+    ]),
+  )
+  await renderPage()
+
+  await userEvent.click(collectButton('sber'))
+
+  expect(await row('sber').findByText(/банк отказал/)).toBeDefined()
+  expect(row('sber').getByText(/собрано 5/)).toBeDefined()
+  expect(row('sber').getByText(/ждут решения/)).toBeDefined()
+})
+
+test('смерть сессии: если импортов нет, «ждут решения» не пишется, а ошибка счёта видна', async () => {
+  vi.mocked(collectFromApp).mockRejectedValue(
+    new BankSessionExpiredError([
+      result({ collected: 0, importId: null, error: 'банк отказал' }),
+    ]),
+  )
+  await renderPage()
+
+  await userEvent.click(collectButton('sber'))
+
+  expect(await row('sber').findByText(/банк отказал/)).toBeDefined()
+  expect(row('sber').queryByText(/ждут решения/)).toBeNull()
+})
+
+test('после подтверждённого «Забыть доступ» метка возвращается, и одиночное нажатие уже не забывает', async () => {
+  vi.mocked(forgetBank).mockResolvedValue(undefined)
+  await renderPage()
+
+  await userEvent.click(forgetButton('sber'))
+  await userEvent.click(forgetButton('sber'))
+  await waitFor(() => expect(forgetBank).toHaveBeenCalledTimes(1))
+  await waitFor(() => expect(isDisabled(forgetButton('sber'))).toBe(false))
+
+  expect(forgetButton('sber').textContent).toBe('Забыть доступ')
+  await userEvent.click(forgetButton('sber'))
+  expect(forgetBank).toHaveBeenCalledTimes(1)
+})
+
+test('«Собрать» снимает начатое подтверждение «Забыть»: следующее нажатие снова первое', async () => {
+  vi.mocked(collectFromApp).mockResolvedValue(summary())
+  vi.mocked(forgetBank).mockResolvedValue(undefined)
+  await renderPage()
+
+  await userEvent.click(forgetButton('sber'))
+  expect(forgetButton('sber').textContent).toBe('Точно забыть?')
+  await userEvent.click(collectButton('sber'))
+  await row('sber').findByText(/собрано 3/)
+
+  expect(forgetButton('sber').textContent).toBe('Забыть доступ')
+  await userEvent.click(forgetButton('sber'))
+  expect(forgetBank).not.toHaveBeenCalled()
+})
+
+test('«Собрать всё» тоже снимает подтверждение «Забыть» у банков очереди', async () => {
+  vi.mocked(collectFromApp).mockResolvedValue(summary())
+  await renderPage()
+
+  await userEvent.click(forgetButton('sber'))
+  await userEvent.click(collectAllButton())
+
+  await waitFor(() => expect(collectFromApp).toHaveBeenCalledTimes(2))
+  await expectAllIdle()
+  expect(forgetButton('sber').textContent).toBe('Забыть доступ')
+})
+
+test('сессия из хранилища подписана так, а не «свежий вход»', async () => {
+  vi.mocked(collectFromApp).mockResolvedValue(summary({ session: 'stored' }))
+  await renderPage()
+
+  await userEvent.click(collectButton('sber'))
+
+  expect(await row('sber').findByText(/Сессия: из хранилища/)).toBeDefined()
+  expect(row('sber').queryByText(/свежий вход/)).toBeNull()
+})
+
+test('когда все счета банка привязаны, «В банке ещё» не пишется', async () => {
+  vi.mocked(collectFromApp).mockResolvedValue(summary({ unboundCount: 0 }))
+  await renderPage()
+
+  await userEvent.click(collectButton('sber'))
+
+  await row('sber').findByText(/собрано 3/)
+  expect(row('sber').queryByText(/В банке ещё/)).toBeNull()
+})
+
+test('пустой итог при непривязанных счетах банка: только «Ни один счёт», без повтора числа', async () => {
+  vi.mocked(collectFromApp).mockResolvedValue(summary({ accounts: [], unboundCount: 2 }))
+  await renderPage()
+
+  await userEvent.click(collectButton('sber'))
+
+  expect(await row('sber').findByText(/Ни один счёт банка не привязан/)).toBeDefined()
+  expect(row('sber').queryByText(/В банке ещё/)).toBeNull()
 })

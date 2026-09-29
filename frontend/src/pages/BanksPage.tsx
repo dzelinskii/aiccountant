@@ -85,6 +85,9 @@ export function BanksPage() {
   const busy = Object.values(states).some((s) => s.running)
 
   const setBank = (code: string, state: BankState) => setStates((prev) => ({ ...prev, [code]: state }))
+  // занятость меняется без потери итога: банк, ждущий очереди, показывает прежний итог
+  const setRunning = (code: string, running: boolean) =>
+    setStates((prev) => ({ ...prev, [code]: { ...prev[code], running } }))
 
   const accountName = (id: string) => (accounts ?? []).find((a) => a.id === id)?.name ?? id
 
@@ -96,14 +99,19 @@ export function BanksPage() {
     void queryClient.invalidateQueries({ queryKey: ['pending-imports', ws] })
   }
 
-  const collectOne = async (bank: Bank) => {
+  /** Возвращает true, если приложение отказало во входе (401): дальше собирать нечем. */
+  const collectOne = async (bank: Bank): Promise<boolean> => {
+    // начатое «Точно забыть?» относилось к прежнему намерению — после сбора нажатие снова первое
+    setConfirming((current) => (current === bank.code ? null : current))
     setBank(bank.code, { running: true })
     let next: BankState
+    let unauthorized = false
     try {
       next = { running: false, summary: await collectFromApp(bank.code, ws) }
     } catch (error) {
       // 401 от приложения — токен приложения умер: AuthGuard уведёт на вход, когда «me» перечитается
       if (error instanceof AppHttpError && error.status === 401) {
+        unauthorized = true
         void queryClient.invalidateQueries({ queryKey: ['me'] })
       }
       next =
@@ -113,13 +121,20 @@ export function BanksPage() {
     }
     setBank(bank.code, next)
     refreshAfterCollect()
+    return unauthorized
   }
 
   const collectAll = async () => {
     // банки помечаются занятыми сразу все: пока очередь идёт, их кнопки не должны
     // вклиниваться в неё
-    for (const bank of linkable) setBank(bank.code, { running: true })
-    for (const bank of linkable) await collectOne(bank)
+    for (const bank of linkable) setRunning(bank.code, true)
+    for (const [index, bank] of linkable.entries()) {
+      if (!(await collectOne(bank))) continue
+      // человека уводят на экран входа: сбор остальных банков мог бы открыть их окна входа
+      // поверх него, а кнопки оставшихся не должны залипнуть занятыми
+      for (const rest of linkable.slice(index + 1)) setRunning(rest.code, false)
+      return
+    }
   }
 
   const forget = async (bank: Bank) => {
@@ -144,15 +159,13 @@ export function BanksPage() {
 
   const renderState = (state: BankState) => {
     if (state.error !== undefined) {
-      const created = (state.partial ?? []).filter((r) => r.importId !== null)
+      const passed = state.partial ?? []
       return (
         <Stack gap="xs">
           <Alert color="red">{state.error}</Alert>
-          {created.length > 0 && (
-            <>
-              {renderAccounts(created)}
-              <Text size="sm">Эти импорты уже созданы и ждут решения на экране «Импорт».</Text>
-            </>
+          {renderAccounts(passed)}
+          {passed.some((r) => r.importId !== null) && (
+            <Text size="sm">Созданные импорты уже ждут решения на экране «Импорт».</Text>
           )}
         </Stack>
       )
