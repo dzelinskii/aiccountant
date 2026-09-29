@@ -16,9 +16,10 @@ SESSION_COOKIE = "session"
 
 
 def token_scope(request: Request) -> uuid.UUID | None:
-    """Workspace, для которого выдан токен текущего запроса; None — сессия из
-    браузера. Публичная: нужна не только зависимостям здесь (запрет действий),
-    но и роутеру — сузить выдачу /api/me до своего workspace."""
+    """Workspace, для которого выдан токен текущего запроса; None — сессия
+    человека (кука или заголовок Session). Публичная: нужна не только
+    зависимостям здесь (запрет действий), но и роутеру — сузить выдачу /api/me
+    до своего workspace."""
     return getattr(request.state, "token_workspace_id", None)
 
 
@@ -51,7 +52,8 @@ async def get_current_user(
     session: Annotated[str | None, Cookie()] = None,
     authorization: Annotated[str | None, Header()] = None,
 ) -> User:
-    # программный доступ (коллектор, боты) — по токену; браузер — по куке сессии.
+    # программный доступ (коллектор, боты) — по токену; человек — по
+    # серверной сессии: кука в браузере, заголовок Session в приложении.
     # если заголовок Authorization вообще присутствует, на куку не откатываемся —
     # иначе исполнитель запроса зависит от форматирования заголовка, а не от
     # факта авторизации
@@ -85,7 +87,7 @@ async def require_session_user(
     """Действия, расширяющие доступ, машинному токену запрещены: иначе утёкший
     токен превращается в постоянный доступ, который отзывом уже не убрать."""
     if token_scope(request) is not None:
-        raise HTTPException(status_code=403, detail="Действие доступно только из браузера")
+        raise HTTPException(status_code=403, detail="Действие недоступно API-токену")
     return user
 
 
