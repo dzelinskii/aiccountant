@@ -31,6 +31,7 @@ export type SessionSource = 'stored' | 'login'
 
 export interface AccountResult {
   appAccountId: string
+  /** Сколько операций доставлено в приложение: при отказе 0, хотя банк мог их отдать. */
   collected: number
   /** null — импорта нет: операций за период не было либо по счёту отказ (см. error). */
   importId: string | null
@@ -52,8 +53,8 @@ export interface CollectSummary {
  * привязанным счетам. Итог отдаётся объектом — печатает его CLI, рисует экран.
  *
  * Бросает, когда продолжать бессмысленно для всех счетов разом: банк не признал
- * вход, недоступен, приложение отвергло сессию. Отказ по одному счёту — не
- * исключение, а строка итога.
+ * вход или недоступен, сессия банка умерла посреди сбора, приложение отвергло
+ * сессию. Отказ по одному счёту — не исключение, а строка итога.
  */
 export async function collectBank(host: CollectHost): Promise<CollectSummary> {
   const { credentials, source } = await connect(host)
@@ -65,12 +66,24 @@ export async function collectBank(host: CollectHost): Promise<CollectSummary> {
   const until = (host.now ?? Date.now)()
   const since = until - host.days * DAY_MS
   const accounts: AccountResult[] = []
+  let sessionChecked = false
+  // на первой же ошибке счёта, не пришедшей от нашего приложения, выясняем, не
+  // умерла ли сессия банка: иначе каждый следующий счёт получил бы тот же
+  // отказ, а итог выглядел бы как невезение со счетами. Проверка одна — на
+  // повторных ошибках она бы только нагружала банк
+  const verifySession = async (): Promise<void> => {
+    if (sessionChecked) return
+    sessionChecked = true
+    if (!(await host.plugin.isAlive(credentials))) {
+      throw new Error('Сессия банка кончилась посреди сбора — войдите заново')
+    }
+  }
   for (const account of bankAccounts) {
     const appAccountId = linked.get(account.id)
     // счёт банка, который человек не завёл: не ошибка, а обычное дело —
     // из двенадцати счетов в приложении ведётся часть
     if (appAccountId === undefined) continue
-    accounts.push(await collectAccount(host, credentials, account, appAccountId, since, until))
+    accounts.push(await collectAccount(host, credentials, account, appAccountId, since, until, verifySession))
   }
   const unboundCount = bankAccounts.filter((account) => !linked.has(account.id)).length
   return { bank: host.plugin.name, session: source, accounts, unboundCount }
@@ -102,6 +115,7 @@ async function collectAccount(
   appAccountId: string,
   since: number,
   until: number,
+  verifySession: () => Promise<void>,
 ): Promise<AccountResult> {
   try {
     const operations = await host.plugin.fetchOperations(credentials, account.id, since, until)
@@ -117,6 +131,8 @@ async function collectAccount(
     // кончилась сессия приложения — дальше каждый счёт получит тот же отказ;
     // это не частичный успех, а повод показать вход
     if (error instanceof AppHttpError && error.status === 401) throw error
+    // отказ нашего же приложения о банке ничего не говорит
+    if (!(error instanceof AppHttpError)) await verifySession()
     return {
       appAccountId,
       collected: 0,

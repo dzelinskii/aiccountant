@@ -151,3 +151,69 @@ test('период сбора — последние days дней от now', as
   const until = Date.parse('2026-09-29T00:00:00Z')
   expect(p.fetchOperations).toHaveBeenCalledWith(LIVE, 'a', until - 30 * 86_400_000, until)
 })
+
+test('банк отказал по одному счёту — у него error, другой собран', async () => {
+  // ошибка fetchOperations — отказ счёта, а не всего сбора: иначе один
+  // экзотический счёт оставил бы без импорта остальные
+  const p = plugin({
+    fetchOperations: vi.fn(async (_c: Credentials, id: string) => {
+      if (id === 'a') throw new Error('Банк не отдал операции счёта')
+      return [operation(`${id}-1`)]
+    }),
+  })
+  const summary = await collectBank(host({ plugin: p, fetchImpl: await appFetch(['a', 'b']) }))
+  expect(summary.accounts).toEqual([
+    expect.objectContaining({ appAccountId: 'app-a', collected: 0, importId: null, error: 'Банк не отдал операции счёта' }),
+    expect.objectContaining({ appAccountId: 'app-b', collected: 1, importId: 'imp-1', error: null }),
+  ])
+})
+
+test('сессия банка умерла посреди сбора — сбор отвергнут, следующие счета не собирались', async () => {
+  // после смерти сессии каждый счёт получил бы тот же отказ, и итог выглядел
+  // бы как «не повезло со счетами», а не «нужно войти заново»
+  const isAlive = vi.fn<BankPlugin['isAlive']>().mockResolvedValueOnce(true).mockResolvedValue(false)
+  const p = plugin({
+    isAlive,
+    fetchOperations: vi.fn(async () => {
+      throw new Error('Банк ответил 403')
+    }),
+  })
+  await expect(collectBank(host({ plugin: p, fetchImpl: await appFetch(['a', 'b']) }))).rejects.toThrow(
+    /кончилась посреди сбора/,
+  )
+  expect(p.fetchOperations).toHaveBeenCalledTimes(1)
+})
+
+test('отказы счетов при живой сессии — частичный успех, живость проверена один раз', async () => {
+  const p = plugin({
+    fetchOperations: vi.fn(async () => {
+      throw new Error('Банк не отдал операции')
+    }),
+  })
+  const summary = await collectBank(host({ plugin: p, fetchImpl: await appFetch(['a', 'b']) }))
+  expect(summary.accounts.map((a) => a.error)).toEqual(['Банк не отдал операции', 'Банк не отдал операции'])
+  // один раз при подключении и один — на первой ошибке счёта
+  expect(p.isAlive).toHaveBeenCalledTimes(2)
+})
+
+test('банк недоступен при повторной проверке живости — сбор отвергнут', async () => {
+  const isAlive = vi
+    .fn<BankPlugin['isAlive']>()
+    .mockResolvedValueOnce(true)
+    .mockRejectedValue(new Error('Банк недоступен (таймаут)'))
+  const p = plugin({
+    isAlive,
+    fetchOperations: vi.fn(async () => {
+      throw new Error('Банк ответил 500')
+    }),
+  })
+  await expect(collectBank(host({ plugin: p, fetchImpl: await appFetch(['a', 'b']) }))).rejects.toThrow(/недоступен/)
+  expect(p.fetchOperations).toHaveBeenCalledTimes(1)
+})
+
+test('отказ приложения по счёту — живость банка не проверяется', async () => {
+  // банк тут ни при чём: отказал наш же бэкенд
+  const p = plugin()
+  await collectBank(host({ plugin: p, fetchImpl: await appFetch(['a', 'b'], 'app-a') }))
+  expect(p.isAlive).toHaveBeenCalledTimes(1)
+})
