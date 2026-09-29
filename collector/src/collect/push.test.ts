@@ -1,15 +1,13 @@
 import { expect, test, vi } from 'vitest'
 import type { FetchImpl } from '../http/allowlist-client'
 import type { CollectedAccount, CollectedOperation } from '../core/contract'
-import type { CollectorConfig } from './config'
+import type { AppConnection } from './app-connection'
 import { pushOperations } from './push'
 
-const CONFIG: CollectorConfig = {
-  apiBaseUrl: 'http://app.local',
-  apiToken: 'secret-token',
+const CONFIG: AppConnection = {
+  baseUrl: 'http://app.local',
   workspaceId: 'ws-1',
-  days: 30,
-  bank: 'tbank',
+  authorization: 'Bearer secret-token',
 }
 
 // Тип указан явно: новое поле операции тогда обнаружится здесь, в одном месте,
@@ -204,12 +202,10 @@ test('имя парсера собирается из имени банка', as
     sent.push(init?.body as string)
     return new Response(JSON.stringify({ import_id: 'i', status: 'ready' }), { status: 201 })
   }
-  const config: CollectorConfig = {
-    apiBaseUrl: 'http://localhost:8000',
-    apiToken: 'token',
+  const config: AppConnection = {
+    baseUrl: 'http://localhost:8000',
     workspaceId: '00000000-0000-0000-0000-000000000000',
-    days: 30,
-    bank: 'sber',
+    authorization: 'Bearer token',
   }
   const operation: CollectedOperation = {
     occurred_at: '2026-09-08',

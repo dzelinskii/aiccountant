@@ -1,14 +1,12 @@
 import { expect, test } from 'vitest'
 import type { FetchImpl } from '../http/allowlist-client'
-import type { CollectorConfig } from './config'
-import { appRequest } from './app-api'
+import { AppHttpError, appRequest } from './app-api'
+import type { AppConnection } from './app-connection'
 
-const config: CollectorConfig = {
-  apiBaseUrl: 'http://app.local',
-  apiToken: 'secret-token',
+const config: AppConnection = {
+  baseUrl: 'http://app.local',
   workspaceId: 'ws-1',
-  days: 30,
-  bank: 'tbank',
+  authorization: 'Bearer secret-token',
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -59,6 +57,20 @@ test('метод, токен и тело уходят как задано выз
   expect(String(init?.body)).toBe(JSON.stringify({ name: 'Карта' }))
 })
 
+test('заголовок Authorization берётся из соединения целиком: сессия приложения — не Bearer', async () => {
+  const calls: [string, RequestInit | undefined][] = []
+  const fetchImpl: FetchImpl = async (url, init) => {
+    calls.push([String(url), init])
+    return jsonResponse({ ok: true })
+  }
+  const session: AppConnection = { ...config, authorization: 'Session abc' }
+
+  await appRequest(session, { method: 'GET', path: '/api/accounts' }, fetchImpl)
+
+  const headers = calls[0]![1]?.headers as Record<string, string>
+  expect(headers['Authorization']).toBe('Session abc')
+})
+
 test('запрос без тела не отправляет поле body вовсе', async () => {
   const calls: [string, RequestInit | undefined][] = []
   const fetchImpl: FetchImpl = async (url, init) => {
@@ -98,6 +110,16 @@ test('отказ приложения бросает ошибку с кодом 
   expect(text).toContain('body.balance')
   expect(text).toContain('Input should be a valid decimal')
   expect(text).not.toContain('1234.5')
+})
+
+test('отказ приложения — ошибка со статусом полем: по нему различают «сессия кончилась» и отказ по одному счёту', async () => {
+  const fetchImpl: FetchImpl = async () => jsonResponse({ detail: 'Сессия недействительна' }, 401)
+
+  const error = await appRequest(config, { method: 'GET', path: '/api/accounts' }, fetchImpl).catch((e: unknown) => e)
+
+  expect(error).toBeInstanceOf(AppHttpError)
+  expect((error as AppHttpError).status).toBe(401)
+  expect((error as AppHttpError).message).toBe('Приложение ответило 401: Сессия недействительна')
 })
 
 test('непонятное тело ответа на отказе даёт только код статуса', async () => {

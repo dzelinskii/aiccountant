@@ -1,9 +1,23 @@
 import type { FetchImpl } from '../http/allowlist-client'
-import type { CollectorConfig } from './config'
+import type { AppConnection } from './app-connection'
 
 // Сколько ошибок валидации показывать: бэкенд проверяет весь список операций
 // разом, и на систематической проблеме их будет столько же, сколько операций
 const MAX_REPORTED_DETAILS = 5
+
+/**
+ * Приложение ответило не успехом. Статус — полем, а не текстом: по нему решают,
+ * например, что сессия приложения кончилась (всё остановить и показать вход),
+ * а не что отказал один счёт.
+ */
+export class AppHttpError extends Error {
+  readonly status: number
+
+  constructor(status: number, detail: string) {
+    super(`Приложение ответило ${status}${detail}`)
+    this.status = status
+  }
+}
 
 export interface AppRequest {
   method: 'GET' | 'POST' | 'PUT'
@@ -16,31 +30,31 @@ export interface AppRequest {
 /**
  * Единственное место коллектора вне src/http, откуда уходят запросы в наше
  * приложение (исключение в .oxlintrc.json): allowlist защищает токен банка от
- * утечки на чужой хост, а здесь уходит токен нашего приложения на наш же
- * адрес из конфига — адрес, который не приходит из ответов банка и потому не
+ * утечки на чужой хост, а здесь уходит доступ к нашему приложению на наш же
+ * адрес из соединения — адрес, который не приходит из ответов банка и потому не
  * управляется извне.
  *
- * На отказе бросает ошибку с кодом и разобранным пояснением бэкенда (без
+ * На отказе бросает AppHttpError с кодом и разобранным пояснением бэкенда (без
  * значений полей — см. describeFailure), на успехе отдаёт разобранный JSON.
  */
 export async function appRequest(
-  config: CollectorConfig,
+  connection: AppConnection,
   { method, path, params = {}, body }: AppRequest,
   fetchImpl: FetchImpl = fetch,
 ): Promise<unknown> {
-  const url = new URL(path, config.apiBaseUrl)
-  url.searchParams.set('workspace_id', config.workspaceId)
+  const url = new URL(path, connection.baseUrl)
+  url.searchParams.set('workspace_id', connection.workspaceId)
   for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value)
 
   const res = await fetchImpl(url, {
     method,
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${config.apiToken}`,
+      Authorization: connection.authorization,
     },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   })
-  if (!res.ok) throw new Error(`Приложение ответило ${res.status}${await describeFailure(res)}`)
+  if (!res.ok) throw new AppHttpError(res.status, await describeFailure(res))
   return res.json()
 }
 

@@ -1,3 +1,4 @@
+import type { AppConnection } from '../collect/app-connection'
 import { BANK_NAMES } from '../plugins/registry'
 
 export interface CollectorConfig {
@@ -32,6 +33,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CollectorConfi
     days: parseDays(env['COLLECT_DAYS']),
     bank,
   }
+}
+
+/** CLI предъявляет приложению API-токен; сессия человека — дело десктопного клиента. */
+export function appConnection(config: CollectorConfig): AppConnection {
+  return { baseUrl: config.apiBaseUrl, workspaceId: config.workspaceId, authorization: `Bearer ${config.apiToken}` }
 }
 
 function parseBank(raw: string | undefined): string {

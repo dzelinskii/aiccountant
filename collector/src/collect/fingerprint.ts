@@ -1,5 +1,3 @@
-import { createHash } from 'node:crypto'
-
 /**
  * Отпечаток счёта банка: sha256 от «банк:идентификатор».
  *
@@ -8,7 +6,11 @@ import { createHash } from 'node:crypto'
  * переводят деньги. В базу приложения он не едет, а для привязки довольно
  * равенства. Банк входит в отпечаток, потому что одинаковый идентификатор в
  * двух банках ничего общего не означает.
+ *
+ * WebCrypto, а не node:crypto: в окне приложения Node нет, а значение то же —
+ * сделанные раньше привязки остаются в силе (тест-вектор в fingerprint.test.ts).
  */
-export function accountFingerprint(bank: string, accountId: string): string {
-  return createHash('sha256').update(`${bank}:${accountId}`).digest('hex')
+export async function accountFingerprint(bank: string, accountId: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${bank}:${accountId}`))
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
 }

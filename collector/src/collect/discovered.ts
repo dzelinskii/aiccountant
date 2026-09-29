@@ -1,7 +1,7 @@
 import type { CollectedAccount } from '../core/contract'
 import type { FetchImpl } from '../http/allowlist-client'
-import type { CollectorConfig } from './config'
 import { appRequest } from './app-api'
+import type { AppConnection } from './app-connection'
 import { accountFingerprint } from './fingerprint'
 
 /**
@@ -16,16 +16,17 @@ import { accountFingerprint } from './fingerprint'
  * приложения оно не едет.
  */
 export async function syncDiscovered(
-  config: CollectorConfig,
+  connection: AppConnection,
   bank: string,
   accounts: readonly CollectedAccount[],
   // без значения по умолчанию: глобальный fetch остаётся только в app-api.ts,
   // а appRequest сам подставляет его, если сюда ничего не передали
   fetchImpl?: FetchImpl,
 ): Promise<Map<string, string>> {
+  const fingerprints = await Promise.all(accounts.map((account) => accountFingerprint(bank, account.id)))
   const byFingerprint = new Map<string, string>()
-  const payload = accounts.map((account) => {
-    const fingerprint = accountFingerprint(bank, account.id)
+  const payload = accounts.map((account, index) => {
+    const fingerprint = fingerprints[index]!
     byFingerprint.set(fingerprint, account.id)
     return {
       fingerprint,
@@ -37,7 +38,7 @@ export async function syncDiscovered(
   })
 
   const data = await appRequest(
-    config,
+    connection,
     { method: 'PUT', path: '/api/accounts/discovered', params: { bank }, body: { accounts: payload } },
     fetchImpl,
   )

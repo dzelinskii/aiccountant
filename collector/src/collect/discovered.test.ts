@@ -1,16 +1,14 @@
 import { expect, test, vi } from 'vitest'
 import type { CollectedAccount } from '../core/contract'
 import type { FetchImpl } from '../http/allowlist-client'
-import type { CollectorConfig } from './config'
+import type { AppConnection } from './app-connection'
 import { syncDiscovered } from './discovered'
 
-const config = {
-  apiBaseUrl: 'http://localhost:8000',
-  apiToken: 'token',
+const config: AppConnection = {
+  baseUrl: 'http://localhost:8000',
   workspaceId: 'ws-1',
-  days: 30,
-  bank: 'alfa',
-} as CollectorConfig
+  authorization: 'Bearer token',
+}
 
 function account(id: string, extra: Partial<CollectedAccount> = {}): CollectedAccount {
   return {
@@ -52,7 +50,7 @@ test('банковский тип счёта в приложение не отп
 test('привязки возвращаются по идентификатору счёта банка, а не по отпечатку', async () => {
   // дальше по коду ими адресуют fetchOperations, которому нужен id банка
   const { accountFingerprint } = await import('./fingerprint')
-  const fingerprint = accountFingerprint('alfa', 'acc-1')
+  const fingerprint = await accountFingerprint('alfa', 'acc-1')
   const linked = await syncDiscovered(
     config,
     'alfa',
@@ -74,4 +72,13 @@ test('неожиданный ответ не проходит молча', async
   await expect(
     syncDiscovered(config, 'alfa', [account('acc-1')], ok({ что: 'то' })),
   ).rejects.toThrow(/неожиданный ответ/i)
+})
+
+test('приложению предъявляется заголовок соединения целиком', async () => {
+  const fetchImpl = ok({ linked: {} })
+  await syncDiscovered({ ...config, authorization: 'Session abc' }, 'alfa', [account('acc-1')], fetchImpl)
+
+  const [, init] = vi.mocked(fetchImpl).mock.calls[0]!
+  const headers = init?.headers as Record<string, string>
+  expect(headers['Authorization']).toBe('Session abc')
 })

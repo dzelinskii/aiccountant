@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { loadConfig } from './config'
+import { appConnection, loadConfig } from './config'
 
 const TOKEN = 'secret-token'
 
@@ -82,4 +82,12 @@ test('незнакомый банк отвергается со списком �
 
 test('alfa принимается как известный банк', () => {
   expect(loadConfig(env({ COLLECT_BANK: 'alfa' })).bank).toBe('alfa')
+})
+
+test('CLI предъявляет приложению API-токен как Bearer: ядру нужно только соединение', () => {
+  expect(appConnection(loadConfig(env({ AICCOUNTANT_URL: 'https://app.example' })))).toEqual({
+    baseUrl: 'https://app.example',
+    workspaceId: 'ws-1',
+    authorization: `Bearer ${TOKEN}`,
+  })
 })

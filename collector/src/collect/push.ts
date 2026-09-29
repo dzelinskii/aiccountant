@@ -1,7 +1,7 @@
 import type { FetchImpl } from '../http/allowlist-client'
 import type { CollectedAccount, CollectedOperation } from '../core/contract'
-import type { CollectorConfig } from './config'
 import { appRequest } from './app-api'
+import type { AppConnection } from './app-connection'
 
 export interface PushResult {
   import_id: string
@@ -14,7 +14,7 @@ export interface PushResult {
  * Возвращает null, если отправлять нечего: бэкенд пустой список не принимает.
  */
 export async function pushOperations(
-  config: CollectorConfig,
+  connection: AppConnection,
   bank: string,
   accountId: string,
   operations: readonly CollectedOperation[],
@@ -26,7 +26,7 @@ export async function pushOperations(
   if (operations.length === 0) return null
 
   const data = await appRequest(
-    config,
+    connection,
     {
       method: 'POST',
       path: '/api/imports/parsed',
