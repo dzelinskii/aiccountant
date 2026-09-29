@@ -21,8 +21,19 @@ export function bankTransport(bank: string): Transport {
         url: url.toString(),
         headers,
         body: body ?? null,
+      }).catch((error: unknown) => {
+        throw refusal(error)
       })
       return { status: res.status, ok: res.status >= 200 && res.status < 300, text: async () => res.body }
     },
   }
+}
+
+// AllowlistClient не пробрасывает текст ошибки транспорта (в нём мог бы оказаться
+// адрес с секретом), а берёт только name и code. Тексты отказов оболочки адреса
+// не несут (http.rs describe, banks.rs check_request), поэтому причина — таймаут,
+// сертификат, «не разрешено» — передаётся именно через code
+function refusal(error: unknown): Error {
+  const reason = error instanceof Error ? error.message : String(error)
+  return Object.assign(new Error('Оболочка отказала в запросе'), { code: reason })
 }

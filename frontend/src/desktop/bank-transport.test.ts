@@ -3,6 +3,7 @@ import { beforeEach, expect, test, vi } from 'vitest'
 const invoke = vi.fn()
 vi.mock('./runtime', () => ({ invoke: (...args: unknown[]) => invoke(...args) }))
 
+import { AllowlistClient } from 'aiccountant-collector/src/http/allowlist-client'
 import { bankTransport } from './bank-transport'
 
 beforeEach(() => invoke.mockReset())
@@ -61,7 +62,24 @@ test.each([
   expect(res.ok).toBe(ok)
 })
 
-test('отказ оболочки пробрасывается', async () => {
-  invoke.mockRejectedValueOnce(new Error('адрес не из списка банка'))
-  await expect(get()).rejects.toThrow('адрес не из списка банка')
+test('отказ оболочки уходит ошибкой с причиной в code', async () => {
+  invoke.mockRejectedValueOnce(new Error('Банк недоступен (таймаут)'))
+  await expect(get()).rejects.toMatchObject({ code: 'Банк недоступен (таймаут)' })
+})
+
+// AllowlistClient не пробрасывает текст ошибки транспорта, только name и code,
+// поэтому причина сбоя доходит наверх лишь через code
+test('причина отказа оболочки видна в ошибке клиента коллектора, адрес и секрет — нет', async () => {
+  invoke.mockRejectedValueOnce(new Error('Банк недоступен (таймаут)'))
+  const client = new AllowlistClient({
+    baseUrl: 'https://www.tbank.ru',
+    allowed: [{ path: '/api/common/v1/session_status', method: 'GET' }],
+    credentials: { kind: 'query', name: 'sessionid', value: 'SECRET' },
+    transport: bankTransport('tbank'),
+  })
+  const failure = await client.getJson('/api/common/v1/session_status').catch((e: unknown) => e)
+  expect(failure).toBeInstanceOf(Error)
+  const message = (failure as Error).message
+  expect(message).toContain('таймаут')
+  expect(message).not.toContain('SECRET')
 })
