@@ -1,9 +1,14 @@
 import { invoke } from './runtime'
 
 const SERVER_KEY = 'aiccountant.server'
+// хвостовой слэш склеил бы адрес с путём в `//api/...`
+const normalize = (url: string): string => url.trim().replace(/\/+$/, '')
+
 // по умолчанию — адрес из сборки; у каждого стенда свой порт, и человек меняет
-// его на экране входа
-const DEFAULT_SERVER: string = import.meta.env.VITE_DEFAULT_SERVER ?? 'http://localhost:8000'
+// его на экране входа. Пустая переменная равна незаданной: пустой адрес в окне
+// Tauri стал бы относительным путём, а у окна нет своего origin-сервера
+const DEFAULT_SERVER: string =
+  normalize(import.meta.env.VITE_DEFAULT_SERVER ?? '') || 'http://localhost:8000'
 
 // токен читается из хранилища ОС один раз при старте: запросы собираются
 // синхронно, и ходить за ним в оболочку на каждый запрос незачем
@@ -15,7 +20,7 @@ export function serverUrl(): string {
 }
 
 export function setServerUrl(url: string): void {
-  localStorage.setItem(SERVER_KEY, url.trim().replace(/\/+$/, ''))
+  localStorage.setItem(SERVER_KEY, normalize(url))
 }
 
 export function sessionToken(): string | null {

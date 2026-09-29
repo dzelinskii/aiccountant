@@ -12,7 +12,9 @@ import { startImport } from './imports'
 
 const fetchMock = vi.fn(async () => new Response('{"import_id":"i1"}'))
 
-function lastCall(): [string, RequestInit] {
+// каждый тест делает ровно один запрос — лишний вызов должен быть виден
+function onlyCall(): [string, RequestInit] {
+  expect(fetchMock).toHaveBeenCalledTimes(1)
   return fetchMock.mock.calls[0] as unknown as [string, RequestInit]
 }
 
@@ -29,7 +31,7 @@ afterEach(() => {
 
 test('в браузере — относительный адрес и cookie своего origin, без заголовка сессии', async () => {
   await apiFetch('/api/me')
-  const [url, init] = lastCall()
+  const [url, init] = onlyCall()
   expect(url).toBe('/api/me')
   expect(init.credentials).toBe('same-origin')
   expect(new Headers(init.headers).has('Authorization')).toBe(false)
@@ -38,7 +40,7 @@ test('в браузере — относительный адрес и cookie с
 test('в приложении — полный адрес сервера и сессия заголовком, cookie не шлются', async () => {
   desktop.on = true
   await apiFetch('/api/me', { headers: { 'Content-Type': 'application/json' } })
-  const [url, init] = lastCall()
+  const [url, init] = onlyCall()
   expect(url).toBe('http://localhost:18000/api/me')
   expect(init.credentials).toBe('omit')
   const headers = new Headers(init.headers)
@@ -50,14 +52,14 @@ test('в приложении без токена заголовка Authorizati
   desktop.on = true
   desktop.token = null
   await apiFetch('/api/me')
-  const [, init] = lastCall()
+  const [, init] = onlyCall()
   expect(new Headers(init.headers).has('Authorization')).toBe(false)
 })
 
 test('api() в приложении ходит на полный адрес с сессией и JSON-заголовком', async () => {
   desktop.on = true
   await api('/api/me')
-  const [url, init] = lastCall()
+  const [url, init] = onlyCall()
   expect(url).toBe('http://localhost:18000/api/me')
   expect(init.credentials).toBe('omit')
   const headers = new Headers(init.headers)
@@ -67,7 +69,7 @@ test('api() в приложении ходит на полный адрес с �
 
 test('api() в браузере остаётся на относительном адресе', async () => {
   await api('/api/me')
-  const [url, init] = lastCall()
+  const [url, init] = onlyCall()
   expect(url).toBe('/api/me')
   expect(init.credentials).toBe('same-origin')
 })
@@ -76,7 +78,7 @@ test('startImport в приложении — полный адрес, сесс�
   desktop.on = true
   const file = new File(['a,b'], 'ops.csv')
   await startImport('ws1', 'acc1', file)
-  const [url, init] = lastCall()
+  const [url, init] = onlyCall()
   expect(url).toBe('http://localhost:18000/api/imports?workspace_id=ws1&account_id=acc1')
   expect(init.method).toBe('POST')
   expect(init.credentials).toBe('omit')
@@ -89,7 +91,7 @@ test('startImport в приложении — полный адрес, сесс�
 
 test('startImport в браузере — относительный адрес и cookie', async () => {
   await startImport('ws1', 'acc1', new File(['a'], 'ops.csv'))
-  const [url, init] = lastCall()
+  const [url, init] = onlyCall()
   expect(url).toBe('/api/imports?workspace_id=ws1&account_id=acc1')
   expect(init.credentials).toBe('same-origin')
 })

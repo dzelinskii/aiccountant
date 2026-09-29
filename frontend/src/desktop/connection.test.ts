@@ -31,6 +31,24 @@ test('serverUrl без сохранённого значения отдаёт а
   expect(serverUrl()).toBe('http://default.test:8000')
 })
 
+test('хвостовые слэши в адресе из сборки срезаются, иначе пути склеятся как //api', async () => {
+  vi.stubEnv('VITE_DEFAULT_SERVER', 'http://host:8000/')
+  const { serverUrl } = await freshConnection()
+  expect(serverUrl()).toBe('http://host:8000')
+})
+
+test('пустая переменная сборки даёт запасной адрес, а не относительный путь', async () => {
+  vi.stubEnv('VITE_DEFAULT_SERVER', '')
+  const { serverUrl } = await freshConnection()
+  expect(serverUrl()).toBe('http://localhost:8000')
+})
+
+test('незаданная переменная сборки даёт запасной адрес', async () => {
+  vi.stubEnv('VITE_DEFAULT_SERVER', undefined)
+  const { serverUrl } = await freshConnection()
+  expect(serverUrl()).toBe('http://localhost:8000')
+})
+
 test('serverUrl отдаёт сохранённый адрес, а не умолчание', async () => {
   const { setServerUrl, serverUrl } = await freshConnection()
   setServerUrl('http://saved:1')
