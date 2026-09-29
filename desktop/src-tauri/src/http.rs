@@ -138,6 +138,8 @@ pub async fn bank_request(
 fn describe(error: &reqwest::Error) -> String {
     let kind = if error.is_timeout() {
         "таймаут"
+    } else if is_certificate_error(error) {
+        "сертификат банка не принят"
     } else if error.is_connect() {
         "нет соединения"
     } else if error.is_body() || error.is_decode() {
@@ -146,6 +148,24 @@ fn describe(error: &reqwest::Error) -> String {
         "сбой запроса"
     };
     format!("Банк недоступен ({kind})")
+}
+
+/// Отказ сертификата reqwest отдаёт как `is_connect()`, неотличимо от
+/// недоступного хоста, а для банка это разные беды: у Т-Банка ждём именно
+/// его, если цепочка сменится. Различаем по тексту причин в цепочке
+/// `source()` — способ хрупкий (формулировки rustls могут смениться), выбран,
+/// чтобы не тянуть `rustls` в зависимости напрямую. Сама ошибка не смотрится:
+/// её текст несёт адрес, а слово «certificate» бывает и в нём.
+fn is_certificate_error(error: &dyn std::error::Error) -> bool {
+    let mut source = error.source();
+    while let Some(cause) = source {
+        let text = cause.to_string().to_lowercase();
+        if text.contains("certificate") || text.contains("unknownissuer") {
+            return true;
+        }
+        source = cause.source();
+    }
+    false
 }
 
 #[cfg(test)]
@@ -260,7 +280,56 @@ mod tests {
     #[ignore = "нужна сеть"]
     async fn root_only_client_rejects_public_ca() {
         let client = client_for(banks::bank("sber").unwrap()).unwrap();
-        assert!(client.get("https://example.com/").send().await.is_err());
+        let err = client.get("https://example.com/").send().await.unwrap_err();
+        assert_eq!(
+            describe(&err),
+            "Банк недоступен (сертификат банка не принят)"
+        );
+    }
+
+    #[derive(Debug)]
+    struct Layer(&'static str, Option<Box<Layer>>);
+
+    impl std::fmt::Display for Layer {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.0)
+        }
+    }
+
+    impl std::error::Error for Layer {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            self.1.as_deref().map(|e| e as _)
+        }
+    }
+
+    #[test]
+    fn certificate_is_found_deep_in_the_chain() {
+        let chain = Layer(
+            "error sending request",
+            Some(Box::new(Layer(
+                "client error (Connect)",
+                Some(Box::new(Layer(
+                    "invalid peer certificate: UnknownIssuer",
+                    None,
+                ))),
+            ))),
+        );
+        assert!(is_certificate_error(&chain));
+    }
+
+    #[test]
+    fn plain_connect_failure_is_not_certificate() {
+        let chain = Layer(
+            "error sending request",
+            Some(Box::new(Layer("tcp connect error: refused", None))),
+        );
+        assert!(!is_certificate_error(&chain));
+    }
+
+    #[test]
+    fn top_level_text_is_not_inspected() {
+        let chain = Layer("url /certificate/x", None);
+        assert!(!is_certificate_error(&chain));
     }
 
     #[tokio::test]
