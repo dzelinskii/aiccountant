@@ -33,6 +33,8 @@ interface FakeSession {
   calls: string[]
   /** Предикат, с которым плагин ждал перехода в ЛК. */
   urlMatch: () => ((url: URL) => boolean) | undefined
+  /** Срок, который плагин отвёл человеку на ввод кода. */
+  urlTimeout: () => number | undefined
 }
 
 /**
@@ -43,6 +45,7 @@ interface FakeSession {
 function fakeSession(cookie: { value: string | null }, onLogin?: () => void): FakeSession {
   const calls: string[] = []
   let urlMatch: ((url: URL) => boolean) | undefined
+  let urlTimeout: number | undefined
   const session: BrowserSession = {
     async goto(url) {
       calls.push(`goto:${url}`)
@@ -55,13 +58,14 @@ function fakeSession(cookie: { value: string | null }, onLogin?: () => void): Fa
       calls.push('cookies')
       return cookie.value === null ? [] : [{ name: COOKIE, value: cookie.value }]
     },
-    async waitForUrl(match) {
+    async waitForUrl(match, timeoutMs) {
       calls.push('waitForUrl')
       urlMatch = match
+      urlTimeout = timeoutMs
       onLogin?.()
     },
   }
-  return { session, calls, urlMatch: () => urlMatch }
+  return { session, calls, urlMatch: () => urlMatch, urlTimeout: () => urlTimeout }
 }
 
 function fakePrompt(
@@ -144,6 +148,18 @@ test('человека ждут до перехода в ЛК: страница 
 
   expect(visible.urlMatch()?.(new URL(MYBANK_URL))).toBe(true)
   expect(visible.urlMatch()?.(new URL(LOGIN_URL))).toBe(false)
+})
+
+test('человеку на ввод кода отведено пять минут', async () => {
+  const cookie = { value: 'anonymous' }
+  const visible = fakeSession(cookie, () => {
+    cookie.value = 'fresh'
+  })
+  const { prompt } = fakePrompt(fakeSession(cookie).session, visible.session)
+
+  await obtainTBankToken(prompt, async (t) => t === 'fresh', fakeTiming())
+
+  expect(visible.urlTimeout()).toBe(300_000)
 })
 
 test('вход выполнен, но сессия так и не ожила — ошибка через минуту опроса, а не мёртвый токен', async () => {

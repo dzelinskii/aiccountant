@@ -49,8 +49,7 @@ export async function obtainTBankToken(
     { headless: true },
   )
   if (refreshed !== null) return refreshed
-  // окно входа — только видимое: человек вводит телефон и код сам, коллектор
-  // в форму не вмешивается
+  // окно входа — только видимое: другого способа получить код от человека нет
   return prompt.withBrowser(
     async (session) => {
       // с протухшей кукой банк уводит со страницы входа обратно в ЛК, и мы бы
