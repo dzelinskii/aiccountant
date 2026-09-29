@@ -76,20 +76,26 @@ test('банк освобождается и после отказа работ�
 test('«забыть банк» идёт через ту же защиту: пока идёт сбор, отвергается', async () => {
   let release: () => void = () => {}
   const collecting = runExclusive('sber', () => new Promise<void>((resolve) => (release = resolve)))
-  await expect(forgetBank('sber')).rejects.toThrow(BUSY)
-  expect(invoke).not.toHaveBeenCalled()
-  release()
-  await collecting
+  try {
+    await expect(forgetBank('sber')).rejects.toThrow(BUSY)
+    expect(invoke).not.toHaveBeenCalled()
+  } finally {
+    release()
+    await collecting
+  }
 })
 
 test('сбор, пока идёт «забыть банк», отвергается', async () => {
   let release: () => void = () => {}
   invoke.mockImplementation(() => new Promise<void>((resolve) => (release = resolve)))
   const forgetting = forgetBank('sber')
-  await expect(collectFromApp('sber', 'ws-1')).rejects.toThrow(BUSY)
-  expect(collectBank).not.toHaveBeenCalled()
-  release()
-  await forgetting
+  try {
+    await expect(collectFromApp('sber', 'ws-1')).rejects.toThrow(BUSY)
+    expect(collectBank).not.toHaveBeenCalled()
+  } finally {
+    release()
+    await forgetting
+  }
   expect(invoke).toHaveBeenCalledWith('bank_forget', { bank: 'sber' })
 })
 
