@@ -74,3 +74,14 @@ test('после выхода данные пользователя не ост�
   await screen.findByText('экран входа')
   expect(queryClient.getQueryData(['me'])).toBeUndefined()
 })
+
+test('пункт «Банки» есть в приложении', () => {
+  desktop.on = true
+  renderLayout()
+  expect(screen.getByText('Банки')).toBeDefined()
+})
+
+test('в браузере пункта «Банки» нет: сбор работает только в приложении', () => {
+  renderLayout()
+  expect(screen.queryByText('Банки')).toBeNull()
+})

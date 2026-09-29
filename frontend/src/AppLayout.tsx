@@ -15,6 +15,9 @@ const LINKS = [
   { to: '/import', label: 'Импорт' },
 ]
 
+// сбор из банков исполняется в оболочке; в браузере экрана нет
+const DESKTOP_LINKS = [{ to: '/banks', label: 'Банки' }]
+
 export function AppLayout() {
   const [opened, { toggle }] = useDisclosure()
   const location = useLocation()
@@ -54,7 +57,7 @@ export function AppLayout() {
         </Group>
       </AppShell.Header>
       <AppShell.Navbar p="md">
-        {LINKS.map((l) => (
+        {(isDesktop() ? [...LINKS, ...DESKTOP_LINKS] : LINKS).map((l) => (
           <NavLink
             key={l.to}
             component={RouterNavLink}

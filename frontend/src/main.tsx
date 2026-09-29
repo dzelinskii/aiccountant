@@ -12,6 +12,7 @@ import { WorkspaceGate } from './WorkspaceGate'
 import './index.css'
 import { DashboardPage } from './pages/DashboardPage'
 import { AccountsPage } from './pages/AccountsPage'
+import { BanksPage } from './pages/BanksPage'
 import { CategoriesPage } from './pages/CategoriesPage'
 import { CounterpartiesPage } from './pages/CounterpartiesPage'
 import { TransactionsPage } from './pages/TransactionsPage'
@@ -44,6 +45,8 @@ const router = createBrowserRouter([
           { path: '/transactions', element: <TransactionsPage /> },
           { path: '/recurring', element: <RecurringPage /> },
           { path: '/import', element: <ImportPage /> },
+          // сбор из банков живёт в оболочке: в браузере ему негде исполняться
+          ...(isDesktop() ? [{ path: '/banks', element: <BanksPage /> }] : []),
         ],
       },
     ],
