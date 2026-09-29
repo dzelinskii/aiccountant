@@ -135,13 +135,13 @@ pub fn app_token_clear() -> Result<(), String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::collections::HashMap;
 
     #[derive(Default)]
-    struct Memory(RefCell<HashMap<String, String>>);
+    pub(crate) struct Memory(RefCell<HashMap<String, String>>);
 
     impl Backend for Memory {
         fn get(&self, key: &str) -> Result<Option<String>, String> {

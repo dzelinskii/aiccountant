@@ -10,23 +10,41 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 use std::time::Duration;
 
 use serde::Serialize;
 use tauri::webview::cookie::Cookie;
-use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{
+    AppHandle, Manager, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Window, WindowEvent,
+};
 
 use crate::banks::{self, Bank};
 use crate::secrets;
 
-/// Флаги WebView2, которые Tauri ставит сам: additional_browser_args их
-/// заменяет, а не дополняет, поэтому они повторены рядом с закреплением.
-const DEFAULT_ARGS: &str = "--disable-features=msWebOoUI,msPdfOOUI,msSmartScreenProtection";
+/// Метка окна приложения (`tauri.conf.json`): его закрытие уводит за собой
+/// окна банков.
+const MAIN_LABEL: &str = "main";
+const BANK_LABEL_PREFIX: &str = "bank-";
 
-/// Профиль WebView2 и метка окна освобождаются не сразу после закрытия окна, а
-/// на ближайших оборотах цикла событий: ждём их повторами (~3 секунды).
+/// Флаги WebView2, которые wry ставит сам (`default_args` в
+/// `wry-0.57.0/src/webview2/mod.rs`): additional_browser_args их заменяет, а не
+/// дополняет, поэтому они повторены рядом с закреплением. Имена фич Chromium
+/// регистрозависимы, писать их надо ровно как в wry.
+const DEFAULT_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection";
+
+/// Профиль WebView2 освобождается не сразу после закрытия окна: удаление
+/// профиля повторяется (~3 секунды).
 const RETRIES: u32 = 10;
 const PAUSE: Duration = Duration::from_millis(300);
+
+/// Сколько ждать, пока окно закроется и Tauri снимет его метку.
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// WebView2 применяет удаление куки с задержкой (на замере — около 30 мс), а не
+/// сразу: пока не прошла, кука ещё видна в `cookies()`.
+const COOKIE_RETRIES: u32 = 20;
+const COOKIE_PAUSE: Duration = Duration::from_millis(50);
 
 #[derive(Serialize)]
 pub struct CookieOut {
@@ -35,7 +53,11 @@ pub struct CookieOut {
 }
 
 fn label(bank: &Bank) -> String {
-    format!("bank-{}", bank.code)
+    format!("{BANK_LABEL_PREFIX}{}", bank.code)
+}
+
+fn is_bank_label(label: &str) -> bool {
+    label.starts_with(BANK_LABEL_PREFIX)
 }
 
 /// Закрепление ключа корня: «игнорировать ошибки сертификата для цепочек с
@@ -48,15 +70,22 @@ fn browser_args() -> String {
     )
 }
 
-fn profile_dir(app: &AppHandle, bank: &Bank) -> Result<PathBuf, String> {
-    let base = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    Ok(base.join("banks").join(bank.code))
+/// Профиль лежит в локальном каталоге данных, а не в перемещаемом: привязка
+/// устройства и кэш WebView2 не должны уезжать на другой компьютер вместе с
+/// перемещаемым профилем Windows.
+fn profile_under(base: &Path, bank: &Bank) -> PathBuf {
+    base.join("banks").join(bank.code)
 }
 
-/// Адрес из команды окна: разобран и лежит на страницах этого банка. Единственная
-/// граница, которая не даёт окну с сохранённым входом уйти на чужой сайт, а
-/// чтению кук — отдать их не тому адресу. В текст отказа адрес не попадает:
-/// в его query бывают секреты.
+fn profile_dir(app: &AppHandle, bank: &Bank) -> Result<PathBuf, String> {
+    let base = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
+    Ok(profile_under(&base, bank))
+}
+
+/// Адрес из команды окна: разобран и лежит на страницах этого банка. Не даёт
+/// нашей команде отправить окно с сохранённым входом на чужой сайт, а чтению
+/// кук — отдать их не тому адресу; сама страница банка может вести куда угодно.
+/// В текст отказа адрес не попадает: в его query бывают секреты.
 fn bank_page(bank: &Bank, raw: &str) -> Result<Url, String> {
     let url = Url::parse(raw).map_err(|_| "Неверный адрес".to_string())?;
     if banks::is_bank_page(bank, &url) {
@@ -72,6 +101,45 @@ fn bank_page(bank: &Bank, raw: &str) -> Result<Url, String> {
 /// Куки с точным именем: регистр и подстроки значения не имеют.
 fn with_name(cookies: Vec<Cookie<'static>>, name: &str) -> Vec<Cookie<'static>> {
     cookies.into_iter().filter(|c| c.name() == name).collect()
+}
+
+/// Чем удалять куку. WebView2 удаляет по точному (имя, домен, путь), а домен
+/// доменной куки хранит с ведущей точкой (`.tbank.ru`); `Cookie::domain()`
+/// точку срезает, и обычное удаление её не находит (замер на прототипе:
+/// доменная кука остаётся). Вариант с точкой получается двумя точками в
+/// `set_domain`: `domain()` срежет одну, и в WebView2 уйдёт `.tbank.ru`. Для
+/// куки хоста такой вариант ничего не находит и безвреден.
+fn delete_variants(cookie: &Cookie<'static>) -> Vec<Cookie<'static>> {
+    let mut variants = vec![cookie.clone()];
+    if let Some(domain) = cookie.domain() {
+        let mut dotted = cookie.clone();
+        dotted.set_domain(format!("..{domain}"));
+        variants.push(dotted);
+    }
+    variants
+}
+
+/// Стереть куки с этим именем и дождаться, пока они исчезнут: не исчезли —
+/// ошибка, а не молчаливый успех.
+fn clear_named(
+    name: &str,
+    mut read: impl FnMut() -> Result<Vec<Cookie<'static>>, String>,
+    mut delete: impl FnMut(&Cookie<'static>) -> Result<(), String>,
+    retries: u32,
+    pause: Duration,
+) -> Result<(), String> {
+    for cookie in with_name(read()?, name) {
+        for variant in delete_variants(&cookie) {
+            delete(&variant)?;
+        }
+    }
+    retry(retries, pause, || {
+        if with_name(read()?, name).is_empty() {
+            Ok(())
+        } else {
+            Err(format!("Кука {name} не удалилась"))
+        }
+    })
 }
 
 /// Повторяет операцию с паузой, пока она не удастся или не кончатся повторы.
@@ -110,14 +178,22 @@ fn remove_with_retry(
     .map_err(|e| format!("Профиль банка занят, повторите позже ({e})"))
 }
 
-/// Стереть и профиль, и секрет, даже если первое не удалось: иначе забытое
-/// наполовину выглядело бы для человека забытым целиком. Ошибка называет всё,
-/// что осталось.
-fn forget_all(
+/// Забыть доступ: профиль и секрет сессии. Стирается и то и другое, даже если
+/// первое не удалось: иначе забытое наполовину выглядело бы забытым целиком.
+/// Секрет стирается всегда, а профиль — только если окно закрылось (пока оно
+/// открыто, профиль занят). Ошибка называет всё, что осталось.
+fn forget(
     remove_profile: impl FnOnce() -> Result<(), String>,
-    clear_secret: impl FnOnce() -> Result<(), String>,
+    backend: &impl secrets::Backend,
+    bank: &Bank,
+    closed: Result<(), String>,
 ) -> Result<(), String> {
-    let failures: Vec<String> = [remove_profile(), clear_secret()]
+    let profile = match closed {
+        Ok(()) => remove_profile(),
+        Err(e) => Err(format!("Профиль не удалён: {e}")),
+    };
+    let secret = secrets::clear_session(backend, bank.code);
+    let failures: Vec<String> = [profile, secret]
         .into_iter()
         .filter_map(Result::err)
         .collect();
@@ -133,21 +209,44 @@ fn window(app: &AppHandle, bank: &Bank) -> Result<WebviewWindow, String> {
         .ok_or_else(|| "Окно банка закрыто".to_string())
 }
 
-/// Закрыть окно банка, если оно есть, и дождаться, пока Tauri снимет метку:
-/// `destroy` лишь отправляет сообщение циклу событий, метка освобождается,
-/// когда он его обработает. Без ожидания `bank_window_open` сразу за закрытием
-/// отказал бы «окно с такой меткой уже существует».
+/// Закрыть окно банка, если оно есть, и дождаться его закрытия: `destroy` лишь
+/// отправляет сообщение циклу событий, а метку Tauri снимает, когда тот его
+/// обработает — раньше, чем вызовет обработчики окна. Без ожидания
+/// `bank_window_open` сразу за закрытием отказал бы «окно с такой меткой уже
+/// существует». Подписка — до `destroy`, иначе событие можно пропустить.
 fn close_and_wait(app: &AppHandle, bank: &Bank) -> Result<(), String> {
-    let name = label(bank);
-    let Some(win) = app.get_webview_window(&name) else {
+    let Some(win) = app.get_webview_window(&label(bank)) else {
         return Ok(());
     };
+    let (tx, rx) = mpsc::channel();
+    win.on_window_event(move |event| {
+        if matches!(event, WindowEvent::Destroyed) {
+            let _ = tx.send(());
+        }
+    });
     win.destroy().map_err(|e| e.to_string())?;
-    retry(RETRIES, PAUSE, || match app.get_webview_window(&name) {
-        Some(_) => Err(()),
-        None => Ok(()),
-    })
-    .map_err(|()| "Окно банка не закрылось".to_string())
+    rx.recv_timeout(CLOSE_TIMEOUT)
+        .map_err(|_| "Окно банка не закрылось".to_string())
+}
+
+/// Закрытие окна приложения уводит за собой окна банков: скрытое окно
+/// (фоновое обновление Т-Банка) само процесс не завершает, но и не даёт ему
+/// завершиться.
+fn closes_banks(label: &str, event: &WindowEvent) -> bool {
+    label == MAIN_LABEL && matches!(event, WindowEvent::Destroyed)
+}
+
+pub fn on_window_event(window: &Window, event: &WindowEvent) {
+    if !closes_banks(window.label(), event) {
+        return;
+    }
+    for (name, win) in window.app_handle().webview_windows() {
+        if is_bank_label(&name) {
+            if let Err(e) = win.destroy() {
+                eprintln!("Окно {name} не закрылось при выходе: {e}");
+            }
+        }
+    }
 }
 
 /// Открыть окно банка на пустой странице. Пустая, а не страница банка: вход
@@ -212,11 +311,13 @@ pub async fn bank_window_clear_cookie(
 ) -> Result<(), String> {
     let bank = banks::bank(&bank)?;
     let win = window(&app, bank)?;
-    let cookies = win.cookies().map_err(|e| e.to_string())?;
-    for cookie in with_name(cookies, &name) {
-        win.delete_cookie(cookie).map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    clear_named(
+        &name,
+        || win.cookies().map_err(|e| e.to_string()),
+        |cookie| win.delete_cookie(cookie.clone()).map_err(|e| e.to_string()),
+        COOKIE_RETRIES,
+        COOKIE_PAUSE,
+    )
 }
 
 #[tauri::command]
@@ -224,22 +325,26 @@ pub async fn bank_window_close(app: AppHandle, bank: String) -> Result<(), Strin
     close_and_wait(&app, banks::bank(&bank)?)
 }
 
-/// Забыть доступ: профиль окна и секрет сессии.
 #[tauri::command]
 pub async fn bank_forget(app: AppHandle, bank: String) -> Result<(), String> {
     let bank = banks::bank(&bank)?;
-    close_and_wait(&app, bank)?;
-    let dir = profile_dir(&app, bank)?;
-    forget_all(
-        || remove_with_retry(&dir, RETRIES, PAUSE, |d| std::fs::remove_dir_all(d)),
-        || secrets::clear_session(&secrets::OsKeyring, bank.code),
+    let closed = close_and_wait(&app, bank);
+    forget(
+        || {
+            let dir = profile_dir(&app, bank)?;
+            remove_with_retry(&dir, RETRIES, PAUSE, |d| std::fs::remove_dir_all(d))
+        },
+        &secrets::OsKeyring,
+        bank,
+        closed,
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::Cell;
+    use crate::secrets::tests::Memory;
+    use std::cell::{Cell, RefCell};
 
     #[test]
     fn window_label_is_per_bank() {
@@ -247,13 +352,40 @@ mod tests {
     }
 
     #[test]
-    fn pin_keeps_tauri_defaults() {
+    fn every_bank_window_is_recognised_and_main_is_not() {
+        for b in banks::BANKS {
+            assert!(is_bank_label(&label(b)), "{}", b.code);
+        }
+        assert!(!is_bank_label(MAIN_LABEL));
+    }
+
+    #[test]
+    fn only_destroying_main_closes_banks() {
+        assert!(closes_banks("main", &WindowEvent::Destroyed));
+        assert!(!closes_banks("main", &WindowEvent::Focused(true)));
+        assert!(!closes_banks("bank-sber", &WindowEvent::Destroyed));
+    }
+
+    #[test]
+    fn pin_keeps_wry_defaults() {
+        // Литерал из wry-0.57.0/src/webview2/mod.rs (default_args), нарочно не
+        // через константу: опечатка в регистре отключит не ту фичу Chromium.
+        let wry = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection";
         let args = browser_args();
-        assert!(args.contains(DEFAULT_ARGS));
+        assert!(args.starts_with(wry), "{args}");
         assert!(args.ends_with(&format!(
             "--ignore-certificate-errors-spki-list={}",
             banks::ROOT_SPKI_SHA256
         )));
+    }
+
+    #[test]
+    fn profile_is_per_bank_under_base() {
+        let base = Path::new("base");
+        let tbank = profile_under(base, banks::bank("tbank").unwrap());
+        let sber = profile_under(base, banks::bank("sber").unwrap());
+        assert_eq!(tbank, base.join("banks").join("tbank"));
+        assert_ne!(tbank, sber);
     }
 
     #[test]
@@ -300,6 +432,130 @@ mod tests {
         let picked = with_name(cookies, "sessionid");
         let values: Vec<&str> = picked.iter().map(|c| c.value()).collect();
         assert_eq!(values, ["1", "4"]);
+    }
+
+    fn domain_cookie(name: &str, domain: &str) -> Cookie<'static> {
+        Cookie::build((name.to_string(), "v"))
+            .domain(domain.to_string())
+            .path("/")
+            .build()
+    }
+
+    #[test]
+    fn domain_cookie_gets_a_dotted_delete_variant() {
+        let variants = delete_variants(&domain_cookie("psid", "tbank.ru"));
+        let domains: Vec<Option<&str>> = variants.iter().map(|c| c.domain()).collect();
+        assert_eq!(domains, [Some("tbank.ru"), Some(".tbank.ru")]);
+        assert!(variants.iter().all(|c| c.path() == Some("/")));
+    }
+
+    #[test]
+    fn cookie_without_domain_has_one_delete_variant() {
+        assert_eq!(delete_variants(&Cookie::new("sid", "v")).len(), 1);
+    }
+
+    /// Хранилище кук как у WebView2: удаляет по точному домену (в том виде,
+    /// как `wry` его передаёт), а исчезновение видно только через `lag` чтений.
+    struct Jar {
+        /// (имя, домен как хранит WebView2: у доменной куки с точкой)
+        items: RefCell<Vec<(String, String)>>,
+        doomed: RefCell<Vec<(String, String)>>,
+        lag: Cell<u32>,
+    }
+
+    impl Jar {
+        fn new(items: &[(&str, &str)], lag: u32) -> Self {
+            let items = items
+                .iter()
+                .map(|(n, d)| (n.to_string(), d.to_string()))
+                .collect();
+            Jar {
+                items: RefCell::new(items),
+                doomed: RefCell::new(Vec::new()),
+                lag: Cell::new(lag),
+            }
+        }
+
+        fn read(&self) -> Result<Vec<Cookie<'static>>, String> {
+            if !self.doomed.borrow().is_empty() {
+                if self.lag.get() == 0 {
+                    let doomed = self.doomed.take();
+                    self.items.borrow_mut().retain(|i| !doomed.contains(i));
+                } else {
+                    self.lag.set(self.lag.get() - 1);
+                }
+            }
+            // cookie::Cookie::domain() срезает одну ведущую точку — как при
+            // чтении из WebView2
+            Ok(self
+                .items
+                .borrow()
+                .iter()
+                .map(|(n, d)| domain_cookie(n, d))
+                .collect())
+        }
+
+        fn delete(&self, cookie: &Cookie<'static>) -> Result<(), String> {
+            let key = (
+                cookie.name().to_string(),
+                cookie.domain().unwrap().to_string(),
+            );
+            if self.items.borrow().contains(&key) {
+                self.doomed.borrow_mut().push(key);
+            }
+            Ok(())
+        }
+
+        fn names(&self) -> Vec<String> {
+            self.items.borrow().iter().map(|(n, _)| n.clone()).collect()
+        }
+    }
+
+    fn clear(jar: &Jar, name: &str, retries: u32) -> Result<(), String> {
+        clear_named(
+            name,
+            || jar.read(),
+            |c| jar.delete(c),
+            retries,
+            Duration::ZERO,
+        )
+    }
+
+    #[test]
+    fn host_cookie_is_cleared_and_others_stay() {
+        let jar = Jar::new(&[("psid", "a.tbank.ru"), ("keep", "a.tbank.ru")], 0);
+        clear(&jar, "psid", 3).unwrap();
+        assert_eq!(jar.names(), ["keep"]);
+    }
+
+    #[test]
+    fn domain_cookie_is_cleared_through_the_dotted_variant() {
+        // в WebView2 доменная кука хранится с ведущей точкой: обычным
+        // удалением она не берётся
+        let jar = Jar::new(&[("psid", ".tbank.ru")], 0);
+        clear(&jar, "psid", 3).unwrap();
+        assert!(jar.names().is_empty());
+    }
+
+    #[test]
+    fn slow_deletion_is_waited_for() {
+        let jar = Jar::new(&[("psid", "a.tbank.ru")], 2);
+        clear(&jar, "psid", 5).unwrap();
+        assert!(jar.names().is_empty());
+    }
+
+    #[test]
+    fn cookie_that_stays_is_an_error() {
+        let jar = Jar::new(&[("psid", "a.tbank.ru")], 0);
+        let err = clear_named("psid", || jar.read(), |_| Ok(()), 2, Duration::ZERO).unwrap_err();
+        assert_eq!(err, "Кука psid не удалилась");
+    }
+
+    #[test]
+    fn missing_cookie_is_not_an_error() {
+        let jar = Jar::new(&[("keep", "a.tbank.ru")], 0);
+        clear(&jar, "psid", 0).unwrap();
+        assert_eq!(jar.names(), ["keep"]);
     }
 
     fn temp_dir(name: &str) -> PathBuf {
@@ -363,36 +619,91 @@ mod tests {
         assert_eq!(calls.get(), 1);
     }
 
-    #[test]
-    fn forget_clears_both_when_all_goes_well() {
-        assert!(forget_all(|| Ok(()), || Ok(())).is_ok());
+    fn tbank() -> &'static Bank {
+        banks::bank("tbank").unwrap()
+    }
+
+    fn memory_with_sessions() -> Memory {
+        let m = Memory::default();
+        secrets::write_session(&m, "tbank", "secret").unwrap();
+        secrets::write_session(&m, "sber", "other").unwrap();
+        m
     }
 
     #[test]
-    fn failed_profile_does_not_keep_the_secret() {
-        let cleared = Cell::new(false);
-        let err = forget_all(
-            || Err("Профиль банка занят".into()),
-            || {
-                cleared.set(true);
-                Ok(())
-            },
-        )
-        .unwrap_err();
-        assert!(cleared.get(), "секрет стёрт, хоть профиль и не удалился");
-        assert!(err.contains("Профиль банка занят"), "{err}");
-        assert!(!err.contains("Хранилище"), "{err}");
-    }
-
-    #[test]
-    fn failed_secret_does_not_keep_the_profile() {
+    fn forget_removes_profile_and_only_this_banks_secret() {
+        let m = memory_with_sessions();
         let removed = Cell::new(false);
-        let err = forget_all(
+        forget(
             || {
                 removed.set(true);
                 Ok(())
             },
-            || Err("Хранилище секретов недоступно".into()),
+            &m,
+            tbank(),
+            Ok(()),
+        )
+        .unwrap();
+        assert!(removed.get());
+        assert_eq!(secrets::read_session(&m, "tbank").unwrap(), None);
+        assert_eq!(
+            secrets::read_session(&m, "sber").unwrap().as_deref(),
+            Some("other")
+        );
+    }
+
+    #[test]
+    fn failed_profile_does_not_keep_the_secret() {
+        let m = memory_with_sessions();
+        let err = forget(|| Err("Профиль банка занят".into()), &m, tbank(), Ok(())).unwrap_err();
+        assert_eq!(secrets::read_session(&m, "tbank").unwrap(), None);
+        assert!(err.contains("Профиль банка занят"), "{err}");
+    }
+
+    #[test]
+    fn unclosed_window_still_clears_the_secret_and_leaves_the_profile() {
+        let m = memory_with_sessions();
+        let touched = Cell::new(false);
+        let err = forget(
+            || {
+                touched.set(true);
+                Ok(())
+            },
+            &m,
+            tbank(),
+            Err("Окно банка не закрылось".into()),
+        )
+        .unwrap_err();
+        assert!(!touched.get(), "пока окно открыто, профиль не трогаем");
+        assert_eq!(secrets::read_session(&m, "tbank").unwrap(), None);
+        assert!(err.contains("Окно банка не закрылось"), "{err}");
+    }
+
+    struct BrokenKeyring;
+
+    impl secrets::Backend for BrokenKeyring {
+        fn get(&self, _: &str) -> Result<Option<String>, String> {
+            Ok(None)
+        }
+        fn set(&self, _: &str, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn delete(&self, _: &str) -> Result<(), String> {
+            Err("Хранилище секретов недоступно".into())
+        }
+    }
+
+    #[test]
+    fn failed_secret_does_not_keep_the_profile_and_is_reported() {
+        let removed = Cell::new(false);
+        let err = forget(
+            || {
+                removed.set(true);
+                Ok(())
+            },
+            &BrokenKeyring,
+            tbank(),
+            Ok(()),
         )
         .unwrap_err();
         assert!(removed.get(), "профиль удалён, хоть секрет и не стёрся");
@@ -402,9 +713,11 @@ mod tests {
 
     #[test]
     fn both_failures_are_reported() {
-        let err = forget_all(
+        let err = forget(
             || Err("Профиль банка занят".into()),
-            || Err("Хранилище секретов недоступно".into()),
+            &BrokenKeyring,
+            tbank(),
+            Ok(()),
         )
         .unwrap_err();
         assert!(err.contains("Профиль банка занят"), "{err}");

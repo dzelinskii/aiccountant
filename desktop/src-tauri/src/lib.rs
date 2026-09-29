@@ -6,6 +6,7 @@ mod windows;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .on_window_event(windows::on_window_event)
         .invoke_handler(tauri::generate_handler![
             http::bank_request,
             secrets::secret_session_read,
