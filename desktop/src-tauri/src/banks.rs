@@ -407,18 +407,36 @@ mod tests {
         assert!(!is_bank_page(alfa, &url("https://u@web.alfabank.ru/")));
     }
 
-    #[test]
-    fn root_is_the_mincifry_root() {
-        // отпечаток корня, опубликованного Минцифрой: файл, не совпавший с ним,
-        // доверенным стать не должен
+    fn root_der() -> Vec<u8> {
         let body: String = ROOT_PEM
             .lines()
             .filter(|l| !l.starts_with("-----"))
             .collect();
-        let der = base64::engine::general_purpose::STANDARD
+        base64::engine::general_purpose::STANDARD
             .decode(body)
-            .unwrap();
-        let hex: String = Sha256::digest(&der)
+            .unwrap()
+    }
+
+    /// Разбирает один DER-элемент: (он целиком, содержимое, остаток за ним).
+    fn read_tlv(input: &[u8]) -> (&[u8], &[u8], &[u8]) {
+        let (len, header) = if input[1] < 0x80 {
+            (usize::from(input[1]), 2)
+        } else {
+            let n = usize::from(input[1] & 0x7f);
+            let len = input[2..2 + n]
+                .iter()
+                .fold(0, |acc, b| (acc << 8) | usize::from(*b));
+            (len, 2 + n)
+        };
+        let end = header + len;
+        (&input[..end], &input[header..end], &input[end..])
+    }
+
+    #[test]
+    fn root_is_the_mincifry_root() {
+        // отпечаток корня, опубликованного Минцифрой: файл, не совпавший с ним,
+        // доверенным стать не должен
+        let hex: String = Sha256::digest(root_der())
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect();
@@ -426,5 +444,21 @@ mod tests {
             hex,
             "d26d2d0231b7c39f92cc738512ba54103519e4405d68b5bd703e9788ca8ecf31"
         );
+    }
+
+    #[test]
+    fn spki_pin_matches_the_root() {
+        // Certificate -> tbsCertificate -> [0] version, затем serialNumber,
+        // signature, issuer, validity, subject и наконец subjectPublicKeyInfo
+        let der = root_der();
+        let (_, certificate, _) = read_tlv(&der);
+        let (_, tbs, _) = read_tlv(certificate);
+        let (_, _, mut rest) = read_tlv(tbs);
+        for _ in 0..5 {
+            rest = read_tlv(rest).2;
+        }
+        let (spki, _, _) = read_tlv(rest);
+        let pin = base64::engine::general_purpose::STANDARD.encode(Sha256::digest(spki));
+        assert_eq!(pin, ROOT_SPKI_SHA256);
     }
 }
