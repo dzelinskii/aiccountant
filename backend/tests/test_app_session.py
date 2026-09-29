@@ -81,3 +81,40 @@ async def test_session_token_is_not_accepted_as_bearer(client: AsyncClient) -> N
     token = await _session_token(client)
     resp = await client.get("/api/me", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 401
+
+
+async def test_app_login_returns_token_not_cookie(client: AsyncClient) -> None:
+    await client.post("/api/auth/register", json=ALICE)
+    client.cookies.clear()
+
+    resp = await client.post("/api/auth/login", json={**ALICE, "client": "app"})
+
+    assert resp.status_code == 200
+    token = resp.json()["session_token"]
+    assert token
+    assert "session" not in resp.cookies
+    me = await client.get("/api/me", headers={"Authorization": f"Session {token}"})
+    assert me.status_code == 200
+
+
+async def test_browser_login_unchanged(client: AsyncClient) -> None:
+    await client.post("/api/auth/register", json=ALICE)
+    client.cookies.clear()
+
+    resp = await client.post("/api/auth/login", json=ALICE)
+
+    assert "session" in resp.cookies
+    assert resp.json()["session_token"] is None
+
+
+async def test_app_register_returns_token(client: AsyncClient) -> None:
+    resp = await client.post("/api/auth/register", json={**ALICE, "client": "app"})
+
+    assert resp.status_code == 201
+    assert resp.json()["session_token"]
+    assert "session" not in resp.cookies
+
+
+async def test_unknown_client_rejected(client: AsyncClient) -> None:
+    resp = await client.post("/api/auth/login", json={**ALICE, "client": "bot"})
+    assert resp.status_code == 422
