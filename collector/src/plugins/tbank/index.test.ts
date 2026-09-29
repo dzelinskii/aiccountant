@@ -2,9 +2,10 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { expect, test, vi } from 'vitest'
 import { NotAllowedError, type FetchImpl } from '../../http/allowlist-client'
-import { fetchTransport } from '../../http/transport'
+import { fetchTransport, type Transport } from '../../http/transport'
+import type { BrowserSession, LoginPrompt } from '../../core/contract'
 import { createTBankClient, TBANK_ALLOWED } from './client'
-import { checkSession, fetchAccounts, fetchOperations, SessionExpiredError } from './index'
+import { checkSession, createTBankPlugin, fetchAccounts, fetchOperations, SessionExpiredError } from './index'
 
 function readFixtureText(name: string): string {
   const path = fileURLToPath(new URL(`../../../tests/fixtures/${name}`, import.meta.url))
@@ -202,4 +203,48 @@ test('TBANK_ALLOWED содержит ровно пять задокументи�
     { path: '/mybank/api/operations/timeline/public/legacy/v1/operations_category_list_bank', method: 'GET' },
     { path: '/mybank/api/operations/timeline/public/legacy/v1/operations_category_list_user', method: 'GET' },
   ])
+})
+
+const ALIVE_SESSION = JSON.stringify({ resultCode: 'OK', payload: { accessLevel: 'CLIENT', millisLeft: 60_000 } })
+
+function recordingTransport(body: string): { transport: Transport; urls: URL[] } {
+  const urls: URL[] = []
+  const transport: Transport = {
+    async send(url) {
+      urls.push(url)
+      return { status: 200, ok: true, text: async () => body }
+    },
+  }
+  return { transport, urls }
+}
+
+test('плагин ходит в банк через переданный транспорт, а не через собственный', async () => {
+  const { transport, urls } = recordingTransport(ALIVE_SESSION)
+  const plugin = createTBankPlugin({ transport })
+
+  expect(await plugin.isAlive({ kind: 'query', name: 'sessionid', value: 'tok' })).toBe(true)
+
+  expect(urls.map((url) => `${url.origin}${url.pathname}`)).toEqual(['https://www.tbank.ru/api/common/v1/session_status'])
+  expect(urls[0]?.searchParams.get('sessionid')).toBe('tok')
+})
+
+test('проверка живости токена при входе тоже идёт через переданный транспорт', async () => {
+  const { transport, urls } = recordingTransport(ALIVE_SESSION)
+  const plugin = createTBankPlugin({ transport })
+  // фоновое обновление сразу отдаёт свежую куку — видимое окно не нужно
+  const session: BrowserSession = {
+    async goto() {},
+    async clearCookie() {},
+    async cookies() {
+      return [{ name: 'psid', value: 'fresh' }]
+    },
+    async waitForUrl() {},
+    async waitForRequest() {},
+  }
+  const prompt: LoginPrompt = { withBrowser: (use) => use(session) }
+
+  const credentials = await plugin.login(prompt)
+
+  expect(credentials).toEqual({ kind: 'query', name: 'sessionid', value: 'fresh' })
+  expect(urls.map((url) => url.searchParams.get('sessionid'))).toEqual(['fresh'])
 })
