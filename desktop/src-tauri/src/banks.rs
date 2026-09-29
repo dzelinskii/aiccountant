@@ -199,13 +199,103 @@ mod tests {
 
     #[test]
     fn one_bank_cannot_reach_another() {
+        // путь взят из списка Альфы, но хост чужой: отказать должна именно
+        // проверка хоста, а не то, что такого пути нет у Т-Банка
         let alfa = bank("alfa").unwrap();
-        assert!(check_request(
-            alfa,
-            "GET",
-            &url("https://www.tbank.ru/api/common/v1/accounts_light_ib")
-        )
-        .is_err());
+        assert!(
+            check_request(alfa, "GET", &url("https://web.alfabank.ru/api/v1/account/")).is_ok()
+        );
+        assert!(check_request(alfa, "GET", &url("https://www.tbank.ru/api/v1/account/")).is_err());
+    }
+
+    #[test]
+    fn continuation_of_allowed_path_rejected() {
+        // путь сравнивается целиком, а не по началу
+        let sber = bank("sber").unwrap();
+        for tail in ["/delete", "X", "/"] {
+            let address = url(&format!(
+                "https://web-node3.online.sberbank.ru/uoh-bh/v1/operations/list{tail}"
+            ));
+            assert!(check_request(sber, "POST", &address).is_err(), "{tail}");
+        }
+        let alfa = bank("alfa").unwrap();
+        let address = url("https://web.alfabank.ru/api/v1/account/x");
+        assert!(check_request(alfa, "GET", &address).is_err());
+    }
+
+    #[test]
+    fn bank_lists_are_pinned() {
+        // весь набор возможностей коллектора виден литералом: правка списка,
+        // хоста или домена без правки этого теста не пройдёт
+        type Expected = (
+            &'static str,
+            &'static str,
+            &'static str,
+            &'static [(&'static str, &'static str)],
+        );
+        let expected: [Expected; 3] = [
+            (
+                "tbank",
+                "www.tbank.ru",
+                "tbank.ru",
+                &[
+                    ("GET", "/api/common/v1/accounts_light_ib"),
+                    ("GET", "/api/common/v1/session_status"),
+                    ("GET", "/mybank/api/operations/timeline/public/legacy/v1/operations"),
+                    (
+                        "GET",
+                        "/mybank/api/operations/timeline/public/legacy/v1/operations_category_list_bank",
+                    ),
+                    (
+                        "GET",
+                        "/mybank/api/operations/timeline/public/legacy/v1/operations_category_list_user",
+                    ),
+                ],
+            ),
+            (
+                "sber",
+                "web-node3.online.sberbank.ru",
+                "sberbank.ru",
+                &[
+                    ("POST", "/uoh-bh/v1/operations/list"),
+                    ("POST", "/main-screen/rest/v2/m1/web/section/meta"),
+                    ("POST", "/ufs-carddetail/rest/card/v1/cardInfo"),
+                ],
+            ),
+            (
+                "alfa",
+                "web.alfabank.ru",
+                "alfabank.ru",
+                &[
+                    ("POST", "/api/v1/operations-history/operations"),
+                    ("GET", "/api/v1/account/"),
+                    ("GET", "/api/v1/cards/masked-cards"),
+                ],
+            ),
+        ];
+        assert_eq!(BANKS.len(), expected.len());
+        for (code, api_host, domain, allowed) in expected {
+            let b = bank(code).unwrap();
+            assert_eq!(b.api_host, api_host, "{code}: хост API");
+            assert_eq!(b.domain, domain, "{code}: домен входа");
+            assert_eq!(b.allowed, allowed, "{code}: список адресов");
+        }
+    }
+
+    #[test]
+    fn login_domain_is_not_too_wide() {
+        for b in BANKS {
+            // зона вроде «ru» не должна оказаться доменом банка
+            let zone = b.domain.rsplit('.').next().unwrap();
+            let evil = url(&format!("https://evil.{zone}/"));
+            assert!(!is_bank_page(b, &evil), "{}: {evil}", b.code);
+            assert!(is_bank_page(b, &url(&format!("https://{}/", b.api_host))));
+            // хост API одного банка не страница другого
+            for other in BANKS.iter().filter(|o| o.code != b.code) {
+                let foreign = url(&format!("https://{}/", other.api_host));
+                assert!(!is_bank_page(b, &foreign), "{} -> {}", other.code, b.code);
+            }
+        }
     }
 
     #[test]
