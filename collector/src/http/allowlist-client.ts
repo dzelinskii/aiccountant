@@ -1,6 +1,5 @@
 import { parseLossless } from './lossless-json'
 import type { Transport } from './transport'
-import { fetchTransport } from './transport'
 
 export class NotAllowedError extends Error {}
 
@@ -41,7 +40,7 @@ interface Options {
   baseUrl: string
   allowed: readonly AllowedEndpoint[]
   credentials: Credentials
-  transport?: Transport
+  transport: Transport
   timeoutMs?: number
 }
 
@@ -64,7 +63,7 @@ export class AllowlistClient {
   private readonly transport: Transport
   private readonly timeoutMs: number
 
-  constructor({ baseUrl, allowed, credentials, transport = fetchTransport(), timeoutMs = DEFAULT_TIMEOUT_MS }: Options) {
+  constructor({ baseUrl, allowed, credentials, transport, timeoutMs = DEFAULT_TIMEOUT_MS }: Options) {
     this.baseUrl = baseUrl
     this.allowed = allowed
     this.credentials = credentials
