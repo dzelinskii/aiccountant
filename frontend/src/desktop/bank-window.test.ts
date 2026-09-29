@@ -14,6 +14,8 @@ function fakeTiming() {
   return {
     now: () => clock,
     wait: async (ms: number) => {
+      // Опрос без дедлайна крутился бы в микрозадачах и не дал бы сработать таймауту vitest
+      if (waits.length >= 100) throw new Error('ожидание не ограничено дедлайном')
       waits.push(ms)
       clock += ms
     },
