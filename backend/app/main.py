@@ -2,11 +2,13 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.csrf import OriginCheckMiddleware
 from app.core.db import engine
 from app.core.log_context import LogContextMiddleware
 from app.core.redis import redis_client
+from app.core.settings import get_settings
 from app.identity.router import router as identity_router
 from app.imports.router import router as imports_router
 from app.ledger.router import router as ledger_router
@@ -26,6 +28,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="AIccountant", lifespan=lifespan)
 app.add_middleware(OriginCheckMiddleware)
 app.add_middleware(LogContextMiddleware)
+# CORS добавляется последним и потому стоит снаружи остальных: preflight он
+# отвечает сам, не доходя до роутера, а его заголовки ложатся и на ответы
+# с ошибками, которые возвращают внутренние слои.
+# allow_credentials=False намеренно: приложение не ходит с cookie, сессию оно
+# предъявляет заголовком
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=get_settings().allowed_origins,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],
+    allow_credentials=False,
+)
 app.include_router(identity_router)
 app.include_router(ledger_router)
 app.include_router(recurring_router)

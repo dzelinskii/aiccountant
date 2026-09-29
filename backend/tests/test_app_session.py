@@ -1,6 +1,7 @@
-from httpx import AsyncClient
+from httpx import AsyncClient, Response
 
 ALICE = {"email": "alice@example.com", "password": "password123"}
+TAURI_ORIGIN = "http://tauri.localhost"
 
 
 async def _session_token(client: AsyncClient) -> str:
@@ -134,3 +135,37 @@ async def test_app_register_returns_token(client: AsyncClient) -> None:
 async def test_unknown_client_rejected(client: AsyncClient) -> None:
     resp = await client.post("/api/auth/login", json={**ALICE, "client": "bot"})
     assert resp.status_code == 422
+
+
+async def test_preflight_from_app_allowed(client: AsyncClient) -> None:
+    resp = await client.options(
+        "/api/auth/login",
+        headers={
+            "Origin": TAURI_ORIGIN,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization,content-type",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.headers["access-control-allow-origin"] == TAURI_ORIGIN
+
+
+async def test_preflight_from_foreign_origin_not_allowed(client: AsyncClient) -> None:
+    async def preflight(origin: str) -> Response:
+        return await client.options(
+            "/api/auth/login",
+            headers={"Origin": origin, "Access-Control-Request-Method": "POST"},
+        )
+
+    # без парного опыта тест зелёный и там, где CORS не подключён вовсе
+    assert "access-control-allow-origin" in (await preflight(TAURI_ORIGIN)).headers
+    assert "access-control-allow-origin" not in (await preflight("https://evil.example")).headers
+
+
+async def test_app_origin_passes_origin_check(client: AsyncClient) -> None:
+    resp = await client.post(
+        "/api/auth/register",
+        json={**ALICE, "client": "app"},
+        headers={"Origin": TAURI_ORIGIN},
+    )
+    assert resp.status_code == 201
