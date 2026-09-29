@@ -2442,7 +2442,7 @@ mod tests {
 }
 ```
 
-Поведение самих окон проверяется в задаче 20 руками — оно доступно только с
+Поведение самих окон проверяется в задаче 19 руками — оно доступно только с
 живым WebView2.
 
 - [ ] **Step 3: регистрация** — `mod windows;`, семь команд в `generate_handler!`.
@@ -2456,7 +2456,7 @@ git commit -m "Окно входа в банк со своим профилем 
 
 - [ ] **Step 5: проверка дефектом** — в `bank_window_goto` убрать проверку
 `is_bank_page`; тест её не ловит (она за живым окном), поэтому эта мутация
-проверяется в задаче 20 руками: из консоли окна `invoke('bank_window_goto',
+проверяется в задаче 19 руками: из консоли окна `invoke('bank_window_goto',
 { bank: 'sber', url: 'https://example.com/' })` обязан вернуть отказ. Здесь —
 убедиться, что `login_pages_stay_on_bank_domain` из задачи 10 покрывает саму функцию.
 
@@ -3171,7 +3171,24 @@ cd desktop && VITE_DEFAULT_SERVER=http://localhost:18020 pnpm tauri dev
     затем `invoke('bank_window_goto', { bank: 'sber', url: 'https://example.com/' })` → отказ;
     `invoke('bank_window_goto', { bank: 'sber', url: 'https://online.sberbank.ru/' })` →
     страница входа Сбера **без ошибки сертификата**; `invoke('bank_window_close', { bank: 'sber' })`;
+  - сразу после `bank_window_close` снова `bank_window_open` того же банка — не падает
+    на занятой метке (`close_and_wait` ждёт `Destroyed`);
+  - `bank_window_cookies` для окна на чужой странице — отказ (`bank_page`);
+  - из консоли **окна банка** `window.__TAURI_INTERNALS__.invoke('app_token_read')` —
+    отказ (capability только у `main`);
+  - `bank_window_clear_cookie` на доменной куке и на куке только хоста (тестовая страница
+    прототипа `spike/shared/test-server.mjs`, `/domain`) — обе исчезают, ошибки нет;
+  - при открытом скрытом окне банка закрыть `main` — процесс завершается;
+  - `bank_forget` удаляет `%LOCALAPPDATA%\ru.aiccountant.desktop\banks\<код>` и запись
+    `session:<код>` в Credential Manager;
+  - `app_token_read/write/clear` из `main` работают через IPC (разрешения `allow-app-token-*`);
   - «Выйти» → экран входа; после перезапуска снова экран входа.
+
+- [ ] **Step 3а: CSP и разрешения** — вместо `csp: null` в `tauri.conf.json` задать
+  `script-src 'self'; connect-src 'self' ipc: http://ipc.localhost https: http:;
+  style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:` и `devCsp` для HMR Vite;
+  сузить `core:default` в `capabilities/default.json` до того, что фронт реально зовёт.
+  Повторить проверки шага 3.
 
 - [ ] **Step 4:** стенд не сносить до задачи 22 — он понадобится для живого прогона.
 
