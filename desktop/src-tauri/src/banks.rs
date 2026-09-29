@@ -85,15 +85,19 @@ pub fn bank(code: &str) -> Result<&'static Bank, String> {
         .ok_or_else(|| format!("Неизвестный банк: {code}"))
 }
 
-/// Запрос разрешён, только если совпали всё сразу: https, хост API банка без
+/// Адрес без порта и без учётных данных: и запрос, и страница входа должны
+/// идти на сам хост, а не на `user@host` или нестандартный порт.
+fn is_plain_authority(url: &Url) -> bool {
+    url.port().is_none() && url.username().is_empty() && url.password().is_none()
+}
+
+/// Запрос разрешён, только если совпало всё сразу: https, хост API банка без
 /// порта и учётных данных, пара «метод, путь» из списка. Query не проверяется:
 /// в нём параметры и у Т-Банка секрет сессии; в текст отказа он не попадает.
 pub fn check_request(bank: &Bank, method: &str, url: &Url) -> Result<(), String> {
     let allowed = url.scheme() == "https"
         && url.host_str() == Some(bank.api_host)
-        && url.port().is_none()
-        && url.username().is_empty()
-        && url.password().is_none()
+        && is_plain_authority(url)
         && bank
             .allowed
             .iter()
@@ -113,6 +117,7 @@ pub fn check_request(bank: &Bank, method: &str, url: &Url) -> Result<(), String>
 /// Страница, куда окно входа банка может перейти по нашей команде.
 pub fn is_bank_page(bank: &Bank, url: &Url) -> bool {
     url.scheme() == "https"
+        && is_plain_authority(url)
         && url
             .host_str()
             .is_some_and(|host| host == bank.domain || host.ends_with(&format!(".{}", bank.domain)))
@@ -282,8 +287,40 @@ mod tests {
     }
 
     #[test]
+    fn credentials_in_address_rejected_in_each_form() {
+        let tbank = bank("tbank").unwrap();
+        let path = "www.tbank.ru/api/common/v1/session_status";
+        for authority in ["u@", ":p@", "u:p@"] {
+            let address = url(&format!("https://{authority}{path}"));
+            assert!(
+                check_request(tbank, "GET", &address).is_err(),
+                "{authority}"
+            );
+        }
+    }
+
+    #[test]
+    fn method_is_case_sensitive() {
+        // в reqwest метод регистрозависим, а «get» — не тот же метод, что «GET»:
+        // команда отправки не должна приводить регистр молча
+        let tbank = bank("tbank").unwrap();
+        let address = url("https://www.tbank.ru/api/common/v1/session_status");
+        assert!(check_request(tbank, "GET", &address).is_ok());
+        assert!(check_request(tbank, "get", &address).is_err());
+    }
+
+    #[test]
+    fn login_page_rejects_port_and_credentials() {
+        let alfa = bank("alfa").unwrap();
+        assert!(!is_bank_page(alfa, &url("https://web.alfabank.ru:8443/")));
+        assert!(!is_bank_page(alfa, &url("https://u:p@web.alfabank.ru/")));
+        assert!(!is_bank_page(alfa, &url("https://u@web.alfabank.ru/")));
+    }
+
+    #[test]
     fn root_is_the_mincifry_root() {
-        // тот же отпечаток, что зашит в collector/src/runner/trust-anchor.ts
+        // отпечаток корня, опубликованного Минцифрой: файл, не совпавший с ним,
+        // доверенным стать не должен
         let body: String = ROOT_PEM
             .lines()
             .filter(|l| !l.starts_with("-----"))
