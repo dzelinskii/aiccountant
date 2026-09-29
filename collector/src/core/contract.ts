@@ -42,7 +42,6 @@ export interface BrowserSession {
   clearCookie(name: string): Promise<void>
   cookies(url: string): Promise<ReadonlyArray<{ readonly name: string; readonly value: string }>>
   waitForUrl(match: (url: URL) => boolean, timeoutMs: number): Promise<void>
-  waitForRequest(match: (url: URL) => boolean, timeoutMs: number): Promise<void>
 }
 
 export interface LoginPrompt {

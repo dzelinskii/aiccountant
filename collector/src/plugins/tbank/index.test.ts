@@ -239,7 +239,6 @@ test('проверка живости токена при входе тоже и
       return [{ name: 'psid', value: 'fresh' }]
     },
     async waitForUrl() {},
-    async waitForRequest() {},
   }
   const prompt: LoginPrompt = { withBrowser: (use) => use(session) }
 

@@ -19,7 +19,6 @@ function makeSession(script: SessionScript = {}): BrowserSession {
     async waitForUrl() {
       if (script.waitForUrlFails) throw new Error('таймаут ожидания перехода в кабинет')
     },
-    async waitForRequest() {},
   }
 }
 

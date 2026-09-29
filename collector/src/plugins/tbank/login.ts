@@ -5,22 +5,23 @@ const LOGIN_URL = `${BANK_ORIGIN}/login/`
 const MYBANK_URL = `${BANK_ORIGIN}/mybank/`
 const SESSION_COOKIE = 'psid'
 const LOGIN_TIMEOUT_MS = 5 * 60_000
-const AUTHORIZED_REQUEST_TIMEOUT_MS = 60_000
+const POLL_INTERVAL_MS = 2_000
+// после перехода в ЛК сессия оживает не сразу — кука уже есть, а банк отвечает
+// SESSION_IS_ABSENT; минуты хватает с запасом
+const LIVE_SESSION_TIMEOUT_MS = 60_000
 // в фоновом обновлении таймаут короче: его истечение — обычный путь «сессии
 // больше нет», за ним сразу открывается окно входа, и ждать тут нечего
 const REFRESH_TIMEOUT_MS = 20_000
 
-// session_status кабинет дёргает и когда сессии нет — это его способ спросить
-// «я вообще залогинен?». Такой запрос несёт sessionid анонимной сессии, поэтому
-// доказательством авторизации служить не может: считать его признаком успеха
-// значит вернуть мёртвый токен ровно в том случае, ради которого проверка и
-// заведена
-const SESSION_PROBE_PATH = '/api/common/v1/session_status'
+/** Часы входа. Подменяются в тестах, чтобы опрос шёл без реального ожидания. */
+export interface LoginTiming {
+  now(): number
+  wait(ms: number): Promise<void>
+}
 
-function isAuthorized(url: URL): boolean {
-  if (url.pathname === SESSION_PROBE_PATH) return false
-  const sessionid = url.searchParams.get('sessionid')
-  return sessionid !== null && sessionid.length > 0
+const REAL_TIMING: LoginTiming = {
+  now: () => Date.now(),
+  wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 }
 
 /**
@@ -28,56 +29,65 @@ function isAuthorized(url: URL): boolean {
  * лежит негодное значение. Долго живёт сама сессия: открываем ЛК, и банк по
  * живой сессии выдаёт свежую куку.
  *
- * Обновление всегда идёт в headless-окне — это фоновый путь, и он не должен
- * дёргать окно браузера на каждый обычный запуск. Если фон не вернул токен
- * или банк его не признал (типичный случай — анонимная кука в остывшем
- * профиле, которую обновление вернуло бы как есть), нужен видимый вход:
- * другого способа получить код от человека нет. Проверка живости здесь —
- * забота плагина, а не оболочки: без неё мёртвый токен уехал бы наружу
- * как будто вход состоялся.
+ * Сначала обновление по живому профилю в headless-окне — это фоновый путь, и
+ * он не должен дёргать окно браузера на каждый обычный запуск. Видимое окно
+ * открывается, только если фон не получил живой токен (типичный случай —
+ * анонимная кука в остывшем профиле, которую обновление вернуло бы как есть):
+ * другого способа получить код от человека нет. Живость проверяется на обоих
+ * путях, поэтому мёртвый токен наружу не уезжает как будто вход состоялся.
  */
 export async function obtainTBankToken(
   prompt: LoginPrompt,
   isTokenAlive: (token: string) => Promise<boolean>,
+  timing: LoginTiming = REAL_TIMING,
 ): Promise<string> {
-  const refreshed = await prompt.withBrowser(refresh, { headless: true })
-  if (refreshed !== null && (await isTokenAlive(refreshed))) return refreshed
+  const refreshed = await prompt.withBrowser(
+    async (session) => {
+      await session.goto(MYBANK_URL)
+      return waitForLiveToken(session, isTokenAlive, timing, REFRESH_TIMEOUT_MS)
+    },
+    { headless: true },
+  )
+  if (refreshed !== null) return refreshed
   // окно входа — только видимое: человек вводит телефон и код сам, коллектор
   // в форму не вмешивается
-  return prompt.withBrowser(logIn, { headless: false })
+  return prompt.withBrowser(
+    async (session) => {
+      // с протухшей кукой банк уводит со страницы входа обратно в ЛК, и мы бы
+      // прочитали ровно тот же мёртвый токен
+      await session.clearCookie(SESSION_COOKIE)
+      await session.goto(LOGIN_URL)
+      // ждём, пока человек сам введёт телефон и код: в форму входа не вмешиваемся
+      await session.waitForUrl((url) => url.href.startsWith(MYBANK_URL), LOGIN_TIMEOUT_MS)
+      const token = await waitForLiveToken(session, isTokenAlive, timing, LIVE_SESSION_TIMEOUT_MS)
+      if (token === null) throw new Error('Вход в Т-Банк выполнен, но сессия так и не ожила')
+      return token
+    },
+    { headless: false },
+  )
 }
 
-async function refresh(session: BrowserSession): Promise<string | null> {
-  await session.goto(MYBANK_URL)
-  try {
-    await session.waitForRequest(isAuthorized, REFRESH_TIMEOUT_MS)
-  } catch {
-    // Если сессии больше нет, ЛК уводит на страницу входа, и авторизованного
-    // запроса просто не будет — таймаут здесь ожидаемый исход, а не поломка,
-    // поэтому не бросаем, а честно возвращаем null: об этом судит вызывающая
-    // сторона, открывая видимый вход. Ловим любую ошибку, а не только
-    // таймаут: отличить их не усложняя контракт BrowserSession отдельным
-    // типом ошибки нечем, а результат один и тот же — нужен видимый вход
-    return null
+/**
+ * Доказательство входа — живая сессия, а не переход в ЛК и не наличие куки:
+ * psid есть и у анонимной сессии, которой кабинет пользуется, чтобы спросить
+ * банк «я вообще залогинен?». Поэтому куку опрашиваем тем же вопросом, которым
+ * проверяется сессия перед сбором. Недоступность банка (исключение из
+ * isTokenAlive) не глотается: это не «сессии нет», и повторный вход её не лечит.
+ * null — сессия за отведённое время не ожила.
+ */
+async function waitForLiveToken(
+  session: BrowserSession,
+  isTokenAlive: (token: string) => Promise<boolean>,
+  timing: LoginTiming,
+  timeoutMs: number,
+): Promise<string | null> {
+  const deadline = timing.now() + timeoutMs
+  for (;;) {
+    const token = await readToken(session)
+    if (token !== null && (await isTokenAlive(token))) return token
+    if (timing.now() >= deadline) return null
+    await timing.wait(POLL_INTERVAL_MS)
   }
-  return readToken(session)
-}
-
-async function logIn(session: BrowserSession): Promise<string> {
-  // с протухшей кукой банк уводит со страницы входа обратно в ЛК, и мы бы
-  // прочитали ровно тот же мёртвый токен
-  await session.clearCookie(SESSION_COOKIE)
-  await session.goto(LOGIN_URL)
-  // ждём, пока человек сам введёт телефон и код: в форму входа не вмешиваемся
-  await session.waitForUrl((url) => url.href.startsWith(MYBANK_URL), LOGIN_TIMEOUT_MS)
-  // переход в ЛК ещё не означает рабочую сессию: кука уже есть, но банк её
-  // сессией пока не считает и отвечает SESSION_IS_ABSENT. Дожидаемся
-  // доказательства — собственного запроса ЛК за данными, который без живой
-  // сессии не имеет смысла. Фиксированная пауза здесь была бы гаданием.
-  await session.waitForRequest(isAuthorized, AUTHORIZED_REQUEST_TIMEOUT_MS)
-  const token = await readToken(session)
-  if (!token) throw new Error(`Вход выполнен, но банк не оставил куку ${SESSION_COOKIE} — сессии нет`)
-  return token
 }
 
 async function readToken(session: BrowserSession): Promise<string | null> {

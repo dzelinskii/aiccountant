@@ -105,8 +105,5 @@ function sessionOf(context: BrowserContext): BrowserSession {
     async waitForUrl(match, timeout) {
       await (await page()).waitForURL((url) => match(new URL(url.href)), { timeout })
     },
-    async waitForRequest(match, timeout) {
-      await (await page()).waitForRequest((request) => match(new URL(request.url())), { timeout })
-    },
   }
 }
