@@ -184,7 +184,7 @@ test('сессия банка умерла посреди сбора — сбо�
   expect(p.fetchOperations).toHaveBeenCalledTimes(1)
 })
 
-test('сессия банка умерла посреди сбора — ошибка несёт счета, по которым импорты уже созданы', async () => {
+test('сессия банка умерла посреди сбора — ошибка несёт итоги уже пройденных счетов', async () => {
   // экран должен сказать человеку, что часть работы сделана и лежит в приложении
   const isAlive = vi.fn<BankPlugin['isAlive']>().mockResolvedValueOnce(true).mockResolvedValue(false)
   const p = plugin({
