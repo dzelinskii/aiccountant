@@ -1,7 +1,9 @@
+import pytest
 from httpx import AsyncClient, Response
 
 ALICE = {"email": "alice@example.com", "password": "password123"}
-TAURI_ORIGIN = "http://tauri.localhost"
+TAURI_ORIGINS = ["http://tauri.localhost", "tauri://localhost"]
+TAURI_ORIGIN = TAURI_ORIGINS[0]
 
 
 async def _session_token(client: AsyncClient) -> str:
@@ -137,18 +139,20 @@ async def test_unknown_client_rejected(client: AsyncClient) -> None:
     assert resp.status_code == 422
 
 
-async def test_preflight_from_app_allowed(client: AsyncClient) -> None:
+@pytest.mark.parametrize("origin", TAURI_ORIGINS)
+@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
+async def test_preflight_from_app_allowed(client: AsyncClient, origin: str, method: str) -> None:
     resp = await client.options(
         "/api/auth/login",
         headers={
-            "Origin": TAURI_ORIGIN,
-            "Access-Control-Request-Method": "POST",
+            "Origin": origin,
+            "Access-Control-Request-Method": method,
             "Access-Control-Request-Headers": "authorization,content-type",
         },
     )
     assert resp.status_code == 200
-    assert resp.headers["access-control-allow-origin"] == TAURI_ORIGIN
-    # приложение ходит без cookie: разрешать странице слать их cross-origin незачем
+    assert resp.headers["access-control-allow-origin"] == origin
+    # читать ответ на запрос с cookie приложению незачем
     assert "access-control-allow-credentials" not in resp.headers
 
 
