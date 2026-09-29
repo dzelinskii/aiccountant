@@ -266,7 +266,7 @@ async def test_migrations_add_bank_columns(database_url: str) -> None:
                 "AND column_name IN ('bank_code', 'bank_account_fingerprint')"
             )
         )
-        columns = dict(rows.all())
+        columns: dict[str, str] = {name: nullable for name, nullable in rows.all()}
     await engine.dispose()
     # счёт без банка — законное состояние (наличные, банк без плагина), и
     # счета, заведённые до этой миграции, обязаны остаться рабочими
