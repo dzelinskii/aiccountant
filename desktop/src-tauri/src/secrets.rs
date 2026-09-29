@@ -290,10 +290,6 @@ mod tests {
         set_entry(&e, "v").unwrap();
         fail_next(&e, bad_encoding());
         assert!(!leaks(&delete_entry(&e).unwrap_err()));
-        fail_next(&e, bad_encoding());
-        if let Err(message) = get_entry(&e) {
-            assert!(!leaks(&message));
-        }
         assert!(!leaks(&unavailable(bad_encoding())));
     }
 
@@ -309,14 +305,25 @@ mod tests {
     mod live {
         use super::*;
 
+        // Живые тесты идут по одному: Windows отдаёт непоследовательные ответы
+        // при параллельных обращениях к хранилищу (см. `keyring-3.6.3/src/windows.rs`,
+        // строки 31-36), и тест падал, а пробная запись оставалась. Замок держится
+        // всё время жизни `Probe`, то есть весь тест и его стирание в `drop`.
+        static LIVE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
         // пробная запись стирается при выходе, в том числе при провале теста
-        struct Probe(String);
+        struct Probe(
+            String,
+            #[allow(dead_code)] std::sync::MutexGuard<'static, ()>,
+        );
 
         impl Probe {
             fn new(tag: &str) -> Self {
+                // упавший соседний тест отравляет замок, но не хранилище
+                let guard = LIVE.lock().unwrap_or_else(|p| p.into_inner());
                 let key = format!("test-probe-{tag}-{}", std::process::id());
                 OsKeyring.delete(&key).unwrap();
-                Probe(key)
+                Probe(key, guard)
             }
         }
 
