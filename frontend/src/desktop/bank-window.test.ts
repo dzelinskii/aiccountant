@@ -34,10 +34,10 @@ function commandsOf(): string[] {
 
 test('окно открывается видимым, закрывается и после ошибки', async () => {
   invoke.mockResolvedValue(undefined)
-  const prompt = bankLoginPrompt('alfa', fakeTiming())
+  const prompt = bankLoginPrompt('tbank', fakeTiming())
   await expect(prompt.withBrowser(async () => { throw new Error('сбой') })).rejects.toThrow('сбой')
-  expect(invoke).toHaveBeenCalledWith('bank_window_open', { bank: 'alfa', visible: true })
-  expect(invoke).toHaveBeenLastCalledWith('bank_window_close', { bank: 'alfa' })
+  expect(invoke).toHaveBeenCalledWith('bank_window_open', { bank: 'tbank', visible: true })
+  expect(invoke).toHaveBeenLastCalledWith('bank_window_close', { bank: 'tbank' })
 })
 
 test('headless — окно открывается невидимым', async () => {
