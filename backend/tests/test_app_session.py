@@ -161,7 +161,9 @@ async def test_preflight_from_foreign_origin_not_allowed(client: AsyncClient) ->
 
     # без парного опыта тест зелёный и там, где CORS не подключён вовсе
     assert "access-control-allow-origin" in (await preflight(TAURI_ORIGIN)).headers
-    assert "access-control-allow-origin" not in (await preflight("https://evil.example")).headers
+    foreign = await preflight("https://evil.example")
+    assert foreign.status_code == 400
+    assert "access-control-allow-origin" not in foreign.headers
 
 
 async def test_app_origin_passes_origin_check(client: AsyncClient) -> None:

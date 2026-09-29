@@ -29,8 +29,8 @@ app = FastAPI(title="AIccountant", lifespan=lifespan)
 app.add_middleware(OriginCheckMiddleware)
 app.add_middleware(LogContextMiddleware)
 # CORS добавляется последним и потому стоит снаружи остальных: preflight он
-# отвечает сам, не доходя до роутера, а его заголовки ложатся и на ответы
-# с ошибками, которые возвращают внутренние слои.
+# отвечает сам, не доходя до роутера, а для origin'ов из списка его заголовки
+# ложатся и на ответы с ошибками, которые возвращают внутренние слои.
 # allow_credentials=False намеренно: приложение не ходит с cookie, сессию оно
 # предъявляет заголовком
 app.add_middleware(
