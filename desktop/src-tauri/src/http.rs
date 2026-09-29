@@ -41,8 +41,9 @@ fn uses_built_in_roots(trust: Trust) -> bool {
 
 /// Клиент под доверие банка. Редирект не проходится: 3xx возвращается ответом,
 /// как и в прежних транспортах коллектора, — иначе редирект обошёл бы список.
-/// Таймаут стоит на самом запросе (`build_request`), а не на клиенте.
-pub fn client_for(bank: &Bank) -> Result<reqwest::Client, String> {
+/// Таймаут стоит на самом запросе (`build_request`), а не на клиенте, поэтому
+/// клиент наружу не отдаётся: без `build_request` он не знает ни списка, ни таймаута.
+fn client_for(bank: &Bank) -> Result<reqwest::Client, String> {
     let root = reqwest::Certificate::from_pem(banks::ROOT_PEM.as_bytes())
         .map_err(|e| format!("Корень УЦ не читается: {e}"))?;
     reqwest::Client::builder()
@@ -150,7 +151,7 @@ fn is_certificate_error(error: &dyn std::error::Error) -> bool {
     let mut source = error.source();
     while let Some(cause) = source {
         let text = cause.to_string().to_lowercase();
-        if text.contains("certificate") || text.contains("unknownissuer") {
+        if text.contains("certificate") {
             return true;
         }
         source = cause.source();
@@ -237,6 +238,7 @@ mod tests {
             Some("{}".into()),
         )
         .unwrap();
+        assert_eq!(req.method(), reqwest::Method::POST);
         assert_eq!(req.headers().len(), 2);
         assert_eq!(req.headers()["accept"], "application/json");
         assert_eq!(req.headers()["cookie"], "a=b");
