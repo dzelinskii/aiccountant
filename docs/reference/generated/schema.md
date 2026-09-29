@@ -28,7 +28,12 @@
 - `reported_at` · `TIMESTAMP WITH TIME ZONE` · может быть пустой
 - `balance_adjustment` · `NUMERIC(20, 4)` · обязательна · по умолчанию `0`
 - `card_masks` · `JSONB` · обязательна · по умолчанию `'[]'`
+- `bank_code` · `VARCHAR(20)` · может быть пустой
+- `bank_account_fingerprint` · `VARCHAR(64)` · может быть пустой
 - `created_at` · `TIMESTAMP WITH TIME ZONE` · обязательна · по умолчанию `now()`
+
+Индексы:
+- `uq_accounts_bank_fingerprint` (уникальный): `workspace_id`, `bank_account_fingerprint`
 
 ## `api_tokens`
 
@@ -53,6 +58,21 @@
 
 Индексы:
 - `ix_categories_workspace_hint` (уникальный): `workspace_id`, `hint`
+
+## `discovered_accounts`
+
+- `id` · `UUID` · обязательна · первичный ключ
+- `workspace_id` · `UUID` · обязательна · → `workspaces.id`
+- `bank_code` · `VARCHAR(20)` · обязательна
+- `fingerprint` · `VARCHAR(64)` · обязательна
+- `name` · `VARCHAR(200)` · обязательна
+- `currency` · `VARCHAR(3)` · может быть пустой
+- `balance` · `NUMERIC(20, 4)` · может быть пустой
+- `card_masks` · `JSONB` · обязательна · по умолчанию `'[]'`
+- `seen_at` · `TIMESTAMP WITH TIME ZONE` · обязательна · по умолчанию `now()`
+
+Индексы:
+- `uq_discovered_accounts_fingerprint` (уникальный): `workspace_id`, `fingerprint`
 
 ## `memberships`
 

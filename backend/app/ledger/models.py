@@ -40,7 +40,60 @@ class Account(Base):
     )
     # последние четыре цифры карт счёта; пусто у счетов без карт
     card_masks: Mapped[list[str]] = mapped_column(JSONB, default=list, server_default=text("'[]'"))
+    # банк счёта; пусто — наличные или банк, для которого плагина нет
+    bank_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # отпечаток счёта в банке (sha256 от «банк:идентификатор»), считает
+    # коллектор. Сырой идентификатор сюда не едет: у Альфы это номер счёта
+    bank_account_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        # Повторяют миграцию 0014 намеренно, по той же причине, что у Category:
+        # alembic сравнивает модели с базой, и объяви мы их только в миграции —
+        # автогенерация следующей предложила бы их удалить.
+        Index(
+            "uq_accounts_bank_fingerprint",
+            "workspace_id",
+            "bank_account_fingerprint",
+            unique=True,
+            postgresql_where=text("bank_account_fingerprint IS NOT NULL"),
+        ),
+        CheckConstraint(
+            "bank_account_fingerprint IS NULL OR bank_code IS NOT NULL",
+            name="bank_for_fingerprint",
+        ),
+    )
+
+
+class DiscoveredAccount(Base):
+    """Счёт, который банк показал, а в приложении его нет.
+
+    Живёт до привязки: как только человек завёл из него счёт, строка теряет
+    смысл — она отвечает ровно на вопрос «что в банке есть, а у нас нет».
+    Банковского типа счёта здесь нет намеренно: это слово банка, и в ядро оно
+    не едет (см. спеку 2026-09-15, §5.2).
+    """
+
+    __tablename__ = "discovered_accounts"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspaces.id"))
+    bank_code: Mapped[str] = mapped_column(String(20))
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    name: Mapped[str] = mapped_column(String(200))
+    # плагин не всегда распознаёт валюту; счёт от этого не перестаёт
+    # существовать и показывается человеку как есть
+    currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    balance: Mapped[Decimal | None] = mapped_column(Numeric(20, 4), nullable=True)
+    card_masks: Mapped[list[str]] = mapped_column(JSONB, default=list, server_default=text("'[]'"))
+    seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        # Повторяет миграцию 0014 намеренно, по той же причине, что у Account
+        # выше: объяви мы индекс только в миграции — автогенерация следующей
+        # предложила бы его удалить.
+        Index("uq_discovered_accounts_fingerprint", "workspace_id", "fingerprint", unique=True),
+    )
 
 
 class CreditLimitObservation(Base):

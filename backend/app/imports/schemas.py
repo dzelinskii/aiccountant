@@ -1,13 +1,13 @@
-import re
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Annotated, Literal
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.core.card_masks import MAX_CARD_MASKS, validate_card_masks
 from app.core.category_hints import CategoryHint
-from app.core.money import MoneyStr
+from app.core.money import Money, MoneyStr, reject_float
 from app.core.operation_kinds import OperationKind
 
 ImportStatus = Literal["processing", "ready", "failed", "completed"]
@@ -59,11 +59,6 @@ class ImportStatusOut(BaseModel):
     preview: ImportPreviewOut | None
 
 
-# границы совпадают с NUMERIC(20,4) в ledger — иначе переполнение всплывёт уже
-# на вставке транзакции, после того как запись импорта успела уйти в ready
-# (тот же приём — в app/imports/llm_parser.py)
-Money = Annotated[Decimal, Field(max_digits=20, decimal_places=4)]
-
 # префикс отделяет пространство id банка от наших sha256-хешей дедупа (тоже
 # 64-символьный hex): без него банковский id мог бы случайно совпасть с хешем
 # чужой операции и потерять её как «дубль»
@@ -97,13 +92,7 @@ class ParsedOperationIn(BaseModel):
     @field_validator("amount", mode="before")
     @classmethod
     def _amount_not_float(cls, value: object) -> object:
-        if isinstance(value, float):
-            # к моменту валидации разряды уже потеряны: 12345678901234.5678
-            # приходит как 12345678901234.568, и починить это здесь нечем.
-            # На проводе сумма — строка, как и везде в проекте (тот же приём —
-            # parse_float=Decimal в app/imports/llm_parser.py)
-            raise ValueError("сумма должна быть строкой, а не числом JSON")
-        return value
+        return reject_float(value)
 
     @field_validator("amount")
     @classmethod
@@ -127,12 +116,6 @@ class ParsedOperationIn(BaseModel):
 MAX_PARSED_OPERATIONS = 25_000
 
 
-CARD_MASK = r"^[0-9]{4}$"
-# счёт с десятком карт — уже нечто иное, чем домашний счёт; ограничение здесь
-# затем же, зачем MAX_PARSED_OPERATIONS: предсказуемость размера тела запроса
-MAX_CARD_MASKS = 10
-
-
 class ParsedAccountIn(BaseModel):
     """Что источник знает о самом счёте на момент сбора.
 
@@ -149,22 +132,12 @@ class ParsedAccountIn(BaseModel):
     @field_validator("balance", "credit_limit", mode="before")
     @classmethod
     def _money_not_float(cls, value: object) -> object:
-        if isinstance(value, float):
-            # к моменту валидации разряды уже потеряны — то же правило, что
-            # у сумм операций (см. ParsedOperationIn)
-            raise ValueError("сумма должна быть строкой, а не числом JSON")
-        return value
+        return reject_float(value)
 
     @field_validator("card_masks")
     @classmethod
     def _masks_are_four_digits(cls, value: list[str]) -> list[str]:
-        for mask in value:
-            # хранить кусок номера карты сверх последних четырёх цифр мы не
-            # собираемся, а укороченная метка не опознаёт счёт — и то и другое
-            # означает баг коллектора
-            if not re.fullmatch(CARD_MASK, mask):
-                raise ValueError("метка карты — ровно четыре цифры")
-        return value
+        return validate_card_masks(value)
 
 
 class ParsedImportIn(BaseModel):

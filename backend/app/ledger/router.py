@@ -6,15 +6,18 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.banks import BANK_CODE_PATTERN, BANKS
 from app.core.db import get_db
-from app.identity.deps import require_workspace_member
+from app.identity.deps import get_current_user, require_workspace_member
 from app.identity.models import User
 from app.ledger import repository, service
-from app.ledger.models import Account, Counterparty, Transaction
+from app.ledger.models import Account, Counterparty, DiscoveredAccount, Transaction
 from app.ledger.schemas import (
     AccountCreate,
+    AccountLink,
     AccountOut,
     AccountUpdate,
+    BankOut,
     CategoryCreate,
     CategoryOut,
     CategoryUpdate,
@@ -24,6 +27,9 @@ from app.ledger.schemas import (
     DashboardOut,
     DescriptionRuleCreate,
     DescriptionRuleOut,
+    DiscoveredAccountOut,
+    DiscoveredSyncIn,
+    DiscoveredSyncOut,
     SimilarAppliedOut,
     SimilarUncategorizedOut,
     TransactionCreate,
@@ -49,6 +55,8 @@ def _account_out(account: Account, balance: Decimal, credit: service.CreditView)
         balance=balance,
         reported_at=account.reported_at,
         card_masks=account.card_masks,
+        bank_code=account.bank_code,
+        is_bank_linked=account.bank_account_fingerprint is not None,
         credit_limit=credit.limit,
         credit_limit_at=credit.limit_at,
         credit_available=credit.available,
@@ -65,6 +73,39 @@ async def list_accounts(
     return [_account_out(acc, bal, credit) for acc, bal, credit in rows]
 
 
+def _discovered_out(row: DiscoveredAccount) -> DiscoveredAccountOut:
+    return DiscoveredAccountOut(
+        fingerprint=row.fingerprint,
+        bank_code=row.bank_code,
+        bank_name=BANKS[row.bank_code],
+        name=row.name,
+        currency=row.currency,
+        balance=row.balance,
+        card_masks=row.card_masks,
+    )
+
+
+@router.put("/accounts/discovered")
+async def sync_discovered_accounts(
+    payload: DiscoveredSyncIn,
+    workspace_id: uuid.UUID,
+    bank: Annotated[str, Query(pattern=BANK_CODE_PATTERN)],
+    _user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> DiscoveredSyncOut:
+    linked = await service.sync_discovered(db, workspace_id, bank, payload.accounts)
+    return DiscoveredSyncOut(linked=linked)
+
+
+@router.get("/accounts/discovered")
+async def list_discovered_accounts(
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> list[DiscoveredAccountOut]:
+    return [_discovered_out(row) for row in await service.list_discovered(db, workspace_id)]
+
+
 @router.post("/accounts", status_code=201)
 async def create_account(
     payload: AccountCreate,
@@ -72,7 +113,12 @@ async def create_account(
     _user: Annotated[User, Depends(require_workspace_member)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> AccountOut:
-    account, balance, credit = await service.create_account(db, workspace_id, payload)
+    try:
+        account, balance, credit = await service.create_account(db, workspace_id, payload)
+    except service.DiscoveredNotFoundError:
+        raise HTTPException(
+            status_code=404, detail="Счёт банка не найден среди увиденных"
+        ) from None
     return _account_out(account, balance, credit)
 
 
@@ -92,6 +138,27 @@ async def update_account(
         raise HTTPException(status_code=404, detail="Счёт не найден") from None
     except service.ReportedBalanceError:
         raise HTTPException(status_code=409, detail="Остаток счёта приходит от источника") from None
+    return _account_out(account, balance, credit)
+
+
+@router.post("/accounts/{account_id}/link")
+async def link_account(
+    account_id: uuid.UUID,
+    payload: AccountLink,
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> AccountOut:
+    try:
+        account, balance, credit = await service.link_account(db, workspace_id, account_id, payload)
+    except service.NotFoundError:
+        raise HTTPException(status_code=404, detail="Счёт не найден") from None
+    except service.DiscoveredNotFoundError:
+        raise HTTPException(
+            status_code=404, detail="Счёт банка не найден среди увиденных"
+        ) from None
+    except service.AlreadyLinkedError:
+        raise HTTPException(status_code=409, detail="Счёт уже привязан к счёту банка") from None
     return _account_out(account, balance, credit)
 
 
@@ -474,6 +541,15 @@ async def delete_transaction(
         await service.delete_transaction(db, workspace_id, transaction_id)
     except service.NotFoundError:
         raise HTTPException(status_code=404, detail="Операция не найдена") from None
+
+
+@router.get("/banks")
+async def list_banks(
+    _user: Annotated[User, Depends(get_current_user)],
+) -> list[BankOut]:
+    """Словарь банков: код и человеческое название. Фронт своего списка не
+    держит — разъехались бы."""
+    return [BankOut(code=code, name=name) for code, name in BANKS.items()]
 
 
 @router.get("/dashboard")

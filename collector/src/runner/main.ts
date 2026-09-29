@@ -1,10 +1,14 @@
+import { createInterface } from 'node:readline/promises'
 import { fileURLToPath } from 'node:url'
 import type { BankPlugin, CollectedAccount, Credentials } from '../core/contract'
 import { pluginFor } from '../plugins/registry'
 import { browserPrompt } from './browser'
 import { loadConfig, type CollectorConfig } from './config'
+import { readDeclined, rememberDeclined } from './declined'
+import { syncDiscovered } from './discovered'
+import { askAboutAccounts, decideCandidates } from './link-prompt'
 import { pushOperations } from './push'
-import { reportCollected } from './report'
+import { accountsWord, reportCollected } from './report'
 import { osSecretStore, type SecretStore } from './secret-store'
 import { ROOT_SPKI_SHA256, loadTrustAnchor } from './trust-anchor'
 
@@ -29,14 +33,54 @@ async function main(): Promise<void> {
 
   const credentials = await connect(plugin, store, pinnedSpki)
   const accounts = await plugin.fetchAccounts(credentials)
+  // какие счета вести, решает человек: заранее в приложении или прямо здесь,
+  // в разговоре ниже — коллектор только рассказывает, что показал банк
+  let linked = await syncDiscovered(config, plugin.name, accounts)
 
-  if (Object.keys(config.accountMap).length === 0) {
-    printAccountsHint(accounts, config.bank)
+  const declined = await readDeclined(plugin.name)
+  // без терминала (будущий сбор по расписанию) спрашивать не у кого —
+  // decideCandidates про это знает и в этом случае просто молчит
+  const decision = decideCandidates(accounts, plugin.name, linked, declined, process.stdin.isTTY === true)
+
+  if (decision.kind === 'ask') {
+    const declinedNow = await conductLinkPrompt(config, plugin.name, decision.candidates)
+    if (declinedNow.length > 0) await rememberDeclined(plugin.name, declinedNow)
+    // разговор мог что-то привязать или завести — привязки собираем заново,
+    // чтобы продолжить сбор в этом же запуске, без второго pnpm collect
+    linked = await syncDiscovered(config, plugin.name, accounts)
+  } else if (decision.unboundCount > 0) {
+    console.log(`В банке ещё ${accountsWord(decision.unboundCount)} не ведётся.`)
+  }
+
+  if (linked.size === 0) {
+    console.log('Ни один счёт банка не привязан к счёту приложения.')
+    console.log('Заведите нужные счета на экране «Счета» и запустите сбор снова.')
     return
   }
-  assertAccountsExist(config.accountMap, accounts)
-  await collect(config, plugin, credentials, accounts)
+  await collect(config, plugin, credentials, accounts, linked)
   console.log('Готово. Подтвердите импорт в приложении.')
+}
+
+/**
+ * Своё окно терминала на разговор о счетах, закрывается сразу после него —
+ * не закрыть его значило бы держать stdin открытым, и процесс не завершился
+ * бы сам после сбора.
+ */
+async function conductLinkPrompt(
+  config: CollectorConfig,
+  bank: string,
+  candidates: readonly CollectedAccount[],
+): Promise<string[]> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout })
+  try {
+    const { declined } = await askAboutAccounts(config, bank, candidates, {
+      ask: (question) => rl.question(question),
+      print: (line) => console.log(line),
+    })
+    return declined
+  } finally {
+    rl.close()
+  }
 }
 
 /**
@@ -63,13 +107,17 @@ async function collect(
   plugin: BankPlugin,
   credentials: Credentials,
   accounts: readonly CollectedAccount[],
+  linked: ReadonlyMap<string, string>,
 ): Promise<void> {
   const until = Date.now()
   const since = until - config.days * DAY_MS
 
-  for (const [bankAccountId, appAccountId] of Object.entries(config.accountMap)) {
-    const operations = await plugin.fetchOperations(credentials, bankAccountId, since, until)
-    const account = accounts.find((item) => item.id === bankAccountId)
+  for (const account of accounts) {
+    const appAccountId = linked.get(account.id)
+    // счёт банка, который человек не завёл: не ошибка, а обычное дело —
+    // из двенадцати счетов в приложении ведётся часть
+    if (!appAccountId) continue
+    const operations = await plugin.fetchOperations(credentials, account.id, since, until)
     const result = await pushOperations(config, plugin.name, appAccountId, operations, account)
     // в консоль только идентификаторы и счётчики: ни сумм, ни описаний
     console.log(
@@ -81,29 +129,6 @@ async function collect(
     // вторая копия разошлась бы с первой
     reportCollected(appAccountId, operations)
   }
-}
-
-// Разовая подсказка человеку на его же машине: идентификаторы счетов банка
-// взять больше неоткуда. Названия здесь уместны, остатки не печатаем
-function printAccountsHint(accounts: readonly CollectedAccount[], bank: string): void {
-  console.log('Счета в банке:')
-  for (const account of accounts) {
-    console.log(`  ${account.id}  ${account.currency ?? 'валюта не распознана'}  ${account.name}`)
-  }
-  console.log('')
-  console.log(`Задайте AICCOUNTANT_ACCOUNTS_${bank.toUpperCase()} — соответствие счетов банка счетам приложения:`)
-  const example = accounts[0]?.id ?? '<счёт банка>'
-  console.log(`  AICCOUNTANT_ACCOUNTS_${bank.toUpperCase()}='{"${example}":"<uuid счёта в приложении>"}'`)
-}
-
-function assertAccountsExist(accountMap: Record<string, string>, accounts: readonly CollectedAccount[]): void {
-  const known = new Set(accounts.map((account) => account.id))
-  const unknown = Object.keys(accountMap).filter((id) => !known.has(id))
-  if (unknown.length === 0) return
-  throw new Error(
-    `В списке счетов указаны те, которых у банка нет: ${unknown.join(', ')}. ` +
-      'Список счетов банка печатается при пустом списке.',
-  )
 }
 
 await main()

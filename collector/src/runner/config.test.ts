@@ -14,7 +14,6 @@ test('без необязательных переменных берутся з
     apiBaseUrl: 'http://localhost:8000',
     apiToken: TOKEN,
     workspaceId: 'ws-1',
-    accountMap: {},
     days: 30,
     bank: 'tbank',
   })
@@ -34,7 +33,7 @@ test('пустая строка в обязательной переменной
 
 test('сообщение об ошибке не содержит значение токена', () => {
   // сообщение видно в консоли и в чужих логах, а токен приложения — секрет
-  const broken = env({ AICCOUNTANT_ACCOUNTS: '{сломано', AICCOUNTANT_WORKSPACE: '' })
+  const broken = env({ AICCOUNTANT_WORKSPACE: '' })
 
   expect(() => loadConfig(broken)).toThrow()
   try {
@@ -42,30 +41,6 @@ test('сообщение об ошибке не содержит значени�
   } catch (error) {
     expect(String(error)).not.toContain(TOKEN)
   }
-})
-
-test('AICCOUNTANT_ACCOUNTS разбирается в соответствие счетов', () => {
-  const config = loadConfig(env({ AICCOUNTANT_ACCOUNTS: '{"bank-1":"app-1","bank-2":"app-2"}' }))
-
-  expect(config.accountMap).toEqual({ 'bank-1': 'app-1', 'bank-2': 'app-2' })
-})
-
-test('битый JSON в AICCOUNTANT_ACCOUNTS — понятная ошибка с именем переменной', () => {
-  expect(() => loadConfig(env({ AICCOUNTANT_ACCOUNTS: '{"bank-1":' }))).toThrow(/AICCOUNTANT_ACCOUNTS/)
-})
-
-test('массив вместо объекта в AICCOUNTANT_ACCOUNTS — ошибка', () => {
-  // у массива ключи тоже строки ("0", "1"), молча он превратился бы в мусорное
-  // соответствие счетов
-  expect(() => loadConfig(env({ AICCOUNTANT_ACCOUNTS: '["bank-1"]' }))).toThrow(/AICCOUNTANT_ACCOUNTS/)
-})
-
-test('нестроковое значение в AICCOUNTANT_ACCOUNTS — ошибка, а не приведение типа', () => {
-  expect(() => loadConfig(env({ AICCOUNTANT_ACCOUNTS: '{"bank-1":42}' }))).toThrow(/AICCOUNTANT_ACCOUNTS/)
-})
-
-test('пустой идентификатор счёта в AICCOUNTANT_ACCOUNTS — ошибка', () => {
-  expect(() => loadConfig(env({ AICCOUNTANT_ACCOUNTS: '{"bank-1":""}' }))).toThrow(/AICCOUNTANT_ACCOUNTS/)
 })
 
 test('COLLECT_DAYS задаёт глубину сбора', () => {
@@ -107,15 +82,4 @@ test('незнакомый банк отвергается со списком �
 
 test('alfa принимается как известный банк', () => {
   expect(loadConfig(env({ COLLECT_BANK: 'alfa' })).bank).toBe('alfa')
-})
-
-test('пер-банковский список счетов важнее общего', () => {
-  const config = loadConfig(
-    env({
-      COLLECT_BANK: 'sber',
-      AICCOUNTANT_ACCOUNTS: '{"общий":"a"}',
-      AICCOUNTANT_ACCOUNTS_SBER: '{"card:1":"b"}',
-    }),
-  )
-  expect(config.accountMap).toEqual({ 'card:1': 'b' })
 })

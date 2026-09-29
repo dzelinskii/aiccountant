@@ -17,10 +17,12 @@ from app.ledger.models import (
     Counterparty,
     CreditLimitObservation,
     DescriptionRule,
+    DiscoveredAccount,
     Transaction,
 )
 from app.ledger.schemas import (
     AccountCreate,
+    AccountLink,
     AccountUpdate,
     CategoryCreate,
     CategoryUpdate,
@@ -28,6 +30,7 @@ from app.ledger.schemas import (
     CounterpartyUpdate,
     DashboardAccount,
     DashboardOut,
+    DiscoveredAccountIn,
     MonthExpense,
     RecentTransaction,
     TransactionCreate,
@@ -43,6 +46,14 @@ class NotFoundError(Exception):
 
 class ReportedBalanceError(Exception):
     """У счёта есть остаток от источника — править его руками нельзя."""
+
+
+class DiscoveredNotFoundError(Exception):
+    """Счёт банка, от которого заводят счёт, не числится увиденным."""
+
+
+class AlreadyLinkedError(Exception):
+    """У счёта уже есть счёт банка — перепривязка увела бы операции молча."""
 
 
 def _visible_balance(account: Account, operations_sum: Decimal) -> Decimal:
@@ -90,13 +101,30 @@ async def list_accounts(
 async def create_account(
     db: AsyncSession, workspace_id: uuid.UUID, payload: AccountCreate
 ) -> tuple[Account, Decimal, CreditView]:
+    discovered = None
+    if payload.bank_account_fingerprint is not None:
+        # заводим только от того, что банк действительно показал: иначе в
+        # привязках появились бы отпечатки, которым ничего не соответствует,
+        # и коллектор молча собирал бы в никуда
+        assert payload.bank_code is not None  # обеспечено схемой AccountCreate
+        discovered = await repository.get_discovered(
+            db, workspace_id, payload.bank_code, payload.bank_account_fingerprint
+        )
+        if discovered is None:
+            raise DiscoveredNotFoundError
     account = Account(
         workspace_id=workspace_id,
         name=payload.name,
         type=payload.type,
         currency=payload.currency,
+        bank_code=payload.bank_code,
+        bank_account_fingerprint=payload.bank_account_fingerprint,
     )
     repository.add_account(db, account)
+    if discovered is not None:
+        # строка отвечала на вопрос «что в банке есть, а у нас нет»; ответ
+        # изменился, и держать её значит предлагать завести счёт дважды
+        await db.delete(discovered)
     await db.commit()
     # счёт только что создан — наблюдать его лимит было негде
     return account, Decimal(0), NO_CREDIT
@@ -123,6 +151,32 @@ async def update_account(
     operations_sum = await repository.account_operations_sum(db, workspace_id, account_id)
     # лимит отдаём и здесь: без него переименование карты стёрло бы его с экрана
     # до перезагрузки страницы
+    observation = await repository.latest_credit_limit(db, workspace_id, account_id)
+    return account, _visible_balance(account, operations_sum), _credit_view(account, observation)
+
+
+async def link_account(
+    db: AsyncSession, workspace_id: uuid.UUID, account_id: uuid.UUID, payload: AccountLink
+) -> tuple[Account, Decimal, CreditView]:
+    """Привязать заведённый счёт к счёту банка, который банк уже показал."""
+    account = await repository.get_account(db, workspace_id, account_id)
+    if account is None:
+        raise NotFoundError
+    if account.bank_account_fingerprint is not None:
+        raise AlreadyLinkedError
+    discovered = await repository.get_discovered(
+        db, workspace_id, payload.bank_code, payload.bank_account_fingerprint
+    )
+    if discovered is None:
+        raise DiscoveredNotFoundError
+    account.bank_code = payload.bank_code
+    account.bank_account_fingerprint = payload.bank_account_fingerprint
+    # строка отвечала «что в банке есть, а у нас нет»; ответ изменился
+    await db.delete(discovered)
+    await db.commit()
+    operations_sum = await repository.account_operations_sum(db, workspace_id, account_id)
+    # счёт заведён давно, и лимит у него мог наблюдаться: без него привязка
+    # стёрла бы «доступно к трате» с экрана до перезагрузки страницы
     observation = await repository.latest_credit_limit(db, workspace_id, account_id)
     return account, _visible_balance(account, operations_sum), _credit_view(account, observation)
 
@@ -197,6 +251,48 @@ async def _observe_credit_limit(
             confirmed_at=observed_at,
         ),
     )
+
+
+async def sync_discovered(
+    db: AsyncSession,
+    workspace_id: uuid.UUID,
+    bank_code: str,
+    seen: list[DiscoveredAccountIn],
+) -> dict[str, uuid.UUID]:
+    """Запомнить, какие счета показал банк, и ответить привязками.
+
+    Привязанные в «увиденные» не попадают: этот список отвечает ровно на один
+    вопрос — что в банке есть, а в приложении нет.
+    """
+    already_linked = await repository.linked_bank_accounts(db, workspace_id, bank_code)
+    await repository.replace_discovered(
+        db,
+        workspace_id,
+        bank_code,
+        [
+            DiscoveredAccount(
+                workspace_id=workspace_id,
+                bank_code=bank_code,
+                fingerprint=item.fingerprint,
+                name=item.name,
+                currency=item.currency,
+                balance=item.balance,
+                card_masks=item.card_masks,
+            )
+            for item in seen
+            if item.fingerprint not in already_linked
+        ],
+    )
+    await db.commit()
+    # счёт, привязанный когда-то, но исчезнувший из банка, коллектору не
+    # отдаём: собирать по нему нечего, а запрос за его операциями закончился бы
+    # ошибкой банка посреди сбора
+    shown = {item.fingerprint for item in seen}
+    return {fp: account_id for fp, account_id in already_linked.items() if fp in shown}
+
+
+async def list_discovered(db: AsyncSession, workspace_id: uuid.UUID) -> list[DiscoveredAccount]:
+    return await repository.list_discovered(db, workspace_id)
 
 
 async def seed_categories(db: AsyncSession, workspace_id: uuid.UUID) -> None:
@@ -1076,6 +1172,7 @@ async def build_dashboard(db: AsyncSession, workspace_id: uuid.UUID) -> Dashboar
                 balance=bal,
                 reported_at=a.reported_at,
                 card_masks=a.card_masks,
+                bank_code=a.bank_code,
                 credit_limit=credit.limit,
                 credit_limit_at=credit.limit_at,
                 credit_available=credit.available,

@@ -340,6 +340,29 @@ async def test_rename_keeps_limit(client: AsyncClient) -> None:
     assert Decimal(resp.json()["credit_available"]) == Decimal("1936.19")
 
 
+async def test_link_keeps_limit(client: AsyncClient) -> None:
+    """Карту, которая вела лимит до появления банков, привязывают к счёту банка —
+    и лимит в ответе на месте: иначе привязка стёрла бы «доступно к трате» с
+    экрана до перезагрузки страницы."""
+    ws, account_id = await _ws_and_account(client)
+    await _collect(client, ws, account_id, {"balance": "-148063.81", "credit_limit": "150000.00"})
+    await client.put(
+        "/api/accounts/discovered",
+        params={"workspace_id": ws, "bank": "alfa"},
+        json={"accounts": [{"fingerprint": "a" * 64, "name": "Кредитка", "currency": "RUB"}]},
+    )
+
+    resp = await client.post(
+        f"/api/accounts/{account_id}/link",
+        params={"workspace_id": ws},
+        json={"bank_code": "alfa", "bank_account_fingerprint": "a" * 64},
+    )
+
+    assert resp.status_code == 200
+    assert Decimal(resp.json()["credit_limit"]) == Decimal("150000.00")
+    assert Decimal(resp.json()["credit_available"]) == Decimal("1936.19")
+
+
 async def test_limits_read_only_within_workspace(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:

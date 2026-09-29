@@ -1,6 +1,7 @@
 import { afterEach, expect, test, vi } from 'vitest'
 import type { CollectedOperation } from '../core/contract'
 import {
+  accountsWord,
   reportCollected,
   reportMissingHints,
   reportUnknownKinds,
@@ -150,4 +151,17 @@ test('при сборе срабатывают все счётчики, а не 
   expect(lines.some((line) => line.includes('вид операции не распознан'))).toBe(true)
   expect(lines.some((line) => line.includes('категория не определена'))).toBe(true)
   expect(lines.some((line) => line.includes('приход не разобран'))).toBe(true)
+})
+
+test('счета склоняются по-русски, включая второй десяток', () => {
+  // "11 счёт(ов)" выдаёт машину; исключение на 11-14 — то место, где склонение
+  // ломается молча и незаметно
+  expect(accountsWord(1)).toBe('1 счёт')
+  expect(accountsWord(2)).toBe('2 счёта')
+  expect(accountsWord(5)).toBe('5 счетов')
+  expect(accountsWord(11)).toBe('11 счетов')
+  expect(accountsWord(12)).toBe('12 счетов')
+  expect(accountsWord(21)).toBe('21 счёт')
+  expect(accountsWord(22)).toBe('22 счёта')
+  expect(accountsWord(0)).toBe('0 счетов')
 })

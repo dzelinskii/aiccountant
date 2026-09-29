@@ -25,6 +25,7 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+from app.core.banks import BANKS  # noqa: E402
 from app.core.category_hints import CATEGORY_HINTS, HINT_DEFAULTS  # noqa: E402
 from app.core.db import Base  # noqa: E402
 from app.core.operation_kinds import NON_SPENDING_KINDS, OPERATION_KINDS  # noqa: E402
@@ -196,6 +197,9 @@ def render_vocabularies() -> str:
         target = HINT_DEFAULTS[hint]
         where = target.parent if target.sub is None else f"{target.parent} / {target.sub}"
         lines.append(f"- `{hint}` → {where} ({target.kind})")
+    lines.extend(["", "## Банки", ""])
+    for code, name in BANKS.items():
+        lines.append(f"- `{code}` — {name}")
     lines.append("")
     return "\n".join(lines)
 

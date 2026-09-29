@@ -6,7 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.identity.models import Workspace
-from app.ledger.models import Category, Counterparty, DescriptionRule
+from app.ledger.models import Account, Category, Counterparty, DescriptionRule, DiscoveredAccount
 
 
 async def test_migrations_create_identity_tables(database_url: str) -> None:
@@ -253,4 +253,96 @@ async def test_rule_leads_to_exactly_one_target(db_session: AsyncSession) -> Non
     with pytest.raises(IntegrityError):
         async with db_session.begin_nested():
             db_session.add(rule("без целей", None, None))
+            await db_session.flush()
+
+
+async def test_migrations_add_bank_columns(database_url: str) -> None:
+    engine = create_async_engine(database_url)
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT column_name, is_nullable FROM information_schema.columns "
+                "WHERE table_name = 'accounts' "
+                "AND column_name IN ('bank_code', 'bank_account_fingerprint')"
+            )
+        )
+        columns: dict[str, str] = {name: nullable for name, nullable in rows.all()}
+    await engine.dispose()
+    # счёт без банка — законное состояние (наличные, банк без плагина), и
+    # счета, заведённые до этой миграции, обязаны остаться рабочими
+    assert columns == {"bank_code": "YES", "bank_account_fingerprint": "YES"}
+
+
+async def test_one_bank_account_maps_to_one_app_account(db_session: AsyncSession) -> None:
+    """Два счёта приложения на один счёт банка — это разъехавшиеся операции:
+    какой из них получит импорт, решал бы порядок, в котором коллектор
+    перечислил счета.
+
+    Первая половина теста стережёт обратное: счетов без отпечатка бывает
+    сколько угодно, и уникальность не должна их задевать. Держится это не
+    предикатом индекса, а тем, что Postgres считает NULL различными, — предикат
+    здесь экономия и объявление намерения, а не то, на чём стоит правило."""
+    workspace = Workspace(name="Дом", type="personal")
+    db_session.add(workspace)
+    await db_session.flush()
+
+    def account(name: str, fingerprint: str | None) -> Account:
+        return Account(
+            workspace_id=workspace.id,
+            name=name,
+            type="card",
+            currency="RUB",
+            bank_code="alfa" if fingerprint else None,
+            bank_account_fingerprint=fingerprint,
+        )
+
+    async with db_session.begin_nested():
+        db_session.add_all([account("Наличные", None), account("Кошелёк", None)])
+        await db_session.flush()
+
+    with pytest.raises(IntegrityError):
+        async with db_session.begin_nested():
+            db_session.add_all([account("Первый", "a" * 64), account("Второй", "a" * 64)])
+            await db_session.flush()
+
+
+async def test_fingerprint_without_bank_is_rejected(db_session: AsyncSession) -> None:
+    """Отпечаток считается от банка, и без банка не значит ничего: такую строку
+    отбивает база, а не только сервис."""
+    workspace = Workspace(name="Дом", type="personal")
+    db_session.add(workspace)
+    await db_session.flush()
+
+    with pytest.raises(IntegrityError):
+        async with db_session.begin_nested():
+            db_session.add(
+                Account(
+                    workspace_id=workspace.id,
+                    name="Ничей",
+                    type="card",
+                    currency="RUB",
+                    bank_account_fingerprint="b" * 64,
+                )
+            )
+            await db_session.flush()
+
+
+async def test_discovered_account_is_unique_per_workspace(db_session: AsyncSession) -> None:
+    """Повторный сбор не должен плодить строки об одном счёте банка."""
+    workspace = Workspace(name="Дом", type="personal")
+    db_session.add(workspace)
+    await db_session.flush()
+
+    with pytest.raises(IntegrityError):
+        async with db_session.begin_nested():
+            for _ in range(2):
+                db_session.add(
+                    DiscoveredAccount(
+                        workspace_id=workspace.id,
+                        bank_code="sber",
+                        fingerprint="c" * 64,
+                        name="Накопительный",
+                        currency="RUB",
+                    )
+                )
             await db_session.flush()

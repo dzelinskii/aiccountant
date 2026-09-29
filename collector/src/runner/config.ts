@@ -5,8 +5,6 @@ export interface CollectorConfig {
   apiBaseUrl: string
   apiToken: string
   workspaceId: string
-  /** Соответствие счетов банка нашим: заполняется один раз руками. */
-  accountMap: Record<string, string>
   /** За сколько дней забирать операции при обычном запуске. */
   days: number
   /** Какой банк собираем в этом запуске. */
@@ -31,7 +29,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CollectorConfi
     apiBaseUrl: parseUrl(env['AICCOUNTANT_URL']),
     apiToken: required(env, 'AICCOUNTANT_TOKEN'),
     workspaceId: required(env, 'AICCOUNTANT_WORKSPACE'),
-    accountMap: parseAccountMap(accountsRaw(env, bank)),
     days: parseDays(env['COLLECT_DAYS']),
     bank,
   }
@@ -43,13 +40,6 @@ function parseBank(raw: string | undefined): string {
     throw new Error(`COLLECT_BANK: неизвестный банк "${raw}". Известные: ${BANK_NAMES.join(', ')}`)
   }
   return raw
-}
-
-// Пер-банковская переменная важнее общей: у банков разные идентификаторы
-// счетов, и один список на двоих означал бы, что при смене банка коллектор
-// молча не найдёт ни одного счёта
-function accountsRaw(env: NodeJS.ProcessEnv, bank: string): string | undefined {
-  return env[`AICCOUNTANT_ACCOUNTS_${bank.toUpperCase()}`] ?? env['AICCOUNTANT_ACCOUNTS']
 }
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
@@ -72,34 +62,6 @@ function parseUrl(raw: string | undefined): string {
     throw new Error(`AICCOUNTANT_URL: ожидался адрес вида ${DEFAULT_URL}`)
   }
   return raw
-}
-
-function parseAccountMap(raw: string | undefined): Record<string, string> {
-  if (!raw || raw.trim() === '') return {}
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw)
-  } catch {
-    throw new Error('AICCOUNTANT_ACCOUNTS: ожидался JSON вида {"счёт банка":"счёт приложения"}')
-  }
-  // массив сюда проходит как объект с ключами "0", "1" — молча получилось бы
-  // мусорное соответствие счетов вместо понятного отказа
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    throw new Error('AICCOUNTANT_ACCOUNTS: ожидался JSON-объект, а не другое значение')
-  }
-  const map: Record<string, string> = {}
-  for (const [bankAccount, appAccount] of Object.entries(parsed)) {
-    if (bankAccount === '') {
-      throw new Error('AICCOUNTANT_ACCOUNTS: пустой идентификатор счёта банка')
-    }
-    if (typeof appAccount !== 'string' || appAccount === '') {
-      throw new Error(
-        `AICCOUNTANT_ACCOUNTS: для счёта "${bankAccount}" ожидался идентификатор счёта приложения строкой`,
-      )
-    }
-    map[bankAccount] = appAccount
-  }
-  return map
 }
 
 function parseDays(raw: string | undefined): number {

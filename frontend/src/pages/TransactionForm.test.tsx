@@ -8,7 +8,8 @@ import { TransactionForm } from './TransactionForm'
 const accounts: Account[] = [
   {
     id: 'a1', name: 'Карта', type: 'card', currency: 'RUB', is_archived: false,
-    balance: '0.0000', reported_at: null, card_masks: [],
+    balance: '0.0000', reported_at: null, card_masks: [], bank_code: null,
+    is_bank_linked: false,
     credit_limit: null, credit_limit_at: null, credit_available: null,
   },
 ]
