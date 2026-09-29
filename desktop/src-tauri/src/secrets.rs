@@ -102,32 +102,34 @@ pub fn clear_app_token(backend: &impl Backend) -> Result<(), String> {
     backend.delete(APP_TOKEN_KEY)
 }
 
-#[tauri::command]
+// Команды синхронные, но `async`: обычные идут на главном потоке, а Keychain
+// на macOS может показать запрос доступа и заморозить окно приложения.
+#[tauri::command(async)]
 pub fn secret_session_read(bank: String) -> Result<Option<String>, String> {
     read_session(&OsKeyring, &bank)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn secret_session_write(bank: String, value: String) -> Result<(), String> {
     write_session(&OsKeyring, &bank, &value)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn secret_session_clear(bank: String) -> Result<(), String> {
     clear_session(&OsKeyring, &bank)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn app_token_read() -> Result<Option<String>, String> {
     read_app_token(&OsKeyring)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn app_token_write(token: String) -> Result<(), String> {
     write_app_token(&OsKeyring, &token)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn app_token_clear() -> Result<(), String> {
     clear_app_token(&OsKeyring)
 }
