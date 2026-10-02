@@ -552,3 +552,36 @@ test('итог сбора остаётся в своём рабочем прос
   act(() => useWorkspaceStore.getState().setWorkspaceId('ws-1'))
   expect(await row('sber').findByText(/собрано 3/)).toBeDefined()
 })
+
+// выход и вход сбрасывают хранилище (AppLayout, LoginPage, RegisterPage); здесь —
+// что сбор, переживший сброс, итог прежнего пользователя обратно не вернёт
+test('сбор, закончившийся после выхода, итог не пишет, и очередь «Собрать всё» дальше не идёт', async () => {
+  const finish = pendingCollect()
+  const { unmount } = await renderPage()
+  await userEvent.click(collectAllButton())
+  await waitFor(() => expect(collectFromApp).toHaveBeenCalledTimes(1))
+  unmount()
+
+  act(() => useCollectStore.getState().reset())
+  finish(summary())
+  await settle()
+
+  expect(useCollectStore.getState().byWorkspace).toEqual({})
+  expect(collectFromApp).toHaveBeenCalledTimes(1)
+})
+
+test('«Забыть доступ», закончившийся после выхода, в хранилище ничего не пишет', async () => {
+  let release: () => void = () => {}
+  vi.mocked(forgetBank).mockReturnValueOnce(new Promise<void>((resolve) => { release = resolve }))
+  const { unmount } = await renderPage()
+  await userEvent.click(forgetButton('sber'))
+  await userEvent.click(forgetButton('sber'))
+  await waitFor(() => expect(forgetBank).toHaveBeenCalledTimes(1))
+  unmount()
+
+  act(() => useCollectStore.getState().reset())
+  release()
+  await settle()
+
+  expect(useCollectStore.getState().byWorkspace).toEqual({})
+})

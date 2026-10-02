@@ -6,6 +6,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { login } from '../api/auth'
 import { ApiError, detailToMessage } from '../api/client'
+import { useCollectStore } from '../store/collect'
 import { LoginPage } from './LoginPage'
 
 const desktop = { on: false }
@@ -49,6 +50,16 @@ test('показывает ошибки валидации при пустой �
   await userEvent.click(screen.getByRole('button', { name: 'Войти' }))
   expect(await screen.findByText('Некорректный email')).toBeDefined()
   expect(screen.getByText('Введите пароль')).toBeDefined()
+})
+
+// на вход уводит и истёкшая сессия, без выхода: стереть итоги тогда больше некому
+test('успешный вход стирает итоги сборов прежнего пользователя', async () => {
+  useCollectStore.getState().setBank('ws-1', 'sber', { running: false, error: 'Сбербанк: банк не отвечает' })
+  renderPage()
+  await userEvent.type(screen.getByLabelText('Email'), 'a@b.c')
+  await userEvent.type(screen.getByLabelText('Пароль'), 'password123')
+  await userEvent.click(screen.getByRole('button', { name: 'Войти' }))
+  await waitFor(() => expect(useCollectStore.getState().byWorkspace).toEqual({}))
 })
 
 test('в браузере поля адреса сервера нет', () => {

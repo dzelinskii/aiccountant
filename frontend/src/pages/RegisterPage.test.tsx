@@ -6,6 +6,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { register } from '../api/auth'
 import { ApiError, detailToMessage } from '../api/client'
+import { useCollectStore } from '../store/collect'
 import { RegisterPage } from './RegisterPage'
 
 const desktop = { on: false }
@@ -35,6 +36,15 @@ beforeEach(() => {
 afterEach(() => {
   desktop.on = false
   localStorage.clear()
+})
+
+test('успешная регистрация стирает итоги сборов прежнего пользователя', async () => {
+  useCollectStore.getState().setBank('ws-1', 'sber', { running: false, error: 'Сбербанк: банк не отвечает' })
+  renderPage()
+  await userEvent.type(screen.getByLabelText('Email'), 'a@b.c')
+  await userEvent.type(screen.getByLabelText('Пароль'), 'password123')
+  await userEvent.click(screen.getByRole('button', { name: 'Создать аккаунт' }))
+  await waitFor(() => expect(useCollectStore.getState().byWorkspace).toEqual({}))
 })
 
 test('в браузере поля адреса сервера нет', () => {

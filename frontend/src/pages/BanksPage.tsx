@@ -5,10 +5,17 @@ import { Link } from 'react-router-dom'
 import { BANK_NAMES, accountsWord, type AccountResult } from 'aiccountant-collector/src/app'
 import type { Bank } from '../api/ledger'
 import { getAccounts, getBanks } from '../api/ledger'
-import { collectAll, collectOne, forgetAccess, useCollectStore, type BankState } from '../store/collect'
+import {
+  collectAll,
+  collectOne,
+  forgetAccess,
+  useCollectStore,
+  type BankState,
+  type BankStates,
+} from '../store/collect'
 import { useWorkspaceStore } from '../store/workspace'
 
-const NO_STATES: Record<string, BankState> = {}
+const NO_STATES: BankStates = {}
 
 const SESSION_TEXT = {
   stored: 'Сессия: из хранилища',
