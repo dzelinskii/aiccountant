@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, expect, test, vi } from 'vitest'
+import { ApiError } from '../api/client'
 import type { ImportStatus } from '../api/imports'
 import { getImportStatus, getPendingImports, rejectImport, startImport } from '../api/imports'
 import { useWorkspaceStore } from '../store/workspace'
@@ -175,4 +176,46 @@ test('импорт, который сервер закрыл сам, не про
   await user.click(await screen.findByRole('button', { name: 'Открыть' }))
 
   expect(await screen.findByText('Импорт закрыт: все его операции уже в учёте')).toBeDefined()
+})
+
+const READY: ImportStatus = {
+  import_id: 'imp-1',
+  status: 'ready',
+  parser: 'llm',
+  error: null,
+  warnings: [],
+  preview: {
+    operations: [
+      { occurred_at: '2026-07-05', amount: '-1150.0000', currency: 'RUB', description: 'Кофейня', is_duplicate: false },
+    ],
+    new_count: 1,
+    duplicate_count: 0,
+    total_income: null,
+    total_expense: null,
+  },
+}
+
+test('«Отклонить» в превью зовёт ручку для открытого импорта', async () => {
+  mockedGetImportStatus.mockResolvedValueOnce(READY).mockResolvedValue({ ...READY, status: 'rejected', preview: null })
+  mockedRejectImport.mockResolvedValue(undefined)
+
+  await startParsing()
+  await userEvent.click(await screen.findByRole('button', { name: 'Отклонить' }))
+
+  expect(mockedRejectImport).toHaveBeenCalledWith('ws-1', 'imp-1')
+  // статус перечитан: панель ушла, вместо неё — что стало с импортом
+  expect(await screen.findByText('Импорт отклонён, операции не добавлены')).toBeDefined()
+  expect(screen.queryByText(/Новых:/)).toBeNull()
+})
+
+test('отказ отклонения перечитывает статус: импорт успел закрыться сам', async () => {
+  // выписка из одних дублей: опрос увидел ready раньше, чем сервер её закрыл
+  mockedGetImportStatus.mockResolvedValueOnce(READY).mockResolvedValue({ ...READY, status: 'completed', preview: null })
+  mockedRejectImport.mockRejectedValue(new ApiError(409, 'Импорт уже не ждёт решения'))
+
+  await startParsing()
+  await userEvent.click(await screen.findByRole('button', { name: 'Отклонить' }))
+
+  expect(await screen.findByText('Импорт закрыт: все его операции уже в учёте')).toBeDefined()
+  expect(screen.getByText('Импорт уже не ждёт решения')).toBeDefined()
 })

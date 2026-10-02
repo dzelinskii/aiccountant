@@ -54,9 +54,11 @@ export function ImportPage() {
   // отклонить можно и открытый импорт, и любой из списка, поэтому id — аргумент
   const rejectMut = useMutation({
     mutationFn: (id: string) => rejectImport(ws, id),
-    onSuccess: async (_data, id) => {
+    // и при отказе тоже: 409 значит, что импорт уже не ждёт — например, сервер
+    // закрыл его сам, пока он был открыт, — и экран должен показать, что с ним стало
+    onSettled: async (_data, _error, id) => {
       await queryClient.invalidateQueries({ queryKey: ['pending-imports', ws] })
-      // открытый импорт сменит статус на rejected, и панель с кнопками уйдёт
+      // открытый импорт сменит статус, и панель с кнопками уйдёт
       await queryClient.invalidateQueries({ queryKey: ['import-status', ws, id] })
     },
   })
