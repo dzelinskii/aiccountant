@@ -8,3 +8,5 @@ docs
 **/.mypy_cache
 **/.pytest_cache
 **/.ruff_cache
+desktop/src-tauri/target
+spike

@@ -1,14 +1,11 @@
-import { AllowlistClient } from '../../http/allowlist-client'
-import type { AllowedEndpoint, Credentials } from '../../http/allowlist-client'
+import { BankClient } from '../../http/bank-client'
+import type { Credentials } from '../../http/bank-client'
 import type { Transport } from '../../http/transport'
-import { httpsTransport } from '../../http/transport'
 
 export const SBER_BASE = 'https://web-node3.online.sberbank.ru'
 
-// Пути ручек — источник истины один: и allowlist, и вызывающий код (index.ts)
-// собираются из этих констант. Раньше пути были продублированы в двух файлах
-// и могли разойтись молча — несовпадение всплыло бы только на живом запуске
-// отказом allowlist
+// Пути ручек. Оболочка пускает только адреса из своего списка
+// (desktop/src-tauri/src/banks.rs): новая ручка без строки там упрётся в отказ
 export const OPERATIONS_PATH = '/uoh-bh/v1/operations/list'
 export const PRODUCTS_PATH = '/main-screen/rest/v2/m1/web/section/meta'
 // Детали карты. Нужен ровно ради долга по кредитке: в PRODUCTS_PATH его нет —
@@ -17,35 +14,19 @@ export const PRODUCTS_PATH = '/main-screen/rest/v2/m1/web/section/meta'
 // availableTotalLimit равен availableLimit). Зовётся только для карт типа credit
 export const CARD_INFO_PATH = '/ufs-carddetail/rest/card/v1/cardInfo'
 
-// Три адреса — весь набор возможностей коллектора по Сбербанку.
-//
-// Оговорка, которую важно не потерять: у Т-Банка список состоял из GET, и
-// «методом на чтение ничего не сломать» было отдельной гарантией. Сбербанк
-// отдаёт данные по POST, поэтому метод здесь ничего не доказывает — гарантией
-// остаётся сам список адресов, и все три читающие.
-export const SBER_ALLOWED: readonly AllowedEndpoint[] = [
-  { path: OPERATIONS_PATH, method: 'POST' },
-  { path: PRODUCTS_PATH, method: 'POST' },
-  { path: CARD_INFO_PATH, method: 'POST' },
-]
-
 interface CreateOptions {
-  ca: string
-  transport?: Transport
+  transport: Transport
   timeoutMs?: number
 }
 
-export function createSberClient(credentials: Credentials, { ca, transport, timeoutMs }: CreateOptions): AllowlistClient {
+export function createSberClient(credentials: Credentials, { transport, timeoutMs }: CreateOptions): BankClient {
   if (credentials.kind !== 'header') {
     throw new Error('Сбербанк ожидает секрет заголовком — сохранённая запись не той формы')
   }
-  return new AllowlistClient({
+  return new BankClient({
     baseUrl: SBER_BASE,
-    allowed: SBER_ALLOWED,
     credentials,
-    // корень УЦ Минцифры заменяет системный набор: у Сбербанка его в системе
-    // нет, и одновременно это проверка строже системной — доверяем одному УЦ
-    transport: transport ?? httpsTransport(ca),
+    transport,
     timeoutMs,
   })
 }

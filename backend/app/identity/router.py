@@ -1,7 +1,7 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, Response
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +15,7 @@ from app.identity.deps import (
     require_owner,
     require_session_user,
     require_workspace_member,
+    session_from_header,
     token_scope,
 )
 from app.identity.models import User
@@ -22,6 +23,7 @@ from app.identity.schemas import (
     ApiTokenCreate,
     ApiTokenCreated,
     ApiTokenOut,
+    Client,
     LoginIn,
     MemberIn,
     MeOut,
@@ -34,7 +36,11 @@ from app.ledger import service as ledger_service
 router = APIRouter(prefix="/api")
 
 
-def _set_session_cookie(response: Response, token: str) -> None:
+def _issue_session(response: Response, token: str, client: Client) -> str | None:
+    """Браузеру — cookie, приложению — токен в теле. Возвращает то, что уйдёт в
+    session_token ответа."""
+    if client == "app":
+        return token
     settings = get_settings()
     response.set_cookie(
         SESSION_COOKIE,
@@ -44,6 +50,7 @@ def _set_session_cookie(response: Response, token: str) -> None:
         samesite="lax",
         secure=settings.cookie_secure,
     )
+    return None
 
 
 @router.post("/auth/register", status_code=201)
@@ -58,9 +65,9 @@ async def register(
     except service.EmailTakenError:
         raise HTTPException(status_code=409, detail="Email уже зарегистрирован") from None
     token = await sessions.create_session(redis, user.id)
-    _set_session_cookie(response, token)
+    session_token = _issue_session(response, token, payload.client)
     await ledger_service.seed_categories(db, workspace.id)
-    return UserOut(id=user.id, email=user.email)
+    return UserOut(id=user.id, email=user.email, session_token=session_token)
 
 
 @router.post("/auth/login")
@@ -74,8 +81,8 @@ async def login(
     if user is None:
         raise HTTPException(status_code=401, detail="Неверный email или пароль")
     token = await sessions.create_session(redis, user.id)
-    _set_session_cookie(response, token)
-    return UserOut(id=user.id, email=user.email)
+    session_token = _issue_session(response, token, payload.client)
+    return UserOut(id=user.id, email=user.email, session_token=session_token)
 
 
 @router.post("/auth/logout", status_code=204)
@@ -83,9 +90,11 @@ async def logout(
     response: Response,
     redis: Annotated[Redis, Depends(get_redis)],
     session: Annotated[str | None, Cookie()] = None,
+    authorization: Annotated[str | None, Header()] = None,
 ) -> None:
-    if session is not None:
-        await sessions.delete_session(redis, session)
+    token = session_from_header(authorization) or session
+    if token is not None:
+        await sessions.delete_session(redis, token)
     response.delete_cookie(SESSION_COOKIE)
 
 

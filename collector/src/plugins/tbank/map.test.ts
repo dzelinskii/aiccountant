@@ -5,7 +5,7 @@ import { parseLossless } from '../../http/lossless-json'
 import { BANK_SUBGROUP_TO_KIND, toAccounts, toOperations } from './map'
 
 // Фикстуры — это то, что реально отдаёт банк по сети: текст. Прогоняем его
-// через тот же parseLossless, что и боевой AllowlistClient, — иначе тест
+// через тот же parseLossless, что и боевой BankClient, — иначе тест
 // проверяет не то, с чем на самом деле работает отображение (числа приходят
 // строками, а не JS number).
 function readFixture(name: string): unknown {

@@ -1,10 +1,12 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { expect, test, vi } from 'vitest'
-import { NotAllowedError, type FetchImpl } from '../../http/allowlist-client'
-import { fetchTransport } from '../../http/transport'
-import { createTBankClient, TBANK_ALLOWED } from './client'
-import { checkSession, fetchAccounts, fetchOperations, SessionExpiredError } from './index'
+import { fetchTransport, type Transport } from '../../http/transport'
+import type { BrowserSession, LoginPrompt } from '../../core/contract'
+import { createTBankClient } from './client'
+import { checkSession, createTBankPlugin, fetchAccounts, fetchOperations, SessionExpiredError } from './index'
+
+type FetchImpl = NonNullable<Parameters<typeof fetchTransport>[0]>
 
 function readFixtureText(name: string): string {
   const path = fileURLToPath(new URL(`../../../tests/fixtures/${name}`, import.meta.url))
@@ -58,7 +60,7 @@ test('сумма с числом значащих цифр за пределам
   // предыдущая версия этого теста подавала toOperations объект, где value уже
   // строка, минуя parseLossless — тест бил мимо шва, который и должен ловить
   // подмену parseLossless на обычный JSON.parse. Здесь проходит полный путь:
-  // фикстура-текст → AllowlistClient → parseLossless → toOperations
+  // фикстура-текст → BankClient → parseLossless → toOperations
   const fetchImpl = vi.fn(async () => jsonResponse(readFixtureText('operations.json')))
   const client = createTBankClient('token', { transport: fetchTransport(fetchImpl as unknown as FetchImpl) })
 
@@ -186,20 +188,45 @@ test('нечисловой millisLeft — обычная ошибка, а не S
   await expect(checkSession(client)).rejects.not.toBeInstanceOf(SessionExpiredError)
 })
 
-test('клиент отказывается ходить по неразрешённому пути — allowlist реально ограничивает', async () => {
-  const fetchImpl = vi.fn()
-  const client = createTBankClient('token', { transport: fetchTransport(fetchImpl as unknown as FetchImpl) })
+const ALIVE_SESSION = JSON.stringify({ resultCode: 'OK', payload: { accessLevel: 'CLIENT', millisLeft: 60_000 } })
 
-  await expect(client.getJson('/api/common/v1/transfer')).rejects.toBeInstanceOf(NotAllowedError)
-  expect(fetchImpl).not.toHaveBeenCalled()
+function recordingTransport(body: string): { transport: Transport; urls: URL[] } {
+  const urls: URL[] = []
+  const transport: Transport = {
+    async send(url) {
+      urls.push(url)
+      return { status: 200, ok: true, text: async () => body }
+    },
+  }
+  return { transport, urls }
+}
+
+test('плагин ходит в банк через переданный транспорт, а не через собственный', async () => {
+  const { transport, urls } = recordingTransport(ALIVE_SESSION)
+  const plugin = createTBankPlugin({ transport })
+
+  expect(await plugin.isAlive({ kind: 'query', name: 'sessionid', value: 'tok' })).toBe(true)
+
+  expect(urls.map((url) => `${url.origin}${url.pathname}`)).toEqual(['https://www.tbank.ru/api/common/v1/session_status'])
+  expect(urls[0]?.searchParams.get('sessionid')).toBe('tok')
 })
 
-test('TBANK_ALLOWED содержит ровно пять задокументированных адресов, все на чтение', () => {
-  expect(TBANK_ALLOWED).toEqual([
-    { path: '/api/common/v1/accounts_light_ib', method: 'GET' },
-    { path: '/api/common/v1/session_status', method: 'GET' },
-    { path: '/mybank/api/operations/timeline/public/legacy/v1/operations', method: 'GET' },
-    { path: '/mybank/api/operations/timeline/public/legacy/v1/operations_category_list_bank', method: 'GET' },
-    { path: '/mybank/api/operations/timeline/public/legacy/v1/operations_category_list_user', method: 'GET' },
-  ])
+test('проверка живости токена при входе тоже идёт через переданный транспорт', async () => {
+  const { transport, urls } = recordingTransport(ALIVE_SESSION)
+  const plugin = createTBankPlugin({ transport })
+  // фоновое обновление сразу отдаёт свежую куку — видимое окно не нужно
+  const session: BrowserSession = {
+    async goto() {},
+    async clearCookie() {},
+    async cookies() {
+      return [{ name: 'psid', value: 'fresh' }]
+    },
+    async waitForUrl() {},
+  }
+  const prompt: LoginPrompt = { withBrowser: (use) => use(session) }
+
+  const credentials = await plugin.login(prompt)
+
+  expect(credentials).toEqual({ kind: 'query', name: 'sessionid', value: 'fresh' })
+  expect(urls.map((url) => url.searchParams.get('sessionid'))).toEqual(['fresh'])
 })

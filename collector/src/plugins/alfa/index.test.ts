@@ -36,7 +36,7 @@ function routingTransport(routes: Routes): { transport: Transport; posts: unknow
 
 function pluginWith(routes: Routes) {
   const { transport, posts } = routingTransport(routes)
-  return { plugin: createAlfaPlugin({ ca: 'unused', transport }), posts }
+  return { plugin: createAlfaPlugin({ transport }), posts }
 }
 
 test('isAlive: 200 — жива, 302 — мертва, прочий статус — проброс', async () => {

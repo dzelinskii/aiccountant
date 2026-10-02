@@ -16,10 +16,33 @@ SESSION_COOKIE = "session"
 
 
 def token_scope(request: Request) -> uuid.UUID | None:
-    """Workspace, для которого выдан токен текущего запроса; None — сессия из
-    браузера. Публичная: нужна не только зависимостям здесь (запрет действий),
-    но и роутеру — сузить выдачу /api/me до своего workspace."""
+    """Workspace, для которого выдан токен текущего запроса; None — сессия
+    человека (кука или заголовок Session). Публичная: нужна не только
+    зависимостям здесь (запрет действий), но и роутеру — сузить выдачу /api/me
+    до своего workspace."""
     return getattr(request.state, "token_workspace_id", None)
+
+
+def session_from_header(authorization: str | None) -> str | None:
+    """Токен сессии из `Authorization: Session <токен>`; None — заголовок не про
+    сессию. Нужен двоим: входу по заголовку и выходу, который обязан закрыть
+    именно предъявленную сессию."""
+    if authorization is None:
+        return None
+    scheme, _, raw = authorization.partition(" ")
+    if scheme.lower() != "session" or not raw.strip():
+        return None
+    return raw.strip()
+
+
+async def _user_by_session(db: AsyncSession, redis: Redis, token: str) -> User:
+    user_id = await get_session_user_id(redis, token)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="Сессия истекла")
+    user = await db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Пользователь не найден")
+    return user
 
 
 async def get_current_user(
@@ -29,11 +52,18 @@ async def get_current_user(
     session: Annotated[str | None, Cookie()] = None,
     authorization: Annotated[str | None, Header()] = None,
 ) -> User:
-    # программный доступ (коллектор, боты) — по токену; браузер — по куке сессии.
+    # программный доступ (коллектор, боты) — по токену; человек — по
+    # серверной сессии: кука в браузере, заголовок Session в приложении.
     # если заголовок Authorization вообще присутствует, на куку не откатываемся —
     # иначе исполнитель запроса зависит от форматирования заголовка, а не от
     # факта авторизации
     if authorization is not None:
+        # приложение (десктоп, телефон) предъявляет ту же серверную сессию, что
+        # браузер держит в cookie: это человек, а не машинный токен, поэтому
+        # token_workspace_id не выставляется и запреты для токенов его не касаются
+        session_token = session_from_header(authorization)
+        if session_token is not None:
+            return await _user_by_session(db, redis, session_token)
         scheme, _, raw = authorization.partition(" ")
         if scheme.lower() != "bearer" or not raw.strip():
             raise HTTPException(status_code=401, detail="Неверный токен")
@@ -48,13 +78,7 @@ async def get_current_user(
         return user
     if session is None:
         raise HTTPException(status_code=401, detail="Не авторизован")
-    user_id = await get_session_user_id(redis, session)
-    if user_id is None:
-        raise HTTPException(status_code=401, detail="Сессия истекла")
-    session_user = await db.get(User, user_id)
-    if session_user is None:
-        raise HTTPException(status_code=401, detail="Пользователь не найден")
-    return session_user
+    return await _user_by_session(db, redis, session)
 
 
 async def require_session_user(
@@ -63,7 +87,7 @@ async def require_session_user(
     """Действия, расширяющие доступ, машинному токену запрещены: иначе утёкший
     токен превращается в постоянный доступ, который отзывом уже не убрать."""
     if token_scope(request) is not None:
-        raise HTTPException(status_code=403, detail="Действие доступно только из браузера")
+        raise HTTPException(status_code=403, detail="Действие недоступно API-токену")
     return user
 
 

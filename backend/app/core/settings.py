@@ -11,7 +11,13 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     session_ttl_days: int = 30
     cookie_secure: bool = False
-    allowed_origins: list[str] = ["http://localhost:5173"]
+    # origin'ы, которым разрешены изменяющие запросы и CORS: dev-сервер Vite и
+    # окно Tauri (его адрес зависит от платформы — отсюда два варианта)
+    allowed_origins: list[str] = [
+        "http://localhost:5173",
+        "http://tauri.localhost",
+        "tauri://localhost",
+    ]
 
     # LLM-слой: OpenAI-совместимый эндпоинт (облако по умолчанию; Ollama — иной base_url)
     llm_base_url: str = "https://api.openai.com/v1"

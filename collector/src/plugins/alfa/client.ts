@@ -1,31 +1,18 @@
-import { AllowlistClient } from '../../http/allowlist-client'
-import type { AllowedEndpoint, Credentials } from '../../http/allowlist-client'
+import { BankClient } from '../../http/bank-client'
+import type { Credentials } from '../../http/bank-client'
 import type { Transport } from '../../http/transport'
-import { httpsTransport } from '../../http/transport'
 
 export const ALFA_BASE = 'https://web.alfabank.ru'
 
-// Пути ручек — источник истины один: и allowlist, и вызывающий код (index.ts)
-// собираются из этих констант. GET /account/ обязателен со слэшем — без него
-// банк отвечает 404 (разведка §5).
+// Пути ручек. Оболочка пускает только адреса из своего списка
+// (desktop/src-tauri/src/banks.rs): новая ручка без строки там упрётся в отказ.
+// GET /account/ обязателен со слэшем — без него банк отвечает 404 (разведка §5).
 export const OPERATIONS_PATH = '/api/v1/operations-history/operations'
 export const ACCOUNTS_PATH = '/api/v1/account/'
 export const CARDS_PATH = '/api/v1/cards/masked-cards'
 
-// Три адреса — весь набор возможностей коллектора по Альфе.
-//
-// Та же оговорка, что у Сбера: история идёт по POST, поэтому «методом на чтение
-// ничего не сломать» здесь не аргумент — гарантией остаётся сам список адресов,
-// и все три читающие.
-export const ALFA_ALLOWED: readonly AllowedEndpoint[] = [
-  { path: OPERATIONS_PATH, method: 'POST' },
-  { path: ACCOUNTS_PATH, method: 'GET' },
-  { path: CARDS_PATH, method: 'GET' },
-]
-
 interface CreateOptions {
-  ca: string
-  transport?: Transport
+  transport: Transport
   timeoutMs?: number
 }
 
@@ -35,17 +22,15 @@ interface CreateOptions {
  * повториться в заголовке X-XSRF-TOKEN. Извлекаем его из самой строки Cookie —
  * так второй копии секрета не заводим, и заголовок не разъедется с кукой.
  */
-export function createAlfaClient(credentials: Credentials, { ca, transport, timeoutMs }: CreateOptions): AllowlistClient {
+export function createAlfaClient(credentials: Credentials, { transport, timeoutMs }: CreateOptions): BankClient {
   if (credentials.kind !== 'header') {
     throw new Error('Альфа ожидает секрет заголовком Cookie — сохранённая запись не той формы')
   }
   const cookie = credentials.value
-  return new AllowlistClient({
+  return new BankClient({
     baseUrl: ALFA_BASE,
-    allowed: ALFA_ALLOWED,
     credentials: { kind: 'headers', headers: { [credentials.name]: cookie, 'X-XSRF-TOKEN': xsrfFromCookie(cookie) } },
-    // корень УЦ Минцифры — тот же, что у Сбера; заменяет системный набор
-    transport: transport ?? httpsTransport(ca),
+    transport,
     timeoutMs,
   })
 }

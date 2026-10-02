@@ -3,6 +3,7 @@ import { useDisclosure } from '@mantine/hooks'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { NavLink as RouterNavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { getMe, logout } from './api/auth'
+import { isDesktop } from './desktop/runtime'
 
 const LINKS = [
   { to: '/', label: 'Дашборд' },
@@ -14,17 +15,26 @@ const LINKS = [
   { to: '/import', label: 'Импорт' },
 ]
 
+// сбор из банков исполняется в оболочке; в браузере экрана нет
+const DESKTOP_LINKS = [{ to: '/banks', label: 'Банки' }]
+
 export function AppLayout() {
   const [opened, { toggle }] = useDisclosure()
   const location = useLocation()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const { data: me } = useQuery({ queryKey: ['me'], queryFn: getMe })
+  const leave = () => {
+    queryClient.clear()
+    navigate('/login')
+  }
   const logoutMutation = useMutation({
     mutationFn: logout,
-    onSuccess: () => {
-      queryClient.clear()
-      navigate('/login')
+    onSuccess: leave,
+    // в приложении токен стёрт и при отказе сервера, так что оставаться на
+    // экранах нечем; в браузере cookie жива, и уходить со страницы нельзя
+    onError: () => {
+      if (isDesktop()) leave()
     },
   })
 
@@ -47,7 +57,7 @@ export function AppLayout() {
         </Group>
       </AppShell.Header>
       <AppShell.Navbar p="md">
-        {LINKS.map((l) => (
+        {(isDesktop() ? [...LINKS, ...DESKTOP_LINKS] : LINKS).map((l) => (
           <NavLink
             key={l.to}
             component={RouterNavLink}

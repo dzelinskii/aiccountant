@@ -1,0 +1,21 @@
+{
+  "identifier": "default",
+  "description": "Окно приложения. Окна банков сюда не входят намеренно.",
+  "windows": ["main"],
+  "permissions": [
+    "allow-bank-request",
+    "allow-secret-session-read",
+    "allow-secret-session-write",
+    "allow-secret-session-clear",
+    "allow-app-token-read",
+    "allow-app-token-write",
+    "allow-app-token-clear",
+    "allow-bank-window-open",
+    "allow-bank-window-goto",
+    "allow-bank-window-url",
+    "allow-bank-window-cookies",
+    "allow-bank-window-clear-cookie",
+    "allow-bank-window-close",
+    "allow-bank-forget"
+  ]
+}

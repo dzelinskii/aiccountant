@@ -145,6 +145,7 @@ async def test_token_cannot_create_token(client: AsyncClient) -> None:
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 403
+    assert resp.json()["detail"] == "Действие недоступно API-токену"
 
 
 async def test_token_cannot_add_member(client: AsyncClient) -> None:

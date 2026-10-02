@@ -1,0 +1,19 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "AIccountant",
+  "version": "0.1.0",
+  "identifier": "ru.aiccountant.desktop",
+  "build": {
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../../frontend/dist",
+    "beforeDevCommand": "pnpm --dir ../frontend dev",
+    "beforeBuildCommand": "pnpm --dir ../frontend build"
+  },
+  "app": {
+    "windows": [{ "label": "main", "title": "AIccountant", "width": 1280, "height": 800 }],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost https: http:"
+    }
+  },
+  "bundle": { "active": false, "icon": ["icons/icon.png", "icons/icon.ico"] }
+}
