@@ -15,6 +15,7 @@ import { login } from '../api/auth'
 import { ApiError } from '../api/client'
 import { serverUrl, setServerUrl } from '../desktop/connection'
 import { isDesktop } from '../desktop/runtime'
+import { useCollectStore } from '../store/collect'
 
 // в приложении сбой не от сервера (нет связи, опечатка в адресе, сбой хранилища
 // ОС) общим «попробуйте ещё раз» не объяснить — показываем причину
@@ -48,6 +49,9 @@ export function LoginPage() {
       return login(values.email, values.password)
     },
     onSuccess: async () => {
+      // на вход попадают и без выхода — по истёкшей сессии; итоги сборов прежнего
+      // пользователя вошедшему не показываются
+      useCollectStore.getState().reset()
       await queryClient.invalidateQueries({ queryKey: ['me'] })
       navigate('/')
     },
