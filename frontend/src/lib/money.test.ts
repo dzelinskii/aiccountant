@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { formatMoney } from './money'
+import { debtAmount, formatMoney } from './money'
 
 test('форматирует строковую сумму в валюте счёта', () => {
   const s = formatMoney('-500.0000', 'RUB')
@@ -10,4 +10,15 @@ test('форматирует строковую сумму в валюте сч�
 
 test('ноль форматируется без ошибок', () => {
   expect(formatMoney('0.0000', 'RUB')).toContain('0')
+})
+
+test('долг — это отрицательная сумма без знака, строкой', () => {
+  expect(debtAmount('-2000.4700')).toBe('2000.4700')
+  expect(debtAmount('-0.0100')).toBe('0.0100')
+})
+
+test('нулевая и положительная суммы долгом не считаются', () => {
+  expect(debtAmount('0.0000')).toBeNull()
+  expect(debtAmount('-0.0000')).toBeNull()
+  expect(debtAmount('500.0000')).toBeNull()
 })

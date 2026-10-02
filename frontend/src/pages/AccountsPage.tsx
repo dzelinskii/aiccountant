@@ -15,8 +15,15 @@ import {
 } from '../api/ledger'
 import { AccountBalance } from '../components/AccountBalance'
 import { ACCOUNT_TYPES, accountLabel, groupAccountsByBank } from '../lib/account'
-import { formatMoney } from '../lib/money'
+import { debtAmount, formatMoney } from '../lib/money'
 import { useWorkspaceStore } from '../store/workspace'
+
+// У найденного банком счёта признака кредитки нет, поэтому долг определяется по
+// знаку остатка: «−133 330,18 ₽» без слова читается как сумма на карте.
+function formatDiscoveredBalance(balance: string, currency: string): string {
+  const debt = debtAmount(balance)
+  return debt !== null ? `долг ${formatMoney(debt, currency)}` : formatMoney(balance, currency)
+}
 
 export function AccountsPage() {
   const ws = useWorkspaceStore((s) => s.workspaceId)!
@@ -203,7 +210,7 @@ export function AccountsPage() {
                 </div>
                 <Group>
                   {item.balance && item.currency && (
-                    <Text fw={700}>{formatMoney(item.balance, item.currency)}</Text>
+                    <Text fw={700}>{formatDiscoveredBalance(item.balance, item.currency)}</Text>
                   )}
                   {unlinkedAccounts.length > 0 && (
                     <Button variant="default" size="xs" onClick={() => openLinkModal(item)}>
