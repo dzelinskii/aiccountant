@@ -1,4 +1,5 @@
 import { expect, test } from 'vitest'
+import { ACCOUNT_NOTES } from '../../core/account-notes'
 import { BankHttpError } from '../../http/bank-client'
 import type { Transport } from '../../http/transport'
 import { SBER_BASE } from './client'
@@ -299,6 +300,48 @@ test('отказ cardInfo не роняет список счетов — кре
   expect(accounts[0]?.id).toBe('card:3300131089810779')
 })
 
+// Четыре карты разом: пояснение обязано лечь ровно тем счетам, чьих долгов нет,
+// а не первому счёту и не всем кредиткам подряд
+function mixedCardsResponseBody(): string {
+  const card = (id: string, type: string): string =>
+    `{"id":${id},"name":"Карта ${id}","type":"${type}","availableLimit":{"amount":"100.00","currency":{"code":"RUB"}}}`
+  const cards = [
+    card('1001', 'debit'),
+    card('3300131089810779', 'credit'),
+    card('2200000000000001', 'credit'),
+    // больше Number.MAX_SAFE_INTEGER: такой идентификатор в запрос не уходит
+    card('99999999999999999999', 'credit'),
+  ]
+  return `{"body":{"sections":{"technicalSection":{"sectionProductData":{"cardsInWallet":{"data":[${cards.join(',')}]}}}}}}`
+}
+
+test('пояснение о неполученном остатке — у счёта той кредитки, по которой отказала cardInfo или не ушёл запрос', async () => {
+  const cardInfoBodies: string[] = []
+  const transport: Transport = {
+    async send(url, options) {
+      if (url.pathname !== '/ufs-carddetail/rest/card/v1/cardInfo') {
+        return { status: 200, ok: true, text: async () => mixedCardsResponseBody() }
+      }
+      cardInfoBodies.push(options.body ?? '')
+      if (options.body?.includes('3300131089810779')) return { status: 500, ok: false, text: async () => '' }
+      return { status: 200, ok: true, text: async () => cardInfoBody() }
+    },
+  }
+  const plugin = createSberPlugin({ transport })
+
+  const accounts = await plugin.fetchAccounts(CREDENTIALS)
+
+  // непредставимый идентификатор банку не отправлялся вовсе
+  expect(cardInfoBodies).toEqual(['{"cardIds":[3300131089810779]}', '{"cardIds":[2200000000000001]}'])
+  expect(accounts.map((account) => [account.id, account.notes])).toEqual([
+    ['card:1001', []],
+    ['card:3300131089810779', [ACCOUNT_NOTES.creditBalanceMissing]],
+    ['card:2200000000000001', []],
+    ['card:99999999999999999999', [ACCOUNT_NOTES.creditBalanceMissing]],
+  ])
+  expect(accounts[2]?.balance).toBe('-147601.23')
+})
+
 test('fetchAccounts разбирает вложенный ответ и уходит POST-ом на нужный адрес', async () => {
   const requests: Array<{ url: URL; method: string }> = []
   const transport: Transport = {
@@ -312,7 +355,7 @@ test('fetchAccounts разбирает вложенный ответ и уход
   const accounts = await plugin.fetchAccounts(CREDENTIALS)
 
   expect(accounts).toEqual([
-    { id: 'card:card-1', name: 'Дебетовая карта', type: 'debit', currency: 'RUB', balance: '1000.50', creditLimit: null, cardMasks: ['1234'] },
+    { id: 'card:card-1', name: 'Дебетовая карта', type: 'debit', currency: 'RUB', balance: '1000.50', creditLimit: null, cardMasks: ['1234'], notes: [] },
   ])
   expect(requests).toHaveLength(1)
   expect(requests[0]?.method).toBe('POST')

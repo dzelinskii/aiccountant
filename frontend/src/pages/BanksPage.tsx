@@ -51,6 +51,9 @@ function AccountLine({ result, name }: { result: AccountResult; name: string }) 
       {counters.unrefinedIncome > 0 && (
         <Text size="xs" c="dimmed">приход не разобран у {counters.unrefinedIncome}</Text>
       )}
+      {result.notes.map((note) => (
+        <Text key={note} size="xs" c="dimmed">{note}</Text>
+      ))}
     </Stack>
   )
 }

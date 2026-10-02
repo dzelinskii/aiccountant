@@ -88,6 +88,7 @@ function toAccount(item: unknown): CollectedAccount {
     balance: resolveBalance(item),
     creditLimit: resolveCreditLimit(item),
     cardMasks: resolveCardMasks(item),
+    notes: [],
   }
 }
 

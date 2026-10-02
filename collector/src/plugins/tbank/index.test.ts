@@ -32,8 +32,9 @@ test('fetchAccounts приводит счета к нашей модели', asy
       balance: '10000.50',
       creditLimit: null,
       cardMasks: ['1234'],
+      notes: [],
     },
-    { id: 'acc-2', name: 'Накопительный', type: 'Saving', currency: 'RUB', balance: '500', creditLimit: null, cardMasks: [] },
+    { id: 'acc-2', name: 'Накопительный', type: 'Saving', currency: 'RUB', balance: '500', creditLimit: null, cardMasks: [], notes: [] },
   ])
 })
 

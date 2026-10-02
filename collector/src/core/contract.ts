@@ -1,5 +1,6 @@
 export type { Credentials } from '../http/bank-client'
 import type { Credentials } from '../http/bank-client'
+import type { AccountNote } from './account-notes'
 
 /** Операция в том виде, в каком её принимает наше приложение. */
 export interface CollectedOperation {
@@ -30,6 +31,11 @@ export interface CollectedAccount {
   creditLimit: string | null
   /** Последние четыре символа номеров карт; пусто, если карт нет. */
   cardMasks: string[]
+  /**
+   * Пояснения сбора по этому счёту; пусто — пояснять нечего. Живут только в
+   * итоге сбора: в приложение они не отправляются.
+   */
+  notes: AccountNote[]
 }
 
 /**

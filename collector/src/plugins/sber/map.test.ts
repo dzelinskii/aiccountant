@@ -1,4 +1,5 @@
 import { expect, test } from 'vitest'
+import { ACCOUNT_NOTES } from '../../core/account-notes'
 import { parseLossless } from '../../http/lossless-json'
 import { toAccounts, toOperations } from './map'
 
@@ -199,9 +200,9 @@ function creditCard(overrides: Record<string, unknown> = {}): Record<string, unk
     // доступный лимит включает заёмные деньги — намеренно отличается от
     // остатка, чтобы тест ловил использование не того поля
     availableLimit: { amount: '90000.00', currency: { code: 'RUB' } },
-    // поле самой карты (section/meta → cardsInWallet), а не вложенный блок
-    // creditType — тот приходит только с отдельной ручки cardInfo, которую
-    // коллектор не вызывает
+    // поле самой карты (section/meta → cardsInWallet): в остаток оно не идёт —
+    // тот считается из блока creditType, который приходит ручкой cardInfo
+    // (см. creditInfo ниже); здесь оно ловит использование не того поля
     creditOwnSum: { amount: '250.00', currency: { code: 'RUB' } },
     ...overrides,
   }
@@ -217,6 +218,7 @@ test('карта превращается в счёт с идентификат�
     balance: '1500.55',
     creditLimit: null,
     cardMasks: ['1234'],
+    notes: [],
   })
 })
 
@@ -278,6 +280,27 @@ test('долг не пришёл — остаток кредитки null, а н
   const withoutDebt = new Map([['3300131089810779', { creditOwnSum: { amount: '250.00' } }]])
   expect(toAccounts(parse([creditCard()]) as Record<string, unknown>[], withoutDebt)[0]?.balance).toBeNull()
   expect(toAccounts(parse([creditCard()]) as Record<string, unknown>[])[0]?.balance).toBeNull()
+})
+
+test('кредитка без остатка несёт пояснение, и неважно, почему остатка нет', () => {
+  // блок пришёл без долга — такой же неполученный остаток, как и отказ ручки
+  const withoutDebt = new Map([['3300131089810779', { creditOwnSum: { amount: '250.00' } }]])
+  expect(toAccounts(parse([creditCard()]) as Record<string, unknown>[], withoutDebt)[0]?.notes).toEqual([
+    ACCOUNT_NOTES.creditBalanceMissing,
+  ])
+  expect(toAccounts(parse([creditCard()]) as Record<string, unknown>[])[0]?.notes).toEqual([ACCOUNT_NOTES.creditBalanceMissing])
+  expect(toAccounts(parse([creditCard()]) as Record<string, unknown>[], creditInfo())[0]?.notes).toEqual([])
+})
+
+test('пояснение о долге — только у кредитки: прочие счета без остатка его не получают', () => {
+  // у дебетовой и у незнакомого типа долга не бывает, и пояснение про него
+  // объясняло бы не ту причину
+  const debit = toAccounts(parse([debitCard({ availableLimit: undefined })]) as Record<string, unknown>[])[0]
+  const unknown = toAccounts(parse([creditCard({ type: 'business' })]) as Record<string, unknown>[])[0]
+  expect(debit?.balance).toBeNull()
+  expect(debit?.notes).toEqual([])
+  expect(unknown?.balance).toBeNull()
+  expect(unknown?.notes).toEqual([])
 })
 
 test('вычитание идёт без float: разряды не теряются на больших суммах', () => {

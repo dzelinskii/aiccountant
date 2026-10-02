@@ -10,6 +10,7 @@ import {
   type AccountResult,
   type CollectSummary,
 } from 'aiccountant-collector/src/app'
+import { ACCOUNT_NOTES } from 'aiccountant-collector/src/core/account-notes'
 import type { Account } from '../api/ledger'
 import { getAccounts, getBanks } from '../api/ledger'
 import { collectFromApp, forgetBank } from '../desktop/collector-host'
@@ -36,7 +37,7 @@ const account = (id: string, name: string, bankCode: string | null, linked: bool
 const noCounters = { unknownKinds: 0, missingHints: 0, purchases: 0, unrefinedIncome: 0 }
 
 const result = (over: Partial<AccountResult> = {}): AccountResult => ({
-  appAccountId: 'a-sber', collected: 3, importId: 'imp-1', counters: noCounters, error: null, ...over,
+  appAccountId: 'a-sber', collected: 3, importId: 'imp-1', counters: noCounters, error: null, notes: [], ...over,
 })
 
 const summary = (over: Partial<CollectSummary> = {}): CollectSummary => ({
@@ -271,6 +272,30 @@ test('счётчики расхождений: ненулевой виден, н
   expect(await row('sber').findByText(/вид операции не распознан у 4/)).toBeDefined()
   expect(row('sber').queryByText(/категория не определена/)).toBeNull()
   expect(row('sber').queryByText(/приход не разобран/)).toBeNull()
+})
+
+test('пояснение сбора по счёту видно в итоге рядом со счётчиками', async () => {
+  // без него кредитка без остатка выглядит как «остаток не обновился» без причины
+  const note = ACCOUNT_NOTES.creditBalanceMissing
+  vi.mocked(collectFromApp).mockResolvedValue(summary({ accounts: [result({ notes: [note] })] }))
+  await renderPage()
+
+  await userEvent.click(row('sber').getByRole('button', { name: 'Собрать' }))
+
+  expect(await row('sber').findByText(note)).toBeDefined()
+})
+
+test('пояснение видно и у счёта с отказом: оно о счёте, а не об операциях', async () => {
+  const note = ACCOUNT_NOTES.creditBalanceMissing
+  vi.mocked(collectFromApp).mockResolvedValue(
+    summary({ accounts: [result({ collected: 0, importId: null, error: 'банк отказал', notes: [note] })] }),
+  )
+  await renderPage()
+
+  await userEvent.click(row('sber').getByRole('button', { name: 'Собрать' }))
+
+  expect(await row('sber').findByText(/банк отказал/)).toBeDefined()
+  expect(row('sber').getByText(note)).toBeDefined()
 })
 
 test('сбор банка целиком провалился: «Имя банка: текст»', async () => {

@@ -1,5 +1,6 @@
 import { expect, test, vi } from 'vitest'
 import type { FetchImpl } from './app-api'
+import { ACCOUNT_NOTES } from '../core/account-notes'
 import type { CollectedAccount, CollectedOperation } from '../core/contract'
 import type { AppConnection } from './app-connection'
 import { pushOperations } from './push'
@@ -32,6 +33,7 @@ const ACCOUNT: CollectedAccount = {
   balance: '10000.50',
   creditLimit: null,
   cardMasks: ['1234'],
+  notes: [],
 }
 
 function jsonResponse(body: unknown, status: number): Response {
@@ -87,6 +89,28 @@ test('остаток и метки карт уходят блоком про с�
   // у счёта без лимита ключа нет вовсе, а не лежит null: форма сохранённого
   // разбора у дебетовых счетов остаётся такой же, какой была до лимитов
   expect(sentBody(fetchImpl)['account']).not.toHaveProperty('credit_limit')
+})
+
+test('пояснения сбора по счёту в приложение не отправляются', async () => {
+  // они живут только в итоге сбора; договор API о них не знает
+  const fetchImpl = vi.fn<FetchImpl>(async () => jsonResponse({ import_id: 'imp-1', status: 'ready' }, 201))
+
+  // в бою пояснение приходит у счёта без остатка, то есть без блока про счёт
+  const noted: CollectedAccount = { ...ACCOUNT, balance: null, notes: [ACCOUNT_NOTES.creditBalanceMissing] }
+  await pushOperations(CONFIG, 'sber', 'acc-app', OPERATIONS, noted, fetchImpl)
+
+  expect(Object.keys(sentBody(fetchImpl)).sort()).toEqual(['operations', 'parser'])
+  expect(JSON.stringify(sentBody(fetchImpl))).not.toContain(ACCOUNT_NOTES.creditBalanceMissing)
+})
+
+test('пояснения не уезжают и в блоке про счёт, когда остаток есть', async () => {
+  const fetchImpl = vi.fn<FetchImpl>(async () => jsonResponse({ import_id: 'imp-1', status: 'ready' }, 201))
+
+  const noted: CollectedAccount = { ...ACCOUNT, notes: [ACCOUNT_NOTES.creditBalanceMissing] }
+  await pushOperations(CONFIG, 'sber', 'acc-app', OPERATIONS, noted, fetchImpl)
+
+  expect(Object.keys(sentBody(fetchImpl)).sort()).toEqual(['account', 'operations', 'parser'])
+  expect(sentBody(fetchImpl)['account']).toEqual({ balance: '10000.50', card_masks: ['1234'] })
 })
 
 test('кредитный лимит уезжает вместе с остатком', async () => {

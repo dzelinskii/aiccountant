@@ -458,8 +458,9 @@ test('toAccounts приводит счета к нашей модели', () => 
       balance: '10000.50',
       creditLimit: null,
       cardMasks: ['1234'],
+      notes: [],
     },
-    { id: 'acc-2', name: 'Накопительный', type: 'Saving', currency: 'RUB', balance: '500', creditLimit: null, cardMasks: [] },
+    { id: 'acc-2', name: 'Накопительный', type: 'Saving', currency: 'RUB', balance: '500', creditLimit: null, cardMasks: [], notes: [] },
   ])
 })
 
@@ -476,8 +477,8 @@ test('счёт с незнакомым числовым кодом валюты 
     { id: 'acc-1', name: 'Счёт для трат', accountType: 'Current', currency: { strCode: '643' } },
   ])
   expect(accounts).toEqual([
-    { id: 'acc-x', name: 'Валютный счёт', type: 'Current', currency: null, balance: null, creditLimit: null, cardMasks: [] },
-    { id: 'acc-1', name: 'Счёт для трат', type: 'Current', currency: 'RUB', balance: null, creditLimit: null, cardMasks: [] },
+    { id: 'acc-x', name: 'Валютный счёт', type: 'Current', currency: null, balance: null, creditLimit: null, cardMasks: [], notes: [] },
+    { id: 'acc-1', name: 'Счёт для трат', type: 'Current', currency: 'RUB', balance: null, creditLimit: null, cardMasks: [], notes: [] },
   ])
 })
 

@@ -1,4 +1,5 @@
 import { expect, test, vi } from 'vitest'
+import { ACCOUNT_NOTES } from '../core/account-notes'
 import type { CollectedAccount } from '../core/contract'
 import type { FetchImpl } from './app-api'
 import type { AppConnection } from './app-connection'
@@ -19,6 +20,7 @@ function account(id: string, extra: Partial<CollectedAccount> = {}): CollectedAc
     balance: '1000.00',
     creditLimit: null,
     cardMasks: ['1234'],
+    notes: [],
     ...extra,
   }
 }
@@ -45,6 +47,17 @@ test('банковский тип счёта в приложение не отп
 
   const [, init] = vi.mocked(fetchImpl).mock.calls[0]!
   expect(JSON.parse(String(init?.body)).accounts[0]).not.toHaveProperty('type')
+})
+
+test('пояснения сбора по счёту в приложение не отправляются', async () => {
+  // они живут только в итоге сбора; договор API о них не знает
+  const fetchImpl = ok({ linked: {} })
+  await syncDiscovered(config, 'alfa', [account('acc-1', { notes: [ACCOUNT_NOTES.creditBalanceMissing] })], fetchImpl)
+
+  const [, init] = vi.mocked(fetchImpl).mock.calls[0]!
+  expect(Object.keys(JSON.parse(String(init?.body)).accounts[0]).sort()).toEqual(
+    ['balance', 'card_masks', 'currency', 'fingerprint', 'name'],
+  )
 })
 
 test('привязки возвращаются по идентификатору счёта банка, а не по отпечатку', async () => {

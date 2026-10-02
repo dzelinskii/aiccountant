@@ -165,6 +165,14 @@ test('счёт: id = номер, остаток из total, валюта RUB, м
   expect(current?.cardMasks.slice().sort()).toEqual(['0149', '7342'])
 })
 
+test('пояснений по счетам Альфа не даёт — и у кредитки тоже', () => {
+  // чистая позиция приходит готовым полем счёта: отдельного запроса, который
+  // мог бы отказать, у Альфы нет
+  const accounts = accountsFrom(ACCOUNTS, CARDS)
+  expect(accounts.length).toBeGreaterThan(0)
+  expect(accounts.map((account) => account.notes)).toEqual(accounts.map(() => []))
+})
+
 test('остаток кредитки берётся из total (минус при долге), а не из amount', () => {
   const credit = accountsFrom(ACCOUNTS, CARDS).find((a) => a.id === '40817810000000000686')
   // total = -51025.00 (долг), amount = 1975.00 (доступно к трате). Взяв amount,

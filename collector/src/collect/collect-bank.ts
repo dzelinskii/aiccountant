@@ -1,3 +1,4 @@
+import type { AccountNote } from '../core/account-notes'
 import type { BankPlugin, CollectedAccount, Credentials, LoginPrompt } from '../core/contract'
 import type { FetchImpl } from './app-api'
 import { AppHttpError } from './app-api'
@@ -38,6 +39,8 @@ export interface AccountResult {
   counters: CollectedCounters
   /** Отказ по этому счёту; остальные счета собираются дальше. */
   error: string | null
+  /** Пояснения плагина по этому счёту — и при отказе тоже: они о счёте, а не об операциях. */
+  notes: AccountNote[]
 }
 
 export interface CollectSummary {
@@ -144,6 +147,7 @@ async function collectAccount(
       importId: pushed?.import_id ?? null,
       counters: countCollected(operations),
       error: null,
+      notes: account.notes,
     }
   } catch (error) {
     // кончилась сессия приложения — дальше каждый счёт получит тот же отказ;
@@ -157,6 +161,7 @@ async function collectAccount(
       importId: null,
       counters: countCollected([]),
       error: error instanceof Error ? error.message : String(error),
+      notes: account.notes,
     }
   }
 }
