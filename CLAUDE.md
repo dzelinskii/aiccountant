@@ -170,8 +170,11 @@ worktree — ветку:
   убедительно.
 - Меняете поведение — правьте справочник в том же изменении. CI это требует:
   правка `*/service.py`, `app/core/*`, `collector/src/core/*`,
-  `plugins/*/map.ts` или `desktop/src-tauri/src/{banks,secrets,windows,http}.rs`
-  без правки `docs/reference/` красит сборку. Снимается
+  `plugins/*/map.ts`, `desktop/src-tauri/src/{banks,secrets,windows,http,lib}.rs`,
+  `desktop/src-tauri/{build.rs,tauri.conf.json,capabilities/default.json}` или
+  `frontend/src/desktop/*` (кроме тестов) без правки `docs/reference/` красит
+  сборку; точный список — `contract=` в задании `docs-gate`,
+  `.github/workflows/ci.yml`. Снимается
   меткой `docs-not-needed` на PR, если правка и правда поведения не меняет.
 - Генерируемую часть (`docs/reference/generated/`) руками не править: её
   перезаписывают `uv run python scripts/gen_reference.py` и `pnpm reference`,

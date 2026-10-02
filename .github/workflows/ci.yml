@@ -95,6 +95,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
       - uses: pnpm/action-setup@v4
         with:
           package_json_file: frontend/package.json
@@ -140,11 +143,11 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           changed=$(git diff --name-only "$BASE_SHA"...HEAD)
-          # Тесты отсеиваем отдельным шагом: коллектор держит их рядом с кодом,
+          # Тесты отсеиваем отдельным шагом: коллектор и фронт держат их рядом с кодом,
           # и без этого правка collector/src/core/*.test.ts требовала бы правки
           # справочника. Ложные срабатывания опаснее пропусков — от них ворота
           # начинают обходить бессмысленной правкой документа
-          contract=$(echo "$changed" | grep -E '^(backend/app/[^/]+/service\.py|backend/app/core/|collector/src/core/|collector/src/plugins/[^/]+/map\.ts|desktop/src-tauri/src/(banks|secrets|windows|http)\.rs)' | grep -vE '\.test\.ts$' || true)
+          contract=$(echo "$changed" | grep -E '^(backend/app/[^/]+/service\.py|backend/app/core/|collector/src/core/|collector/src/plugins/[^/]+/map\.ts|desktop/src-tauri/src/(banks|secrets|windows|http|lib)\.rs|desktop/src-tauri/(build\.rs|tauri\.conf\.json|capabilities/default\.json)|frontend/src/desktop/)' | grep -vE '\.test\.ts$' || true)
           touched_docs=$(echo "$changed" | grep -E '^docs/reference/' || true)
           if [ -n "$contract" ] && [ -z "$touched_docs" ]; then
             echo "Изменились файлы, несущие контракт:"
