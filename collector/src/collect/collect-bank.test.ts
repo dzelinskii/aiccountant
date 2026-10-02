@@ -49,7 +49,12 @@ function sessions(initial: Credentials | null): SessionStore & { saved: Credenti
 }
 
 /** Приложение: привязаны только перечисленные счета; импорты создаются с порядковым id. */
-async function appFetch(linkedIds: string[], failImportFor: string | null = null, importStatus = 422): Promise<FetchImpl> {
+async function appFetch(
+  linkedIds: string[],
+  failImportFor: string | null = null,
+  importStatus = 422,
+  closedFor: string | null = null,
+): Promise<FetchImpl> {
   const linked: Record<string, string> = {}
   for (const id of linkedIds) linked[await accountFingerprint('sber', id)] = `app-${id}`
   let imports = 0
@@ -61,7 +66,8 @@ async function appFetch(linkedIds: string[], failImportFor: string | null = null
       return new Response(JSON.stringify({ detail: 'Валюта не совпадает' }), { status: importStatus })
     }
     imports += 1
-    return new Response(JSON.stringify({ import_id: `imp-${imports}`, status: 'pending' }), { status: 201 })
+    const status = target === closedFor ? 'completed' : 'ready'
+    return new Response(JSON.stringify({ import_id: `imp-${imports}`, status }), { status: 201 })
   }) as unknown as FetchImpl
 }
 
@@ -88,6 +94,14 @@ test('живая сессия — вход не нужен, собираются
     expect.objectContaining({ appAccountId: 'app-a', collected: 1, importId: 'imp-1', error: null }),
   ])
   expect(summary.unboundCount).toBe(1)
+})
+
+test('импорт, который приложение закрыло само, отмечен в итоге — решения он не ждёт', async () => {
+  const summary = await collectBank(host({ fetchImpl: await appFetch(['a', 'b'], null, 422, 'app-a') }))
+  expect(summary.accounts).toEqual([
+    expect.objectContaining({ appAccountId: 'app-a', importId: 'imp-1', importClosed: true }),
+    expect.objectContaining({ appAccountId: 'app-b', importId: 'imp-2', importClosed: false }),
+  ])
 })
 
 test('мёртвая сессия — вход, свежий секрет сохранён, итог говорит о свежем входе', async () => {

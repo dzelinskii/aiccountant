@@ -23,6 +23,7 @@ from app.imports.schemas import (
     ImportOperationOut,
     ImportPreviewOut,
     ImportResultOut,
+    ImportStartedOut,
     ImportStatus,
     ImportStatusOut,
     ParsedAccountIn,
@@ -37,8 +38,9 @@ _MONEY = TypeAdapter(Money)
 
 
 class ImportNotReadyError(Exception):
-    """Импорт существует (в своём workspace), но статус не позволяет подтвердить —
-    это 409, а не 404: сам факт существования уже раскрыт запросом GET /imports/{id}."""
+    """Импорт существует (в своём workspace), но статус не позволяет подтвердить
+    или отклонить — это 409, а не 404: сам факт существования уже раскрыт
+    запросом GET /imports/{id}."""
 
 
 class ImportNotFoundError(Exception):
@@ -292,8 +294,9 @@ async def create_parsed_import(
     parser: str,
     operations: list[ParsedOperationIn],
     account: ParsedAccountIn | None = None,
-) -> Import:
-    """Принять уже разобранные операции: разбирать нечего, сразу ready."""
+) -> ImportStartedOut:
+    """Принять уже разобранные операции: разбирать нечего, сразу ready — или
+    сразу completed, если новых операций в них не оказалось."""
     statement = ParsedStatement(
         operations=[
             ParsedOperation(
@@ -339,8 +342,16 @@ async def create_parsed_import(
     )
     repository.add_import(db, imp)
     await db.commit()
-    logger.info("parsed_import_created", import_id=str(imp.id), operations=len(operations))
-    return imp
+    import_id = imp.id
+    logger.info("parsed_import_created", import_id=str(import_id), operations=len(operations))
+    # повторный сбор за тот же период чаще всего целиком из дублей: такой импорт
+    # ждать нечего, а присланный остаток должен доехать до счёта. Статус берём
+    # из итога прохода, а не из записи: после сбоя прохода сессия откачена, и
+    # объект записи читать уже нельзя
+    closed = await close_duplicate_only_imports(db, workspace_id, account_id)
+    return ImportStartedOut(
+        import_id=import_id, status="completed" if import_id in closed else "ready"
+    )
 
 
 async def run_parse(
@@ -384,6 +395,7 @@ async def run_parse(
     imp.raw_text = None  # PII: дальше работаем с разобранными операциями
     await db.commit()
     logger.info("import_parsed", import_id=str(imp.id), parser=parser_name)
+    await close_duplicate_only_imports(db, imp.workspace_id, imp.account_id)
 
 
 async def mark_import_failed(
@@ -501,7 +513,8 @@ async def get_import_status(
         preview = await _build_preview(db, workspace_id, imp.account_id, payload)
     return ImportStatusOut(
         import_id=imp.id,
-        # значение — из закрытого набора, который сами же и пишем в run_parse/commit_from_import
+        # значение — из закрытого набора, который сами же и пишем в run_parse,
+        # _commit_ready и reject_import
         status=cast(ImportStatus, imp.status),
         parser=imp.parser,
         error=imp.error,
@@ -514,7 +527,7 @@ async def commit_from_import(
     db: AsyncSession, workspace_id: uuid.UUID, import_id: uuid.UUID, user_id: uuid.UUID
 ) -> ImportResultOut:
     """Создать операции из уже разобранного импорта — повторно не парсим."""
-    imp = await repository.get_import(db, workspace_id, import_id)
+    imp = await repository.lock_import(db, workspace_id, import_id)
     if imp is not None and imp.status == "completed":
         # повторный коммит — идемпотентный ответ без пересоздания операций и без
         # переписывания stats (иначе аудит соврёт, что второй раз ничего не импортировали)
@@ -528,11 +541,106 @@ async def commit_from_import(
         raise ImportNotFoundError("импорт не найден")
     if imp.status != "ready" or imp.parsed_payload is None:
         raise ImportNotReadyError("импорт не готов к подтверждению")
-    statement = _payload_to_statement(imp.parsed_payload)
-    ext_ids = _payload_external_ids(imp.parsed_payload, imp.account_id, statement.operations)
+    result = await _commit_ready(db, imp, imp.parsed_payload, user_id)
+    await db.commit()
+    if result.imported:
+        ledger_service.enqueue_categorization(workspace_id)
+    # свежие операции могли сделать дублями соседей по счёту
+    await close_duplicate_only_imports(db, workspace_id, imp.account_id)
+    return result
+
+
+async def close_duplicate_only_imports(
+    db: AsyncSession, workspace_id: uuid.UUID, account_id: uuid.UUID
+) -> set[uuid.UUID]:
+    """Подтвердить готовые импорты счёта, в которых не осталось новых операций;
+    вернуть идентификаторы закрытых.
+
+    Зовётся после того, как основное действие — приём, разбор, подтверждение —
+    уже записано своей транзакцией. Поэтому сбой прохода (тупик, обрыв
+    соединения) основному действию не вредит: проход откатывается, а импорты
+    остаются ждать до следующего прохода по счёту. Иначе человек увидел бы
+    «не удалось», хотя операции записаны, а один отравленный сосед ронял бы
+    каждый сбор по счёту. В лог — только тип ошибки: текст ошибки базы несёт
+    параметры запроса, то есть суммы."""
+    try:
+        return await _close_duplicate_only_imports(db, workspace_id, account_id)
+    except Exception as exc:
+        await db.rollback()
+        logger.warning(
+            "import_autoclose_failed", account_id=str(account_id), error_type=type(exc).__name__
+        )
+        return set()
+
+
+async def _close_duplicate_only_imports(
+    db: AsyncSession, workspace_id: uuid.UUID, account_id: uuid.UUID
+) -> set[uuid.UUID]:
+    """Перебираем все готовые импорты счёта, а не один: так этот же проход
+    прибирает и те, что накопились раньше. Одного прохода хватает — закрытие
+    операций не добавляет и дублем никого сделать не может. Подтверждение идёт
+    тем же путём, что у человека, поэтому блок счёта применяется по тем же
+    правилам; от старых к новым — чтобы остаток последним писал свежий сбор.
+
+    «Новых нет» считается тем же превью, что видит человек: ноль в превью и
+    автозакрытие не могут разойтись.
+
+    Импорт с испорченным разбором пропускается с записью в лог: он остаётся
+    ждать, и его можно отклонить."""
+    closed: set[uuid.UUID] = set()
+    for imp in await repository.lock_ready_for_account(db, workspace_id, account_id):
+        payload = imp.parsed_payload
+        if payload is None:
+            continue
+        try:
+            preview = await _build_preview(db, imp.workspace_id, imp.account_id, payload)
+            if preview.new_count:
+                continue
+            # операций создано не будет, автор нужен лишь сигнатуре проводки
+            await _commit_ready(db, imp, payload, imp.created_by)
+        except StatementParseError:
+            # порча находится разбором до любых изменений, так что пропуск
+            # не оставляет в сессии половины чужого подтверждения
+            logger.warning("import_autoclose_broken_payload", import_id=str(imp.id))
+            continue
+        closed.add(imp.id)
+    # и при нуле закрытых: коммит отпускает блокировки строк
+    await db.commit()
+    for import_id in closed:
+        logger.info("import_closed_nothing_new", import_id=str(import_id))
+    return closed
+
+
+async def reject_import(db: AsyncSession, workspace_id: uuid.UUID, import_id: uuid.UUID) -> None:
+    """Отклонить ожидающий импорт: операций не создаём, блок счёта не применяем.
+
+    Сохранённый разбор стираем: подтвердить или показать его уже нельзя, а это
+    выписка человека — то же правило, по которому сырой текст живёт только до
+    конца разбора. Повторное отклонение отвечает тем же исходом, как повторное
+    подтверждение подтверждённого."""
+    imp = await repository.lock_import(db, workspace_id, import_id)
+    if imp is None:
+        raise ImportNotFoundError("импорт не найден")
+    if imp.status == "rejected":
+        return
+    if imp.status != "ready":
+        raise ImportNotReadyError("импорт уже не ждёт решения")
+    imp.status = "rejected"
+    imp.parsed_payload = None  # колонка пишет None как SQL NULL, см. модель
+    await db.commit()
+    logger.info("import_rejected", import_id=str(imp.id))
+
+
+async def _commit_ready(
+    db: AsyncSession, imp: Import, payload: dict[str, object], user_id: uuid.UUID
+) -> ImportResultOut:
+    """Подтвердить готовый импорт без commit: его делает вызывающий."""
+    workspace_id = imp.workspace_id
+    statement = _payload_to_statement(payload)
+    ext_ids = _payload_external_ids(payload, imp.account_id, statement.operations)
     # разбираем до вставок: на порче блока падать после двадцати тысяч операций,
     # которые тут же откатятся, — пустая работа
-    reported = _payload_account(imp.parsed_payload, imp.id)
+    reported = _payload_account(payload, imp.id)
     existing = await ledger_service.existing_external_ids(
         db, workspace_id, imp.account_id, set(ext_ids)
     )
@@ -605,7 +713,4 @@ async def commit_from_import(
         "duplicates": duplicates,
     }
     imp.status = "completed"  # терминальный статус: отличает закоммиченный импорт от ready
-    await db.commit()
-    if imported:
-        ledger_service.enqueue_categorization(workspace_id)
     return ImportResultOut(import_id=imp.id, imported=imported, duplicates=duplicates)

@@ -20,8 +20,12 @@ class Import(Base):
     stats: Mapped[dict[str, int]] = mapped_column(JSONB)
     # какой парсер разобрал выписку (профиль банка или "llm"); пусто, пока идёт разбор
     parser: Mapped[str | None] = mapped_column(String(30), nullable=True)
-    # результат разбора: операции и итоги строками (деньги в JSON — строки, не float)
-    parsed_payload: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
+    # результат разбора: операции и итоги строками (деньги в JSON — строки, не float).
+    # none_as_null: стёртый разбор — это SQL NULL, а не JSON-значение null, которое
+    # IS NULL не находит и которое выглядело бы как сохранённый, но пустой разбор
+    parsed_payload: Mapped[dict[str, object] | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
     # текст ошибки для статуса failed — показываем пользователю, не глотаем
     error: Mapped[str | None] = mapped_column(String(500), nullable=True)
     # текст выписки нужен фоновой задаче; PII — очищаем сразу после разбора

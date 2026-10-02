@@ -20,6 +20,42 @@ async def get_import(
     return result
 
 
+async def lock_import(
+    db: AsyncSession, workspace_id: uuid.UUID, import_id: uuid.UUID
+) -> Import | None:
+    """Импорт под блокировкой строки — для решений по его статусу: подтверждение,
+    отклонение и автозакрытие иначе прочли бы «готов» одновременно и разошлись.
+    populate_existing — потому что статус решает, а объект мог остаться в сессии
+    со старым значением."""
+    result: Import | None = await db.scalar(
+        select(Import)
+        .where(Import.id == import_id, Import.workspace_id == workspace_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    return result
+
+
+async def lock_ready_for_account(
+    db: AsyncSession, workspace_id: uuid.UUID, account_id: uuid.UUID
+) -> list[Import]:
+    """Готовые импорты счёта под блокировкой, от старых к новым. Порядок
+    постоянный ещё и затем, чтобы два прохода по одному счёту брали блокировки
+    в одной очерёдности, а не ждали друг друга крест-накрест."""
+    rows = await db.execute(
+        select(Import)
+        .where(
+            Import.workspace_id == workspace_id,
+            Import.account_id == account_id,
+            Import.status == "ready",
+        )
+        .order_by(Import.created_at, Import.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    return list(rows.scalars().all())
+
+
 async def list_pending(db: AsyncSession, workspace_id: uuid.UUID) -> list[Import]:
     """Импорты, ждущие подтверждения: разбор закончен (ready), операции ещё не созданы."""
     rows = await db.execute(

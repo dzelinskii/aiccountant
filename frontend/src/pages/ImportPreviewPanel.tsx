@@ -15,12 +15,16 @@ export function ImportPreviewPanel({
   warnings,
   importing,
   onImport,
+  rejecting,
+  onReject,
 }: {
   preview: ImportPreview
   parser: string | null
   warnings: string[]
   importing: boolean
   onImport: () => void
+  rejecting: boolean
+  onReject: () => void
 }) {
   return (
     <Card withBorder>
@@ -31,9 +35,14 @@ export function ImportPreviewPanel({
             Новых: <b>{preview.new_count}</b>, дублей: {preview.duplicate_count}
           </Text>
         </Group>
-        <Button disabled={preview.new_count === 0} loading={importing} onClick={onImport}>
-          Импортировать {preview.new_count} новых
-        </Button>
+        <Group gap="xs">
+          <Button variant="default" disabled={importing} loading={rejecting} onClick={onReject}>
+            Отклонить
+          </Button>
+          <Button disabled={preview.new_count === 0 || rejecting} loading={importing} onClick={onImport}>
+            Импортировать {preview.new_count} новых
+          </Button>
+        </Group>
       </Group>
       {warnings.map((w, i) => (
         <Alert color="yellow" mb="sm" key={i}>{w}</Alert>

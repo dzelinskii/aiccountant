@@ -90,10 +90,9 @@ async def create_parsed_import(
         # поэтому сравниваем без учёта регистра — иначе счёт "rub" вводит в заблуждение
         # отказом коллектору, который прислал "RUB", хотя валюта та же самая
         raise HTTPException(status_code=422, detail="Валюта операции не совпадает с валютой счёта")
-    imp = await service.create_parsed_import(
+    return await service.create_parsed_import(
         db, workspace_id, account_id, user.id, payload.parser, payload.operations, payload.account
     )
-    return ImportStartedOut(import_id=imp.id, status=cast(ImportStatus, imp.status))
 
 
 @router.get("/imports")
@@ -133,3 +132,18 @@ async def commit_import(
         raise HTTPException(status_code=404, detail="Импорт не найден") from None
     except service.ImportNotReadyError:
         raise HTTPException(status_code=409, detail="Импорт не готов к подтверждению") from None
+
+
+@router.post("/imports/{import_id}/reject", status_code=204)
+async def reject_import(
+    import_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> None:
+    try:
+        await service.reject_import(db, workspace_id, import_id)
+    except service.ImportNotFoundError:
+        raise HTTPException(status_code=404, detail="Импорт не найден") from None
+    except service.ImportNotReadyError:
+        raise HTTPException(status_code=409, detail="Импорт уже не ждёт решения") from None
