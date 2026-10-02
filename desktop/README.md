@@ -33,10 +33,11 @@ VITE_DEFAULT_SERVER=http://localhost:18000 pnpm tauri dev
 В PowerShell переменная задаётся так:
 `$env:VITE_DEFAULT_SERVER = "http://localhost:18000"; pnpm tauri dev`.
 
-Направлять приложение нужно на стенд с открытым портом бэкенда
-(`docker-compose.stand.yml`): основной стенд за Caddy отдаётся по
-`https://localhost` с самоподписанным сертификатом, и окно приложения ему не
-доверяет (`../docs/backlog.md`).
+Направлять приложение нужно на открытый порт бэкенда, а не на Caddy: по
+`https://localhost` с самоподписанным сертификатом окно приложения не пойдёт
+(`../docs/backlog.md`). Основной стенд отдаёт бэкенд на
+`http://localhost:8800` (`../docker-compose.override.yml`), личный стенд —
+на своём `STAND_PORT` (`../docker-compose.stand.yml`).
 
 CSP окна проверяется только на собранном приложении — почему, в
 `docs/reference/desktop.md`, «CSP окна приложения».
