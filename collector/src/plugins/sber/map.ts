@@ -186,6 +186,9 @@ export function cardResourceId(id: string): string {
   return `card:${id}`
 }
 
+/** Блок creditType по идентификатору карты — его добывает index.ts из cardInfo. */
+export type CreditInfoByCard = ReadonlyMap<string, unknown>
+
 /**
  * Единица счёта для Сбербанка — карта: история привязана к ней, а накопительные
  * счета из блока accounts своих операций не имеют вовсе. Как и у Т-Банка, список
@@ -193,9 +196,6 @@ export function cardResourceId(id: string): string {
  * здесь дают null, а не останавливают сбор: иначе одна экзотическая карта
  * лишила бы человека подсказки с идентификаторами по всем остальным.
  */
-/** Блок creditType по идентификатору карты — его добывает index.ts из cardInfo. */
-export type CreditInfoByCard = ReadonlyMap<string, unknown>
-
 export function toAccounts(raw: readonly unknown[], creditByCard: CreditInfoByCard = new Map()): CollectedAccount[] {
   return raw.map((item) => toAccount(item, creditByCard))
 }
@@ -229,10 +229,9 @@ function cardNotes(item: Record<string, unknown>, balance: string | null): Accou
 // У дебетовой карты остаток — доступные средства (availableLimit). У кредитной
 // он включает заёмные деньги и остатком в личных финансах не является: показать
 // его как «сколько у меня есть» значило бы соврать на величину кредитного
-// лимита. Поэтому у кредитки остатком считаются собственные средства —
-// creditOwnSum, поле самой карты, а не вложенный блок creditType: тот приходит
-// только с отдельной ручки cardInfo (детали конкретной карты), которую этот
-// коллектор не вызывает.
+// лимита. Поэтому у кредитки остаток — чистая позиция из блока creditType
+// (см. cardBalance): в списке карт долга нет, и блок приходит отдельной ручкой
+// cardInfo — детали конкретной карты, которые запрашивает index.ts.
 //
 // Сравнение регистронезависимое, а незнакомое значение type не считается ни
 // кредитным, ни дебетовым — в отличие от tbank/map.ts (BLOCKED_CARD_STATUS),
@@ -296,11 +295,10 @@ function moneyAmount(block: Record<string, unknown> | undefined): string | null 
   return block ? (getStr(block, 'amount') ?? null) : null
 }
 
-// Валюта — свойство карты, а не поля, выбранного под остаток: у кредитки без
-// creditOwnSum (см. balanceSource) остаток честно уходит в null, но валюта у
-// карты никуда не делась — она видна в availableLimit.currency. Поэтому здесь
-// проверяются оба денежных блока карты, а не только тот, что достался под
-// остаток.
+// Валюта — свойство карты, а не суммы, выбранной под остаток: у кредитки без
+// деталей cardInfo (см. cardBalance) остаток честно уходит в null, но валюта у
+// карты никуда не делась — она видна в её собственных денежных блоках. Поэтому
+// здесь проверяются оба блока самой карты, availableLimit и creditOwnSum.
 function cardCurrency(item: Record<string, unknown>): string | null {
   return blockCurrency(getRecord(item, 'availableLimit')) ?? blockCurrency(getRecord(item, 'creditOwnSum'))
 }

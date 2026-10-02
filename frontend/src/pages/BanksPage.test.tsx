@@ -10,6 +10,7 @@ import {
   type AccountResult,
   type CollectSummary,
 } from 'aiccountant-collector/src/app'
+import { ACCOUNT_NOTES } from 'aiccountant-collector/src/core/account-notes'
 import type { Account } from '../api/ledger'
 import { getAccounts, getBanks } from '../api/ledger'
 import { collectFromApp, forgetBank } from '../desktop/collector-host'
@@ -275,13 +276,26 @@ test('счётчики расхождений: ненулевой виден, н
 
 test('пояснение сбора по счёту видно в итоге рядом со счётчиками', async () => {
   // без него кредитка без остатка выглядит как «остаток не обновился» без причины
-  const note = 'Остаток кредитной карты не получен — в приложении он не обновится'
+  const note = ACCOUNT_NOTES.creditBalanceMissing
   vi.mocked(collectFromApp).mockResolvedValue(summary({ accounts: [result({ notes: [note] })] }))
   await renderPage()
 
   await userEvent.click(row('sber').getByRole('button', { name: 'Собрать' }))
 
   expect(await row('sber').findByText(note)).toBeDefined()
+})
+
+test('пояснение видно и у счёта с отказом: оно о счёте, а не об операциях', async () => {
+  const note = ACCOUNT_NOTES.creditBalanceMissing
+  vi.mocked(collectFromApp).mockResolvedValue(
+    summary({ accounts: [result({ collected: 0, importId: null, error: 'банк отказал', notes: [note] })] }),
+  )
+  await renderPage()
+
+  await userEvent.click(row('sber').getByRole('button', { name: 'Собрать' }))
+
+  expect(await row('sber').findByText(/банк отказал/)).toBeDefined()
+  expect(row('sber').getByText(note)).toBeDefined()
 })
 
 test('сбор банка целиком провалился: «Имя банка: текст»', async () => {

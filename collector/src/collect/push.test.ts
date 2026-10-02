@@ -95,6 +95,17 @@ test('пояснения сбора по счёту в приложение не
   // они живут только в итоге сбора; договор API о них не знает
   const fetchImpl = vi.fn<FetchImpl>(async () => jsonResponse({ import_id: 'imp-1', status: 'ready' }, 201))
 
+  // в бою пояснение приходит у счёта без остатка, то есть без блока про счёт
+  const noted: CollectedAccount = { ...ACCOUNT, balance: null, notes: [ACCOUNT_NOTES.creditBalanceMissing] }
+  await pushOperations(CONFIG, 'sber', 'acc-app', OPERATIONS, noted, fetchImpl)
+
+  expect(Object.keys(sentBody(fetchImpl)).sort()).toEqual(['operations', 'parser'])
+  expect(JSON.stringify(sentBody(fetchImpl))).not.toContain(ACCOUNT_NOTES.creditBalanceMissing)
+})
+
+test('пояснения не уезжают и в блоке про счёт, когда остаток есть', async () => {
+  const fetchImpl = vi.fn<FetchImpl>(async () => jsonResponse({ import_id: 'imp-1', status: 'ready' }, 201))
+
   const noted: CollectedAccount = { ...ACCOUNT, notes: [ACCOUNT_NOTES.creditBalanceMissing] }
   await pushOperations(CONFIG, 'sber', 'acc-app', OPERATIONS, noted, fetchImpl)
 

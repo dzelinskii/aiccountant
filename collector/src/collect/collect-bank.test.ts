@@ -237,8 +237,9 @@ test('отказ приложения по счёту — живость бан�
   expect(p.isAlive).toHaveBeenCalledTimes(1)
 })
 
+// Пояснение бывает у счёта без остатка — таким счёт и приходит в бою
 function withNote(id: string): CollectedAccount {
-  return { ...account(id), notes: [ACCOUNT_NOTES.creditBalanceMissing] }
+  return { ...account(id), balance: null, notes: [ACCOUNT_NOTES.creditBalanceMissing] }
 }
 
 test('пояснения плагина доходят до итога привязанного счёта — тому же счёту, а не соседу', async () => {

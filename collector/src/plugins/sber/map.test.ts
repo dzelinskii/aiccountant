@@ -200,9 +200,9 @@ function creditCard(overrides: Record<string, unknown> = {}): Record<string, unk
     // доступный лимит включает заёмные деньги — намеренно отличается от
     // остатка, чтобы тест ловил использование не того поля
     availableLimit: { amount: '90000.00', currency: { code: 'RUB' } },
-    // поле самой карты (section/meta → cardsInWallet), а не вложенный блок
-    // creditType — тот приходит только с отдельной ручки cardInfo, которую
-    // коллектор не вызывает
+    // поле самой карты (section/meta → cardsInWallet): в остаток оно не идёт —
+    // тот считается из блока creditType, который приходит ручкой cardInfo
+    // (см. creditInfo ниже); здесь оно ловит использование не того поля
     creditOwnSum: { amount: '250.00', currency: { code: 'RUB' } },
     ...overrides,
   }
