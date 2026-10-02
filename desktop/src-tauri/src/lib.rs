@@ -67,4 +67,60 @@ mod security_config {
             .expect("script-src задан");
         assert_eq!(script, "script-src 'self'");
     }
+
+    /// Строки в кавычках между `open` и первым `close` после него.
+    fn quoted_between(text: &str, open: &str, close: &str) -> std::collections::BTreeSet<String> {
+        let start = text.find(open).expect("начало списка") + open.len();
+        let end = start + text[start..].find(close).expect("конец списка");
+        text[start..end]
+            .split('"')
+            .skip(1)
+            .step_by(2)
+            .map(str::to_string)
+            .collect()
+    }
+
+    fn manifest_commands() -> std::collections::BTreeSet<String> {
+        quoted_between(include_str!("../build.rs"), ".commands(&[", "]")
+    }
+
+    // Команда в манифесте без разрешения в capability из окна не вызывается,
+    // и такую потерю видно только на живом прогоне — у той самой кнопки
+    #[test]
+    fn every_manifest_command_has_permission_and_nothing_more() {
+        let capability = json(include_str!("../capabilities/default.json"));
+        let permissions: std::collections::BTreeSet<String> = capability["permissions"]
+            .as_array()
+            .expect("список разрешений")
+            .iter()
+            .map(|p| p.as_str().expect("разрешение строкой").to_string())
+            .collect();
+        let expected: std::collections::BTreeSet<String> = manifest_commands()
+            .iter()
+            .map(|command| format!("allow-{}", command.replace('_', "-")))
+            .collect();
+        assert_eq!(permissions, expected);
+    }
+
+    // Обработчик без строки в манифесте окну недоступен, строка без
+    // обработчика — вызов, который упадёт уже в работе
+    #[test]
+    fn handlers_match_manifest() {
+        let source = include_str!("lib.rs");
+        let start = source
+            .find("generate_handler![")
+            .expect("список обработчиков");
+        let end = start
+            + source[start..]
+                .find(']')
+                .expect("конец списка обработчиков");
+        let handlers: std::collections::BTreeSet<String> = source
+            [start + "generate_handler![".len()..end]
+            .split(',')
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(|item| item.rsplit("::").next().unwrap_or(item).to_string())
+            .collect();
+        assert_eq!(handlers, manifest_commands());
+    }
 }
