@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { login } from '../api/auth'
-import { ApiError } from '../api/client'
+import { ApiError, detailToMessage } from '../api/client'
 import { LoginPage } from './LoginPage'
 
 const desktop = { on: false }
@@ -141,4 +141,32 @@ test('в приложении ответ сервера с ошибкой не �
 test('в браузере сбой связи остаётся общей ошибкой', async () => {
   await submitWithFailure(new TypeError('Failed to fetch'))
   expect(await screen.findByText('Не удалось войти, попробуйте ещё раз')).toBeDefined()
+})
+
+// то, что FastAPI отдаёт на email, не прошедший проверку адреса сервером
+const pydanticDetail = [
+  {
+    type: 'value_error',
+    loc: ['body', 'email'],
+    msg: 'value is not a valid email address: reserved name',
+  },
+]
+
+test('на 422 показывается пояснение сервера', async () => {
+  await submitWithFailure(new ApiError(422, detailToMessage(pydanticDetail) ?? ''))
+  expect(
+    await screen.findByText(
+      'Сервер отклонил данные: value is not a valid email address: reserved name',
+    ),
+  ).toBeDefined()
+})
+
+test('на 422 без пояснения остаётся общая ошибка', async () => {
+  await submitWithFailure(new ApiError(422, ''))
+  expect(await screen.findByText('Не удалось войти, попробуйте ещё раз')).toBeDefined()
+})
+
+test('на 401 объясняется, что email или пароль неверны', async () => {
+  await submitWithFailure(new ApiError(401, 'Invalid credentials'))
+  expect(await screen.findByText('Неверный email или пароль')).toBeDefined()
 })
