@@ -22,7 +22,7 @@ export interface ImportStarted {
 
 export interface ImportStatus {
   import_id: string
-  status: 'processing' | 'ready' | 'failed' | 'completed'
+  status: 'processing' | 'ready' | 'failed' | 'completed' | 'rejected'
   parser: string | null
   error: string | null
   warnings: string[]
@@ -70,3 +70,6 @@ export const getImportStatus = (ws: string, id: string) =>
 
 export const commitImport = (ws: string, id: string) =>
   api<ImportResult>(`/api/imports/${id}/commit?${q(ws)}`, { method: 'POST' })
+
+export const rejectImport = (ws: string, id: string) =>
+  api<void>(`/api/imports/${id}/reject?${q(ws)}`, { method: 'POST' })

@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { ApiError } from '../api/client'
 import type { ImportListItem } from '../api/imports'
-import { commitImport, getImportStatus, getPendingImports, startImport } from '../api/imports'
+import { commitImport, getImportStatus, getPendingImports, rejectImport, startImport } from '../api/imports'
 import { getAccounts } from '../api/ledger'
 import { useWorkspaceStore } from '../store/workspace'
 import { ImportPreviewPanel } from './ImportPreviewPanel'
@@ -51,6 +51,17 @@ export function ImportPage() {
     },
   })
 
+  // отклонить можно и открытый импорт, и любой из списка, поэтому id — аргумент
+  const rejectMut = useMutation({
+    mutationFn: (id: string) => rejectImport(ws, id),
+    onSuccess: async (_data, id) => {
+      await queryClient.invalidateQueries({ queryKey: ['pending-imports', ws] })
+      // открытый импорт сменит статус на rejected, и панель с кнопками уйдёт
+      await queryClient.invalidateQueries({ queryKey: ['import-status', ws, id] })
+    },
+  })
+  const isRejecting = (id: string | null) => rejectMut.isPending && rejectMut.variables === id
+
   const startMut = useMutation({
     mutationFn: () => startImport(ws, accountId!, file!),
     // сбрасываем ДО запроса, а не в onSuccess: если запрос упадёт, importId и
@@ -58,6 +69,7 @@ export function ImportPage() {
     onMutate: () => {
       setImportId(null)
       commitMut.reset()
+      rejectMut.reset()
     },
     onSuccess: (started) => setImportId(started.import_id),
   })
@@ -80,6 +92,7 @@ export function ImportPage() {
     setImportId(null)
     startMut.reset()
     commitMut.reset()
+    rejectMut.reset()
   }
 
   // открываем чужой (не загруженный в этой вкладке) импорт: дальше отработают
@@ -103,9 +116,18 @@ export function ImportPage() {
                   {new Date(item.created_at).toLocaleDateString('ru-RU')} — {sourceLabel(item)},
                   операций: {item.operations_count}
                 </Text>
-                <Button variant="light" onClick={() => openPending(item)}>
-                  Открыть
-                </Button>
+                <Group gap="xs">
+                  <Button
+                    variant="default"
+                    loading={isRejecting(item.import_id)}
+                    onClick={() => rejectMut.mutate(item.import_id)}
+                  >
+                    Отклонить
+                  </Button>
+                  <Button variant="light" onClick={() => openPending(item)}>
+                    Открыть
+                  </Button>
+                </Group>
               </Group>
             ))}
           </Stack>
@@ -163,7 +185,23 @@ export function ImportPage() {
           warnings={status.warnings}
           importing={commitMut.isPending}
           onImport={() => commitMut.mutate()}
+          rejecting={isRejecting(importId)}
+          onReject={() => rejectMut.mutate(importId!)}
         />
+      )}
+
+      {/* сервер сам закрывает импорт, в котором не осталось новых операций, —
+          без этой строки открытый импорт пропал бы с экрана молча */}
+      {status?.status === 'completed' && !commitMut.isSuccess && (
+        <Alert color="gray">Импорт закрыт: все его операции уже в учёте</Alert>
+      )}
+
+      {status?.status === 'rejected' && <Alert color="gray">Импорт отклонён, операции не добавлены</Alert>}
+
+      {rejectMut.isError && (
+        <Alert color="red">
+          {rejectMut.error instanceof ApiError ? rejectMut.error.message : 'Не удалось отклонить импорт'}
+        </Alert>
       )}
 
       {commitMut.isError && (

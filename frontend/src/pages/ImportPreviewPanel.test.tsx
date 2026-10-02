@@ -18,7 +18,7 @@ const preview: ImportPreview = {
 
 function renderPanel(
   onImport: () => void,
-  extra: { parser?: string | null; warnings?: string[] } = {},
+  extra: { parser?: string | null; warnings?: string[]; onReject?: () => void } = {},
 ) {
   return render(
     <MantineProvider>
@@ -28,6 +28,8 @@ function renderPanel(
         warnings={extra.warnings ?? []}
         importing={false}
         onImport={onImport}
+        rejecting={false}
+        onReject={extra.onReject ?? vi.fn()}
       />
     </MantineProvider>,
   )
@@ -45,6 +47,15 @@ test('кнопка импорта зовёт onImport', async () => {
   renderPanel(onImport)
   await userEvent.click(screen.getByRole('button', { name: /Импортировать/ }))
   expect(onImport).toHaveBeenCalled()
+})
+
+test('кнопка отклонения зовёт onReject, а не импорт', async () => {
+  const onImport = vi.fn()
+  const onReject = vi.fn()
+  renderPanel(onImport, { onReject })
+  await userEvent.click(screen.getByRole('button', { name: 'Отклонить' }))
+  expect(onReject).toHaveBeenCalled()
+  expect(onImport).not.toHaveBeenCalled()
 })
 
 test('показывает бейдж AI-разбора и предупреждение', () => {

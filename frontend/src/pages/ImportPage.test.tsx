@@ -1,10 +1,10 @@
 import { MantineProvider } from '@mantine/core'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, expect, test, vi } from 'vitest'
 import type { ImportStatus } from '../api/imports'
-import { getImportStatus, getPendingImports, startImport } from '../api/imports'
+import { getImportStatus, getPendingImports, rejectImport, startImport } from '../api/imports'
 import { useWorkspaceStore } from '../store/workspace'
 import { ImportPage } from './ImportPage'
 
@@ -23,6 +23,7 @@ vi.mock('../api/ledger', () => ({
 const mockedStartImport = vi.mocked(startImport)
 const mockedGetImportStatus = vi.mocked(getImportStatus)
 const mockedGetPendingImports = vi.mocked(getPendingImports)
+const mockedRejectImport = vi.mocked(rejectImport)
 
 beforeEach(() => {
   useWorkspaceStore.getState().setWorkspaceId('ws-1')
@@ -137,4 +138,41 @@ test('сбой первого запроса статуса не оставля�
 
   expect(await screen.findByText('Не удалось получить статус разбора')).toBeDefined()
   expect(screen.queryByText('Разбираем выписку…')).toBeNull()
+})
+
+const COLLECTOR_ITEM = {
+  import_id: 'imp-collector',
+  account_id: 'acc-1',
+  parser: 'tbank_collector',
+  status: 'ready' as const,
+  file_name: 'tbank_collector.json',
+  created_at: '2026-07-05T10:00:00Z',
+  operations_count: 3,
+}
+
+test('«Отклонить» в списке зовёт ручку и убирает импорт из ожидающих', async () => {
+  mockedGetPendingImports.mockResolvedValueOnce([COLLECTOR_ITEM]).mockResolvedValue([])
+  mockedRejectImport.mockResolvedValue(undefined)
+  const user = userEvent.setup()
+  renderPage()
+
+  await user.click(await screen.findByRole('button', { name: 'Отклонить' }))
+
+  expect(mockedRejectImport).toHaveBeenCalledWith('ws-1', 'imp-collector')
+  // список перечитан после отклонения — строки больше нет
+  await waitFor(() => expect(screen.queryByText(/Т-Банк, автосбор/)).toBeNull())
+  expect(mockedGetPendingImports).toHaveBeenCalledTimes(2)
+})
+
+test('импорт, который сервер закрыл сам, не пропадает с экрана молча', async () => {
+  mockedGetPendingImports.mockResolvedValue([COLLECTOR_ITEM])
+  mockedGetImportStatus.mockResolvedValue({
+    import_id: 'imp-collector', status: 'completed', parser: 'tbank_collector', error: null, warnings: [], preview: null,
+  })
+  const user = userEvent.setup()
+  renderPage()
+
+  await user.click(await screen.findByRole('button', { name: 'Открыть' }))
+
+  expect(await screen.findByText('Импорт закрыт: все его операции уже в учёте')).toBeDefined()
 })
