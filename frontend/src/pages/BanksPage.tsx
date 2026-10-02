@@ -22,6 +22,9 @@ const SESSION_TEXT = {
   login: 'Сессия: свежий вход',
 } as const
 
+// импорт ждёт решения на экране «Импорт»; закрытый приложением сразу там уже не виден
+const isWaiting = (result: AccountResult) => result.importId !== null && !result.importClosed
+
 function AccountLine({ result, name }: { result: AccountResult; name: string }) {
   const { counters } = result
   return (
@@ -33,7 +36,8 @@ function AccountLine({ result, name }: { result: AccountResult; name: string }) 
           : result.importId === null
             ? 'операций за период нет'
             : `собрано ${result.collected}`}
-        {result.importId !== null && (
+        {result.importClosed && ' — новых операций нет'}
+        {isWaiting(result) && (
           <>
             {' — '}
             <Anchor component={Link} to="/import" size="sm">импорт</Anchor>
@@ -114,7 +118,7 @@ export function BanksPage() {
         <Stack gap="xs">
           <Alert color="red">{state.error}</Alert>
           {renderAccounts(passed)}
-          {passed.some((r) => r.importId !== null) && (
+          {passed.some(isWaiting) && (
             <Text size="sm">Созданные импорты уже ждут решения на экране «Импорт».</Text>
           )}
         </Stack>

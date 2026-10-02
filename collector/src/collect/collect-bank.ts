@@ -36,6 +36,11 @@ export interface AccountResult {
   collected: number
   /** null — импорта нет: операций за период не было либо по счёту отказ (см. error). */
   importId: string | null
+  /**
+   * Приложение закрыло импорт сразу: новых операций в нём не оказалось, и
+   * решения он не ждёт. Остаток, если банк его дал, при этом уже применён.
+   */
+  importClosed: boolean
   counters: CollectedCounters
   /** Отказ по этому счёту; остальные счета собираются дальше. */
   error: string | null
@@ -145,6 +150,9 @@ async function collectAccount(
       appAccountId,
       collected: operations.length,
       importId: pushed?.import_id ?? null,
+      // статус — слово приложения: «completed» у только что присланного разбора
+      // бывает лишь тогда, когда приложение закрыло его само
+      importClosed: pushed?.status === 'completed',
       counters: countCollected(operations),
       error: null,
       notes: account.notes,
@@ -159,6 +167,7 @@ async function collectAccount(
       appAccountId,
       collected: 0,
       importId: null,
+      importClosed: false,
       counters: countCollected([]),
       error: error instanceof Error ? error.message : String(error),
       notes: account.notes,

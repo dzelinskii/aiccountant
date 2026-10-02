@@ -37,7 +37,8 @@ const account = (id: string, name: string, bankCode: string | null, linked: bool
 const noCounters = { unknownKinds: 0, missingHints: 0, purchases: 0, unrefinedIncome: 0 }
 
 const result = (over: Partial<AccountResult> = {}): AccountResult => ({
-  appAccountId: 'a-sber', collected: 3, importId: 'imp-1', counters: noCounters, error: null, notes: [], ...over,
+  appAccountId: 'a-sber', collected: 3, importId: 'imp-1', importClosed: false, counters: noCounters, error: null,
+  notes: [], ...over,
 })
 
 const summary = (over: Partial<CollectSummary> = {}): CollectSummary => ({
@@ -94,6 +95,16 @@ test('«Собрать» зовёт сбор своего банка, итог �
   expect(row('sber').getByText(/собрано 3/)).toBeDefined()
   expect(row('sber').getByText(/свежий вход/)).toBeDefined()
   expect(row('sber').getByRole('link', { name: /импорт/i }).getAttribute('href')).toBe('/import')
+})
+
+test('импорт, закрытый приложением сразу, не зовёт на экран «Импорт»', async () => {
+  vi.mocked(collectFromApp).mockResolvedValue(summary({ accounts: [result({ importClosed: true })] }))
+  await renderPage()
+
+  await userEvent.click(row('sber').getByRole('button', { name: 'Собрать' }))
+
+  expect(await row('sber').findByText(/собрано 3 — новых операций нет/)).toBeDefined()
+  expect(row('sber').queryByRole('link', { name: /импорт/i })).toBeNull()
 })
 
 test('пока сбор банка идёт, его «Собрать» и «Собрать всё» неактивны, а чужой «Собрать» — нет', async () => {
@@ -433,6 +444,18 @@ test('смерть сессии: счёт с ошибкой и без импор
   expect(await row('sber').findByText(/банк отказал/)).toBeDefined()
   expect(row('sber').getByText(/собрано 5/)).toBeDefined()
   expect(row('sber').getByText(/ждут решения/)).toBeDefined()
+})
+
+test('смерть сессии: импорты, закрытые приложением сразу, «ждут решения» не делают', async () => {
+  vi.mocked(collectFromApp).mockRejectedValue(
+    new BankSessionExpiredError([result({ collected: 5, importId: 'imp-9', importClosed: true })]),
+  )
+  await renderPage()
+
+  await userEvent.click(collectButton('sber'))
+
+  expect(await row('sber').findByText(/собрано 5 — новых операций нет/)).toBeDefined()
+  expect(row('sber').queryByText(/ждут решения/)).toBeNull()
 })
 
 test('смерть сессии: если импортов нет, «ждут решения» не пишется, а ошибка счёта видна', async () => {
