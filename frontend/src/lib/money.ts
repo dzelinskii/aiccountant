@@ -13,3 +13,11 @@ export function formatMoney(amount: string, currency: string): string {
 export function formatAmount(amount: string): string {
   return new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2 }).format(Number(amount))
 }
+
+// Долг счёта без знака, если остаток отрицательный, иначе null. Знак снимается
+// строкой, без Number: сумма остаётся десятичной строкой, как пришла с бэка.
+// Нулевой остаток (даже «-0.0000») долгом не считается.
+export function debtAmount(amount: string): string | null {
+  if (!amount.startsWith('-') || !/[1-9]/u.test(amount)) return null
+  return amount.slice(1)
+}

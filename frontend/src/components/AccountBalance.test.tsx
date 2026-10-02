@@ -49,13 +49,29 @@ test('у кредитки главное число — доступно к тр
   expect(screen.getByText('доступно к трате')).toBeDefined()
 })
 
-test('остаток кредитки с карточки не исчезает', () => {
+test('долг кредитки пишется словом и без знака', () => {
   // он нужен, когда смотришь «сколько должен», и он же складывается в сумму по
-  // счетам — просто перестаёт быть главным числом
+  // счетам — просто перестаёт быть главным числом. «остаток −148 063,81»
+  // читается как ошибка, поэтому слово «долг» и число без минуса
   renderBalance(credit)
 
-  // минус обязателен: без него «остаток 148 063,81» читается как деньги на счёте
-  expect(shown()).toContain(norm(`остаток ${formatMoney('-148063.8100', 'RUB')}`))
+  expect(shown()).toContain(norm(`долг ${formatMoney('148063.8100', 'RUB')} на`))
+  expect(shown()).not.toMatch(/остаток -|остаток −/u)
+  expect(screen.queryByText(/остаток/u)).toBeNull()
+})
+
+test('кредитка с нулевым остатком — «остаток 0,00», а не «долг»', () => {
+  renderBalance({ ...credit, balance: '0.0000', credit_available: '150000.0000' })
+
+  expect(shown()).toContain(norm(`остаток ${formatMoney('0.0000', 'RUB')} на`))
+  expect(screen.queryByText(/долг/u)).toBeNull()
+})
+
+test('кредитка с переплатой — «остаток» с положительной суммой', () => {
+  renderBalance({ ...credit, balance: '500.0000', credit_available: '150500.0000' })
+
+  expect(shown()).toContain(norm(`остаток ${formatMoney('500.0000', 'RUB')} на`))
+  expect(screen.queryByText(/долг/u)).toBeNull()
 })
 
 test('лимит не показывается вместо доступного', () => {

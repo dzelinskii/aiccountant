@@ -13,6 +13,7 @@ import {
   linkAccount,
   updateAccount,
 } from '../api/ledger'
+import { formatMoney } from '../lib/money'
 import { useWorkspaceStore } from '../store/workspace'
 import { AccountsPage } from './AccountsPage'
 
@@ -153,6 +154,51 @@ test('счёт банка, который не ведётся, предлага�
   expect(await screen.findByText(/есть в банке/i)).toBeDefined()
   expect(await screen.findByText('Текущий счёт')).toBeDefined()
   expect(await screen.findByText('•• 1234')).toBeDefined()
+})
+
+test('найденный счёт с отрицательным остатком показан долгом без знака', async () => {
+  // у найденного счёта признака кредитки нет — правило по знаку остатка;
+  // «−133 330,18 ₽» без слова выглядит как сумма на карте
+  renderPage(
+    [],
+    [
+      {
+        fingerprint: 'b'.repeat(64),
+        bank_code: 'sber',
+        bank_name: 'Сбербанк',
+        name: 'Кредитная карта',
+        currency: 'RUB',
+        balance: '-133330.1800',
+        card_masks: [],
+      },
+    ],
+  )
+
+  const debt = await screen.findByText(/долг/u)
+  expect(debt.textContent?.replace(/\s+/gu, ' ')).toBe(
+    `долг ${formatMoney('133330.1800', 'RUB').replace(/\s+/gu, ' ')}`,
+  )
+})
+
+test('найденный счёт с положительным остатком показан суммой, без «долга»', async () => {
+  renderPage(
+    [],
+    [
+      {
+        fingerprint: 'c'.repeat(64),
+        bank_code: 'alfa',
+        bank_name: 'Альфа-Банк',
+        name: 'Текущий счёт',
+        currency: 'RUB',
+        balance: '1000.0000',
+        card_masks: [],
+      },
+    ],
+  )
+
+  const amount = await screen.findByText(/1\s000,00/u)
+  expect(amount.textContent).not.toMatch(/долг/u)
+  expect(screen.queryByText(/долг/u)).toBeNull()
 })
 
 test('блока непривязанных нет, когда привязано всё', async () => {
