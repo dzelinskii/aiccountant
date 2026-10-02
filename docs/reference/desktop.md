@@ -400,7 +400,11 @@ Caddy).
 (`auth.ts:32-34`); токен пишется в хранилище ОС до того, как вход считается
 состоявшимся (`auth.ts:35`). Сбой не от сервера — нет связи, опечатка в
 адресе, сбой хранилища — экран входа показывает с причиной
-(`frontend/src/pages/LoginPage.tsx:19-27`).
+(`frontend/src/pages/LoginPage.tsx:19-31`). Отказ валидации (`422`) оба экрана
+показывают словами сервера — «Сервер отклонил данные: …», а пояснение
+сервера приходит как есть, по-английски (`LoginPage.tsx:23-26`,
+`frontend/src/pages/RegisterPage.tsx:23-26`; текст собирает `detailToMessage`,
+`frontend/src/api/client.ts:41-47`). Без пояснения — общая ошибка.
 
 **Адрес сервера** живёт в `localStorage` окна под ключом `aiccountant.server`
 (`frontend/src/desktop/connection.ts:3`, `connection.ts:17-24`) — это не
@@ -514,5 +518,5 @@ Caddy).
 - **Сервер отвергает email на `.test`**: `EmailStr` (`backend/app/identity/schemas.py:13`)
   проверяет адрес библиотекой email-validator, а та считает `.test` доменом
   особого назначения (`email_validator/__init__.py:102`, версия 2.3.0).
-  Экран регистрации показывает на такой отказ общую ошибку без причины
-  (`frontend/src/pages/RegisterPage.tsx:21-27`).
+  Экран регистрации показывает на такой отказ пояснение сервера
+  (`frontend/src/pages/RegisterPage.tsx:23-26`).

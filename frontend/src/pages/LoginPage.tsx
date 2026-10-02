@@ -20,6 +20,10 @@ import { isDesktop } from '../desktop/runtime'
 // ОС) общим «попробуйте ещё раз» не объяснить — показываем причину
 function errorMessage(error: Error): string {
   if (error instanceof ApiError && error.status === 401) return 'Неверный email или пароль'
+  // повтор тех же данных бесполезен, поэтому показываем, что сервер в них не принял
+  if (error instanceof ApiError && error.status === 422 && error.message !== '') {
+    return `Сервер отклонил данные: ${error.message}`
+  }
   if (isDesktop() && !(error instanceof ApiError)) {
     return `Не удалось связаться с сервером — проверьте адрес. ${error.message}`
   }
