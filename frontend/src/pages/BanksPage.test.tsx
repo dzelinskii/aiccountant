@@ -13,6 +13,7 @@ import {
 import type { Account } from '../api/ledger'
 import { getAccounts, getBanks } from '../api/ledger'
 import { collectFromApp, forgetBank } from '../desktop/collector-host'
+import { useCollectStore } from '../store/collect'
 import { useWorkspaceStore } from '../store/workspace'
 import { BanksPage } from './BanksPage'
 
@@ -50,6 +51,7 @@ const ACCOUNTS = [
 
 beforeEach(() => {
   vi.resetAllMocks()
+  useCollectStore.getState().reset()
   useWorkspaceStore.getState().setWorkspaceId('ws-1')
 })
 
@@ -63,7 +65,7 @@ async function renderPage(accounts: Account[] = ACCOUNTS) {
   ])
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const invalidate = vi.spyOn(queryClient, 'invalidateQueries')
-  render(
+  const { unmount } = render(
     <MantineProvider>
       <QueryClientProvider client={queryClient}>
         <MemoryRouter>
@@ -75,7 +77,7 @@ async function renderPage(accounts: Account[] = ACCOUNTS) {
   await screen.findByTestId('bank-sber')
   // имена счетов приходят отдельным запросом: итог без них подписал бы счёт идентификатором
   await waitFor(() => expect(getAccounts).toHaveBeenCalled())
-  return { queryClient, invalidate }
+  return { queryClient, invalidate, unmount }
 }
 
 const row = (code: string) => within(screen.getByTestId(`bank-${code}`))
@@ -491,4 +493,62 @@ test('пустой итог при непривязанных счетах ба�
 
   expect(await row('sber').findByText(/Ни один счёт банка не привязан/)).toBeDefined()
   expect(row('sber').queryByText(/В банке ещё/)).toBeNull()
+})
+
+// сбор, который закончится, когда тест скажет: так экран можно покинуть посреди сбора
+function pendingCollect() {
+  let finish: (value: CollectSummary) => void = () => {}
+  vi.mocked(collectFromApp).mockReturnValueOnce(new Promise<CollectSummary>((resolve) => { finish = resolve }))
+  return (value: CollectSummary) => finish(value)
+}
+
+test('итог сбора, закончившегося после ухода с экрана, виден при возвращении, и банк свободен', async () => {
+  const finish = pendingCollect()
+  const { unmount } = await renderPage()
+  await userEvent.click(collectButton('sber'))
+  await waitFor(() => expect(isDisabled(collectButton('sber'))).toBe(true))
+
+  unmount()
+  finish(summary())
+  await settle()
+  await renderPage()
+
+  expect(row('sber').getByText(/собрано 3/)).toBeDefined()
+  await expectAllIdle()
+})
+
+test('вернувшись на экран посреди сбора, кнопки занятого банка неактивны, пока сбор не кончится', async () => {
+  const finish = pendingCollect()
+  const { unmount } = await renderPage()
+  await userEvent.click(collectButton('sber'))
+  await waitFor(() => expect(isDisabled(collectButton('sber'))).toBe(true))
+
+  unmount()
+  await renderPage()
+
+  expect(isDisabled(collectButton('sber'))).toBe(true)
+  expect(isDisabled(forgetButton('sber'))).toBe(true)
+  expect(isDisabled(collectAllButton())).toBe(true)
+  expect(isDisabled(collectButton('alfa'))).toBe(false)
+
+  finish(summary())
+  expect(await row('sber').findByText(/собрано 3/)).toBeDefined()
+  await expectAllIdle()
+})
+
+test('итог сбора остаётся в своём рабочем пространстве, даже если оно сменилось посреди сбора', async () => {
+  const finish = pendingCollect()
+  await renderPage()
+  await userEvent.click(collectButton('sber'))
+  await waitFor(() => expect(isDisabled(collectButton('sber'))).toBe(true))
+
+  act(() => useWorkspaceStore.getState().setWorkspaceId('ws-2'))
+  finish(summary())
+  await settle()
+
+  expect(row('sber').queryByText(/собрано 3/)).toBeNull()
+  expect(isDisabled(collectAllButton())).toBe(false)
+
+  act(() => useWorkspaceStore.getState().setWorkspaceId('ws-1'))
+  expect(await row('sber').findByText(/собрано 3/)).toBeDefined()
 })

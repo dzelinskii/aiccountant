@@ -2,37 +2,18 @@ import { Alert, Anchor, Button, Card, Group, Stack, Text, Title } from '@mantine
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import {
-  AppHttpError,
-  BANK_NAMES,
-  BankSessionExpiredError,
-  accountsWord,
-  type AccountResult,
-  type CollectSummary,
-} from 'aiccountant-collector/src/app'
+import { BANK_NAMES, accountsWord, type AccountResult } from 'aiccountant-collector/src/app'
 import type { Bank } from '../api/ledger'
 import { getAccounts, getBanks } from '../api/ledger'
-import { collectFromApp, forgetBank } from '../desktop/collector-host'
+import { collectAll, collectOne, forgetAccess, useCollectStore, type BankState } from '../store/collect'
 import { useWorkspaceStore } from '../store/workspace'
 
-// итог держится только в памяти экрана: это отчёт о последнем сборе сеанса,
-// а не история — настоящий след сбора остаётся в импортах приложения
-interface BankState {
-  running: boolean
-  summary?: CollectSummary
-  error?: string
-  /** Счета, пройденные до смерти сессии банка: импорты по ним уже созданы. */
-  partial?: AccountResult[]
-}
+const NO_STATES: Record<string, BankState> = {}
 
 const SESSION_TEXT = {
   stored: 'Сессия: из хранилища',
   login: 'Сессия: свежий вход',
 } as const
-
-const SESSION_EXPIRED_TEXT = 'Сессия банка кончилась посреди сбора — нажмите «Собрать», чтобы войти заново'
-
-const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error))
 
 function AccountLine({ result, name }: { result: AccountResult; name: string }) {
   const { counters } = result
@@ -70,7 +51,9 @@ function AccountLine({ result, name }: { result: AccountResult; name: string }) 
 export function BanksPage() {
   const ws = useWorkspaceStore((s) => s.workspaceId)!
   const queryClient = useQueryClient()
-  const [states, setStates] = useState<Record<string, BankState>>({})
+  // селектор не подставляет пустой объект сам: новый объект на каждый вызов zustand
+  // принял бы за изменение и перерисовывал бы экран без конца
+  const states = useCollectStore((s) => s.byWorkspace[ws]) ?? NO_STATES
   // банк, у которого «Забыть доступ» ждёт второго нажатия
   const [confirming, setConfirming] = useState<string | null>(null)
 
@@ -84,72 +67,29 @@ export function BanksPage() {
   )
   const busy = Object.values(states).some((s) => s.running)
 
-  const setBank = (code: string, state: BankState) => setStates((prev) => ({ ...prev, [code]: state }))
-  // занятость меняется без потери итога: банк, ждущий очереди, показывает прежний итог
-  const setRunning = (code: string, running: boolean) =>
-    setStates((prev) => ({ ...prev, [code]: { ...prev[code], running } }))
-
   const accountName = (id: string) => (accounts ?? []).find((a) => a.id === id)?.name ?? id
 
-  // сбор мог создать импорты и завести счета — экраны, которые их показывают,
-  // должны перечитать данные
-  const refreshAfterCollect = () => {
-    void queryClient.invalidateQueries({ queryKey: ['accounts', ws] })
-    void queryClient.invalidateQueries({ queryKey: ['discovered', ws] })
-    void queryClient.invalidateQueries({ queryKey: ['pending-imports', ws] })
+  // начатое «Точно забыть?» относилось к прежнему намерению — после сбора нажатие снова первое
+  const dropConfirm = (codes: string[]) =>
+    setConfirming((current) => (current !== null && codes.includes(current) ? null : current))
+
+  const onCollect = (bank: Bank) => {
+    dropConfirm([bank.code])
+    void collectOne(queryClient, ws, bank)
   }
 
-  /** Возвращает true, если приложение отказало во входе (401): дальше собирать нечем. */
-  const collectOne = async (bank: Bank): Promise<boolean> => {
-    // начатое «Точно забыть?» относилось к прежнему намерению — после сбора нажатие снова первое
-    setConfirming((current) => (current === bank.code ? null : current))
-    setBank(bank.code, { running: true })
-    let next: BankState
-    let unauthorized = false
-    try {
-      next = { running: false, summary: await collectFromApp(bank.code, ws) }
-    } catch (error) {
-      // 401 от приложения — токен приложения умер: AuthGuard уведёт на вход, когда «me» перечитается
-      if (error instanceof AppHttpError && error.status === 401) {
-        unauthorized = true
-        void queryClient.invalidateQueries({ queryKey: ['me'] })
-      }
-      next =
-        error instanceof BankSessionExpiredError
-          ? { running: false, error: `${bank.name}: ${SESSION_EXPIRED_TEXT}`, partial: error.partial }
-          : { running: false, error: `${bank.name}: ${errorText(error)}` }
-    }
-    setBank(bank.code, next)
-    refreshAfterCollect()
-    return unauthorized
+  const onCollectAll = () => {
+    dropConfirm(linkable.map((bank) => bank.code))
+    void collectAll(queryClient, ws, linkable)
   }
 
-  const collectAll = async () => {
-    // банки помечаются занятыми сразу все: пока очередь идёт, их кнопки не должны
-    // вклиниваться в неё
-    for (const bank of linkable) setRunning(bank.code, true)
-    for (const [index, bank] of linkable.entries()) {
-      if (!(await collectOne(bank))) continue
-      // человека уводят на экран входа: сбор остальных банков мог бы открыть их окна входа
-      // поверх него, а кнопки оставшихся не должны залипнуть занятыми
-      for (const rest of linkable.slice(index + 1)) setRunning(rest.code, false)
-      return
-    }
-  }
-
-  const forget = async (bank: Bank) => {
+  const onForget = (bank: Bank) => {
     if (confirming !== bank.code) {
       setConfirming(bank.code)
       return
     }
     setConfirming(null)
-    setBank(bank.code, { running: true })
-    try {
-      await forgetBank(bank.code)
-      setBank(bank.code, { running: false })
-    } catch (error) {
-      setBank(bank.code, { running: false, error: `${bank.name}: ${errorText(error)}` })
-    }
+    void forgetAccess(ws, bank)
   }
 
   const renderAccounts = (results: AccountResult[]) =>
@@ -197,7 +137,7 @@ export function BanksPage() {
     <Stack>
       <Group justify="space-between">
         <Title order={2}>Банки</Title>
-        <Button onClick={() => void collectAll()} disabled={busy || linkable.length === 0}>
+        <Button onClick={onCollectAll} disabled={busy || linkable.length === 0}>
           Собрать всё
         </Button>
       </Group>
@@ -211,7 +151,7 @@ export function BanksPage() {
                 <Group gap="xs">
                   <Button
                     size="xs"
-                    onClick={() => void collectOne(bank)}
+                    onClick={() => onCollect(bank)}
                     disabled={state.running}
                   >
                     Собрать
@@ -220,7 +160,7 @@ export function BanksPage() {
                     size="xs"
                     variant="default"
                     color="red"
-                    onClick={() => void forget(bank)}
+                    onClick={() => onForget(bank)}
                     disabled={state.running}
                   >
                     {confirming === bank.code ? 'Точно забыть?' : 'Забыть доступ'}

@@ -6,6 +6,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { AppLayout } from './AppLayout'
 import { logout } from './api/auth'
+import { useCollectStore } from './store/collect'
 
 const desktop = { on: false }
 vi.mock('./desktop/runtime', () => ({ isDesktop: () => desktop.on, invoke: vi.fn() }))
@@ -73,6 +74,15 @@ test('после выхода данные пользователя не ост�
   await userEvent.click(screen.getByText('Выйти'))
   await screen.findByText('экран входа')
   expect(queryClient.getQueryData(['me'])).toBeUndefined()
+})
+
+test('после выхода итоги сборов не остаются следующему пользователю', async () => {
+  vi.mocked(logout).mockResolvedValueOnce(undefined)
+  useCollectStore.getState().setBank('ws-1', 'sber', { running: false, error: 'Сбербанк: банк не отвечает' })
+  renderLayout()
+  await userEvent.click(screen.getByText('Выйти'))
+  await screen.findByText('экран входа')
+  expect(useCollectStore.getState().byWorkspace).toEqual({})
 })
 
 test('пункт «Банки» есть в приложении', () => {

@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { NavLink as RouterNavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { getMe, logout } from './api/auth'
 import { isDesktop } from './desktop/runtime'
+import { useCollectStore } from './store/collect'
 
 const LINKS = [
   { to: '/', label: 'Дашборд' },
@@ -25,7 +26,9 @@ export function AppLayout() {
   const queryClient = useQueryClient()
   const { data: me } = useQuery({ queryKey: ['me'], queryFn: getMe })
   const leave = () => {
+    // ни кэш, ни итоги сборов прежнего пользователя не должны показаться следующему
     queryClient.clear()
+    useCollectStore.getState().reset()
     navigate('/login')
   }
   const logoutMutation = useMutation({
