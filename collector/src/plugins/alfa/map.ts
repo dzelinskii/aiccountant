@@ -220,6 +220,7 @@ export function toAccounts(rawAccounts: readonly unknown[], rawCards: readonly u
       balance: accountBalance(item),
       creditLimit: accountCreditLimit(item),
       cardMasks: masksByAccount.get(number) ?? [],
+      notes: [],
     })
   }
   return result

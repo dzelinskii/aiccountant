@@ -1,3 +1,4 @@
+import { ACCOUNT_NOTES, type AccountNote } from '../../core/account-notes'
 import { hintFromMcc } from '../../core/category-hints'
 import type { CollectedAccount, CollectedOperation } from '../../core/contract'
 import { subtractDecimal } from '../../core/money'
@@ -204,15 +205,25 @@ function toAccount(item: unknown, creditByCard: CreditInfoByCard): CollectedAcco
   const id = getStr(item, 'id')
   if (!id) throw new Error('У карты банка нет id')
 
+  const balance = cardBalance(item, id, creditByCard)
   return {
     id: cardResourceId(id),
     name: getStr(item, 'name') ?? '',
     type: getStr(item, 'type') ?? '',
     currency: cardCurrency(item),
-    balance: cardBalance(item, id, creditByCard),
+    balance,
     creditLimit: cardCreditLimit(item, id, creditByCard),
     cardMasks: cardMask(item),
+    notes: cardNotes(item, balance),
   }
+}
+
+// Кредитка без остатка — всегда следствие того, что деталей карты нет: отказ
+// ручки, непредставимый идентификатор или ответ без нужных полей (см.
+// creditInfo в index.ts). Причину человеку знать незачем, а то, что остаток в
+// приложении не сдвинется, — нужно: иначе это выглядит как сбой без объяснения
+function cardNotes(item: Record<string, unknown>, balance: string | null): AccountNote[] {
+  return cardTypeKind(item) === 'credit' && balance === null ? [ACCOUNT_NOTES.creditBalanceMissing] : []
 }
 
 // У дебетовой карты остаток — доступные средства (availableLimit). У кредитной

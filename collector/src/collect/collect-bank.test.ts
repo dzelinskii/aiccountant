@@ -1,4 +1,5 @@
 import { expect, test, vi } from 'vitest'
+import { ACCOUNT_NOTES } from '../core/account-notes'
 import type { BankPlugin, CollectedAccount, CollectedOperation, Credentials } from '../core/contract'
 import type { FetchImpl } from './app-api'
 import { BankSessionExpiredError, collectBank, type CollectHost, type SessionStore } from './collect-bank'
@@ -8,7 +9,7 @@ const LIVE: Credentials = { kind: 'header', name: 'Cookie', value: 'live' }
 const FRESH: Credentials = { kind: 'header', name: 'Cookie', value: 'fresh' }
 
 function account(id: string): CollectedAccount {
-  return { id, name: `Счёт ${id}`, type: 'card', currency: 'RUB', balance: '10.00', creditLimit: null, cardMasks: [] }
+  return { id, name: `Счёт ${id}`, type: 'card', currency: 'RUB', balance: '10.00', creditLimit: null, cardMasks: [], notes: [] }
 }
 
 function operation(external_id: string): CollectedOperation {
@@ -234,4 +235,47 @@ test('отказ приложения по счёту — живость бан�
   const p = plugin()
   await collectBank(host({ plugin: p, fetchImpl: await appFetch(['a', 'b'], 'app-a') }))
   expect(p.isAlive).toHaveBeenCalledTimes(1)
+})
+
+function withNote(id: string): CollectedAccount {
+  return { ...account(id), notes: [ACCOUNT_NOTES.creditBalanceMissing] }
+}
+
+test('пояснения плагина доходят до итога привязанного счёта — тому же счёту, а не соседу', async () => {
+  const p = plugin({ fetchAccounts: vi.fn(async () => [account('a'), withNote('b'), withNote('c')]) })
+  const summary = await collectBank(host({ plugin: p, fetchImpl: await appFetch(['a', 'b']) }))
+  expect(summary.accounts.map((a) => [a.appAccountId, a.notes])).toEqual([
+    ['app-a', []],
+    ['app-b', [ACCOUNT_NOTES.creditBalanceMissing]],
+  ])
+  // счёт c не привязан: его в итоге нет вовсе, а значит, нет и его пояснения
+  expect(summary.unboundCount).toBe(1)
+})
+
+test('пояснение остаётся и у счёта с отказом: оно о счёте, а не об операциях', async () => {
+  const p = plugin({
+    fetchAccounts: vi.fn(async () => [withNote('a')]),
+    fetchOperations: vi.fn(async () => {
+      throw new Error('Банк не отдал операции')
+    }),
+  })
+  const summary = await collectBank(host({ plugin: p, fetchImpl: await appFetch(['a']) }))
+  expect(summary.accounts).toEqual([
+    expect.objectContaining({ error: 'Банк не отдал операции', notes: [ACCOUNT_NOTES.creditBalanceMissing] }),
+  ])
+})
+
+test('пояснения в приложение не уезжают — ни со списком счетов, ни с импортом', async () => {
+  // они только для экрана: договор API о них не знает
+  const p = plugin({ fetchAccounts: vi.fn(async () => [withNote('a')]) })
+  const fetchImpl = await appFetch(['a'])
+  await collectBank(host({ plugin: p, fetchImpl }))
+
+  const calls = vi.mocked(fetchImpl).mock.calls
+  expect(calls.map(([input]) => new URL(String(input)).pathname)).toEqual(['/api/accounts/discovered', '/api/imports/parsed'])
+  for (const [, init] of calls) {
+    const body = String(init?.body)
+    expect(body).not.toContain('notes')
+    expect(body).not.toContain(ACCOUNT_NOTES.creditBalanceMissing)
+  }
 })

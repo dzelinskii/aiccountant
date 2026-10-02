@@ -107,8 +107,8 @@ async function requestOperations(client: BankClient, query: OperationsQuery): Pr
  *
  * Отказ этой ручки не роняет сбор: список счетов справочный, и терять из-за
  * него операции несоразмерно. Кредитка тогда приезжает без остатка (null, а не
- * ноль — см. map.ts), но молча это не проходит: в вывод идёт строка с
- * идентификатором карты.
+ * ноль — см. map.ts), но молча это не проходит: счёт этой карты несёт
+ * пояснение, и его видно в итоге сбора.
  */
 async function creditInfo(client: BankClient, cards: readonly unknown[]): Promise<Map<string, unknown>> {
   const found = new Map<string, unknown>()
@@ -120,15 +120,13 @@ async function creditInfo(client: BankClient, cards: readonly unknown[]): Promis
     if (!Number.isSafeInteger(numeric)) {
       // непредставимый точно идентификатор не отправляем: округлив его, мы
       // спросили бы долг по чужой карте, а это хуже отсутствия остатка
-      console.log(`карта ${id}: идентификатор не представим точным целым, долг не запрашивается`)
       continue
     }
     try {
       const block = findCreditType(await client.postJson(CARD_INFO_PATH, { cardIds: [numeric] }))
       if (block !== undefined) found.set(id, block)
     } catch {
-      // ни сумм, ни тела ответа — только идентификатор карты
-      console.log(`карта ${id}: долг по кредитке не получен, остаток показан не будет`)
+      // карта остаётся без блока, и пояснение у её счёта ставит map.ts
     }
   }
   return found
