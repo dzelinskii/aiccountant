@@ -1,0 +1,308 @@
+"""Импорт из одних дублей закрывается сам; ожидающий импорт можно отклонить."""
+
+import uuid
+from decimal import Decimal
+from typing import Any
+
+from httpx import AsyncClient, Response
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from structlog.testing import capture_logs
+
+from app.imports import service
+from app.imports.models import Import
+from tests.fixtures import fixed_parse
+from tests.test_import_async_service import SAMPLE
+
+ALICE = {"email": "alice@example.com", "password": "password123"}
+BOB = {"email": "bob@example.com", "password": "password123"}
+
+
+def _op(external_id: str, amount: str = "-100.00") -> dict[str, str]:
+    return {
+        "occurred_at": "2026-09-01",
+        "amount": amount,
+        "currency": "RUB",
+        "description": "Кофейня",
+        "external_id": external_id,
+    }
+
+
+async def _ws_and_account(client: AsyncClient, creds: dict[str, str]) -> tuple[str, str]:
+    await client.post("/api/auth/register", json=creds)
+    me = await client.get("/api/me")
+    ws = str(me.json()["workspaces"][0]["id"])
+    account_id = (
+        await client.post(
+            "/api/accounts",
+            params={"workspace_id": ws},
+            json={"name": "Кредитка", "type": "card", "currency": "RUB"},
+        )
+    ).json()["id"]
+    return ws, str(account_id)
+
+
+async def _send(
+    client: AsyncClient,
+    ws: str,
+    account_id: str,
+    operations: list[dict[str, str]],
+    account: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Коллектор прислал разбор — без подтверждения."""
+    body: dict[str, Any] = {"parser": "tbank_collector", "operations": operations}
+    if account is not None:
+        body["account"] = account
+    resp = await client.post(
+        "/api/imports/parsed", params={"workspace_id": ws, "account_id": account_id}, json=body
+    )
+    assert resp.status_code == 201, resp.text
+    result: dict[str, Any] = resp.json()
+    return result
+
+
+async def _commit(client: AsyncClient, ws: str, import_id: str) -> Response:
+    return await client.post(f"/api/imports/{import_id}/commit", params={"workspace_id": ws})
+
+
+async def _reject(client: AsyncClient, ws: str, import_id: str) -> Response:
+    return await client.post(f"/api/imports/{import_id}/reject", params={"workspace_id": ws})
+
+
+async def _status(client: AsyncClient, ws: str, import_id: str) -> dict[str, Any]:
+    resp = await client.get(f"/api/imports/{import_id}", params={"workspace_id": ws})
+    assert resp.status_code == 200
+    result: dict[str, Any] = resp.json()
+    return result
+
+
+async def _pending_ids(client: AsyncClient, ws: str) -> list[str]:
+    pending = (await client.get("/api/imports", params={"workspace_id": ws})).json()
+    return [item["import_id"] for item in pending]
+
+
+async def _account(client: AsyncClient, ws: str) -> dict[str, Any]:
+    accounts: list[dict[str, Any]] = (
+        await client.get("/api/accounts", params={"workspace_id": ws})
+    ).json()
+    return accounts[0]
+
+
+async def _transactions_total(client: AsyncClient, ws: str) -> int:
+    txns = (await client.get("/api/transactions", params={"workspace_id": ws})).json()
+    total: int = txns["total"]
+    return total
+
+
+# --- закрывается сам ---
+
+
+async def test_collector_import_of_duplicates_closes_itself(client: AsyncClient) -> None:
+    """Повторный сбор, где всё дубли: в ожидающих не остаётся, а остаток и лимит
+    из него доезжают до счёта — ради этого прежде и не хватало подтверждения."""
+    ws, acc = await _ws_and_account(client, ALICE)
+    first = await _send(client, ws, acc, [_op("op-1")], {"balance": "-100.00"})
+    assert (await _commit(client, ws, first["import_id"])).status_code == 200
+
+    again = await _send(
+        client,
+        ws,
+        acc,
+        [_op("op-1")],
+        {"balance": "-2000.47", "credit_limit": "142000.00", "card_masks": ["1234"]},
+    )
+
+    assert again["status"] == "completed"
+    assert await _pending_ids(client, ws) == []
+    account = await _account(client, ws)
+    assert Decimal(account["balance"]) == Decimal("-2000.47")
+    assert Decimal(account["credit_limit"]) == Decimal("142000.00")
+    assert account["card_masks"] == ["1234"]
+    assert await _transactions_total(client, ws) == 1
+    # повторный commit отвечает сохранёнными числами закрытия
+    result = (await _commit(client, ws, again["import_id"])).json()
+    assert (result["imported"], result["duplicates"]) == (0, 1)
+
+
+async def test_import_with_new_operations_waits(client: AsyncClient) -> None:
+    ws, acc = await _ws_and_account(client, ALICE)
+    first = await _send(client, ws, acc, [_op("op-1")])
+    await _commit(client, ws, first["import_id"])
+
+    # один дубль и одна новая: решать человеку
+    mixed = await _send(client, ws, acc, [_op("op-1"), _op("op-2")], {"balance": "5.00"})
+
+    assert mixed["status"] == "ready"
+    assert await _pending_ids(client, ws) == [mixed["import_id"]]
+    assert (await _account(client, ws))["reported_at"] is None
+
+
+async def test_statement_of_duplicates_closes_itself(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Та же выписка второй раз: разбор кончился — и ждать нечего."""
+    ws, acc = await _ws_and_account(client, ALICE)
+    user_id = uuid.UUID((await client.get("/api/me")).json()["id"])
+
+    async def _upload() -> uuid.UUID:
+        imp = await service.start_import(
+            db_session, uuid.UUID(ws), uuid.UUID(acc), user_id, "s.pdf", ["текст"]
+        )
+        await service.run_parse(db_session, imp.id, parse=fixed_parse(SAMPLE, "tbank_statement"))
+        return imp.id
+
+    first = await _upload()
+    assert (await _status(client, ws, str(first)))["status"] == "ready"
+    await _commit(client, ws, str(first))
+
+    second = await _upload()
+
+    assert (await _status(client, ws, str(second)))["status"] == "completed"
+    assert await _pending_ids(client, ws) == []
+    assert await _transactions_total(client, ws) == 2
+
+
+async def test_neighbour_commit_closes_import_left_with_duplicates(client: AsyncClient) -> None:
+    """Два сбора за пересекающийся период ждут оба; подтвердили свежий —
+    в старом новых не осталось, и он закрывается, не откатывая остаток."""
+    ws, acc = await _ws_and_account(client, ALICE)
+    older = await _send(client, ws, acc, [_op("op-1")], {"balance": "-100.00"})
+    newer = await _send(client, ws, acc, [_op("op-1"), _op("op-2")], {"balance": "-300.00"})
+    assert older["status"] == newer["status"] == "ready"
+
+    await _commit(client, ws, newer["import_id"])
+
+    assert (await _status(client, ws, older["import_id"]))["status"] == "completed"
+    assert await _pending_ids(client, ws) == []
+    # старый сбор закрылся позже, но остаток назад по времени не поехал
+    assert Decimal((await _account(client, ws))["balance"]) == Decimal("-300.00")
+    assert await _transactions_total(client, ws) == 2
+
+
+async def test_next_collection_sweeps_accumulated(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Импорты из дублей, накопившиеся до автозакрытия, прибирает ближайший сбор
+    по тому же счёту — даже если сам он с новыми операциями и остаётся ждать."""
+    ws, acc = await _ws_and_account(client, ALICE)
+    first = await _send(client, ws, acc, [_op("op-1")])
+    await _commit(client, ws, first["import_id"])
+    committed = await db_session.get(Import, uuid.UUID(first["import_id"]))
+    assert committed is not None and committed.parsed_payload is not None
+    stale = Import(
+        workspace_id=committed.workspace_id,
+        account_id=committed.account_id,
+        file_name="tbank_collector.json",
+        bank_profile="tbank_collector",
+        parser="tbank_collector",
+        status="ready",
+        stats={},
+        created_by=committed.created_by,
+        parsed_payload=dict(committed.parsed_payload),
+    )
+    db_session.add(stale)
+    await db_session.commit()
+
+    fresh = await _send(client, ws, acc, [_op("op-2")])
+
+    assert await _pending_ids(client, ws) == [fresh["import_id"]]
+    assert (await _status(client, ws, str(stale.id)))["status"] == "completed"
+
+
+async def test_broken_neighbour_is_skipped_not_fatal(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Испорченный разбор соседа не роняет подтверждение человека: сосед остаётся
+    ждать, и это видно в логе."""
+    ws, acc = await _ws_and_account(client, ALICE)
+    broken = await _send(client, ws, acc, [_op("op-1")])
+    good = await _send(client, ws, acc, [_op("op-2")])
+    row = await db_session.get(Import, uuid.UUID(broken["import_id"]))
+    assert row is not None
+    row.parsed_payload = {"operations": "испорчено"}
+    await db_session.commit()
+
+    with capture_logs() as logs:
+        resp = await _commit(client, ws, good["import_id"])
+
+    assert resp.status_code == 200
+    assert await _pending_ids(client, ws) == [broken["import_id"]]
+    assert any(e["event"] == "import_autoclose_broken_payload" for e in logs)
+
+
+# --- отклонение ---
+
+
+async def test_reject_removes_from_pending_without_effects(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    ws, acc = await _ws_and_account(client, ALICE)
+    imp = await _send(
+        client, ws, acc, [_op("op-1")], {"balance": "-2000.47", "credit_limit": "142000.00"}
+    )
+
+    resp = await _reject(client, ws, imp["import_id"])
+
+    assert resp.status_code == 204
+    assert await _pending_ids(client, ws) == []
+    assert (await _status(client, ws, imp["import_id"]))["status"] == "rejected"
+    assert await _transactions_total(client, ws) == 0
+    account = await _account(client, ws)
+    assert account["reported_at"] is None
+    assert account["credit_limit"] is None
+    # операции выписки больше не нужны ни для чего — не храним
+    row = await db_session.scalar(select(Import).where(Import.id == uuid.UUID(imp["import_id"])))
+    assert row is not None and row.parsed_payload is None
+
+
+async def test_reject_twice_is_same_outcome(client: AsyncClient) -> None:
+    ws, acc = await _ws_and_account(client, ALICE)
+    imp = await _send(client, ws, acc, [_op("op-1")])
+    await _reject(client, ws, imp["import_id"])
+
+    assert (await _reject(client, ws, imp["import_id"])).status_code == 204
+
+
+async def test_reject_foreign_workspace_is_404(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Чужой импорт неотличим от несуществующего и остаётся нетронутым."""
+    alice_ws, alice_acc = await _ws_and_account(client, ALICE)
+    imp = await _send(client, alice_ws, alice_acc, [_op("op-1")])
+    client.cookies.clear()
+    bob_ws, _ = await _ws_and_account(client, BOB)
+
+    foreign = await _reject(client, bob_ws, imp["import_id"])
+    missing = await _reject(client, bob_ws, str(uuid.uuid4()))
+
+    assert foreign.status_code == missing.status_code == 404
+    assert foreign.json()["detail"] == missing.json()["detail"]
+    row = await db_session.scalar(
+        select(Import)
+        .where(Import.id == uuid.UUID(imp["import_id"]))
+        .execution_options(populate_existing=True)
+    )
+    assert row is not None and row.status == "ready" and row.parsed_payload is not None
+
+
+async def test_reject_committed_is_refused(client: AsyncClient) -> None:
+    ws, acc = await _ws_and_account(client, ALICE)
+    imp = await _send(client, ws, acc, [_op("op-1")])
+    await _commit(client, ws, imp["import_id"])
+
+    resp = await _reject(client, ws, imp["import_id"])
+
+    assert resp.status_code == 409
+    assert (await _status(client, ws, imp["import_id"]))["status"] == "completed"
+
+
+async def test_commit_rejected_is_refused(client: AsyncClient) -> None:
+    ws, acc = await _ws_and_account(client, ALICE)
+    imp = await _send(client, ws, acc, [_op("op-1")], {"balance": "-100.00"})
+    await _reject(client, ws, imp["import_id"])
+
+    resp = await _commit(client, ws, imp["import_id"])
+
+    assert resp.status_code == 409
+    assert await _transactions_total(client, ws) == 0
+    assert (await _account(client, ws))["reported_at"] is None

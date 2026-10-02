@@ -10,7 +10,7 @@ from app.core.category_hints import CategoryHint
 from app.core.money import Money, MoneyStr, reject_float
 from app.core.operation_kinds import OperationKind
 
-ImportStatus = Literal["processing", "ready", "failed", "completed"]
+ImportStatus = Literal["processing", "ready", "failed", "completed", "rejected"]
 
 
 class ImportOperationOut(BaseModel):

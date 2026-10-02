@@ -289,16 +289,17 @@ async def test_older_import_does_not_roll_limit_back(
 async def test_limit_updates_when_nothing_new_imported(client: AsyncClient) -> None:
     """Повторный сбор — законный и самый частый способ обновить лимит, и все
     операции в нём чаще всего дубли. Считай мы применение лимита только при
-    новых операциях, обновлять его было бы нечем."""
+    новых операциях, обновлять его было бы нечем. Подтверждать такой сбор
+    человеку не нужно: импорт без новых операций сервер закрывает сам."""
     ws, account_id = await _ws_and_account(client)
     await _collect(client, ws, account_id, {"balance": "-2000.47", "credit_limit": "142000.00"})
 
     # тот же external_id: ни одной новой операции
-    result = await _collect(
+    started = await _start_import(
         client, ws, account_id, {"balance": "-2000.47", "credit_limit": "200000.00"}
     )
 
-    assert result["imported"] == 0
+    assert started.json()["status"] == "completed"
     assert Decimal((await _account(client, ws))["credit_limit"]) == Decimal("200000.00")
 
 

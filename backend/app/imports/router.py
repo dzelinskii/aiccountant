@@ -133,3 +133,18 @@ async def commit_import(
         raise HTTPException(status_code=404, detail="Импорт не найден") from None
     except service.ImportNotReadyError:
         raise HTTPException(status_code=409, detail="Импорт не готов к подтверждению") from None
+
+
+@router.post("/imports/{import_id}/reject", status_code=204)
+async def reject_import(
+    import_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    _user: Annotated[User, Depends(require_workspace_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> None:
+    try:
+        await service.reject_import(db, workspace_id, import_id)
+    except service.ImportNotFoundError:
+        raise HTTPException(status_code=404, detail="Импорт не найден") from None
+    except service.ImportNotReadyError:
+        raise HTTPException(status_code=409, detail="Импорт уже не ждёт решения") from None

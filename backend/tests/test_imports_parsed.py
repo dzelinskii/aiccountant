@@ -185,16 +185,20 @@ async def test_second_import_preview_marks_duplicates(client: AsyncClient) -> No
     await client.post(
         f"/api/imports/{first.json()['import_id']}/commit", params={"workspace_id": ws}
     )
+    # одна новая к двум прежним: импорт из одних дублей ждать не стал бы
+    fresh = {**OPS[0], "external_id": "bank-op-3"}
     second = await client.post(
         "/api/imports/parsed",
         params={"workspace_id": ws, "account_id": acc},
-        json={"parser": "tbank_collector", "operations": OPS},
+        json={"parser": "tbank_collector", "operations": [*OPS, fresh]},
     )
     status = await client.get(
         f"/api/imports/{second.json()['import_id']}", params={"workspace_id": ws}
     )
-    assert status.json()["preview"]["new_count"] == 0
+    assert status.json()["preview"]["new_count"] == 1
     assert status.json()["preview"]["duplicate_count"] == 2
+    flags = [op["is_duplicate"] for op in status.json()["preview"]["operations"]]
+    assert flags == [True, True, False]
 
 
 async def test_amounts_survive_round_trip(client: AsyncClient) -> None:

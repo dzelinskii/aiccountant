@@ -483,8 +483,9 @@ async def test_reimport_after_linking_gives_duplicates_not_doubles(client: Async
         json={"parser": "alfa_collector", "operations": operations},
     )
     assert second.status_code == 201
-    status = await client.get(
-        f"/api/imports/{second.json()['import_id']}", params={"workspace_id": ws}
+    # всё дубли — импорт закрылся сам, и его итог сохранён как у подтверждения
+    assert second.json()["status"] == "completed"
+    result = await client.post(
+        f"/api/imports/{second.json()['import_id']}/commit", params={"workspace_id": ws}
     )
-    assert status.json()["preview"]["new_count"] == 0
-    assert status.json()["preview"]["duplicate_count"] == 1
+    assert (result.json()["imported"], result.json()["duplicates"]) == (0, 1)

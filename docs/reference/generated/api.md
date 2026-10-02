@@ -34,6 +34,7 @@ API **не версионирован**: все пути живут под `/api
 - `POST /api/imports/parsed` — принимает `ParsedImportIn`, отвечает `ImportStartedOut`
 - `GET /api/imports/{import_id}` — отвечает `ImportStatusOut`
 - `POST /api/imports/{import_id}/commit` — отвечает `ImportResultOut`
+- `POST /api/imports/{import_id}/reject`
 - `GET /api/me` — отвечает `MeOut`
 - `GET /api/recurring` — отвечает списком `RuleOut`
 - `POST /api/recurring` — принимает `RuleCreate`, отвечает `RuleOut`
