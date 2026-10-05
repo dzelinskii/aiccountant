@@ -1,7 +1,7 @@
 import { hintFromMcc, type CategoryHint } from '../../core/category-hints'
 import type { CollectedAccount, CollectedOperation } from '../../core/contract'
 import { ACCOUNT_NOTES, type AccountNote } from '../../core/account-notes'
-import { debtFrom, subtractDecimal } from '../../core/money'
+import { debtFrom, isDecimal, subtractDecimal } from '../../core/money'
 
 /**
  * Отображение ответа Т-Банка в нашу модель. Вход — результат parseLossless,
@@ -118,7 +118,7 @@ function loanBalance(item: Record<string, unknown>): string | null {
   const debt = getRecord(item, 'debtAmount')
   const value = debt ? toAmountString(debt['value']) : undefined
   // недесятичная строка из банка не должна ронять сбор: остаток его дополняет
-  if (value === undefined || !/^-?\d+(\.\d+)?$/.test(value)) return null
+  if (value === undefined || !isDecimal(value)) return null
   return debtFrom(value)
 }
 
