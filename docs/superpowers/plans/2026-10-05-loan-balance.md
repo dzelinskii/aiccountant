@@ -630,7 +630,7 @@ git commit -m "Бэклог: кредиты наличными закрыты, �
 
 ### Task 7: приёмка
 
-- [ ] **Step 1:** все команды проверки трёх пакетов; `git fetch origin && git log --oneline HEAD..origin/main` — пусто, иначе `git rebase origin/main` и прогнать заново.
+- [ ] **Step 1:** все команды проверки трёх пакетов; `git fetch origin && git log --oneline HEAD..origin/main` — пусто, иначе влить `origin/main` в ветку (`git merge origin/main`, не rebase) и прогнать заново.
 - [ ] **Step 2:** ревью ветки субагентом `superpowers:code-reviewer` с мутантами; в брифе — сверка `docs/reference/collector.md` с дифом.
 - [ ] **Step 3:** PR в `main`, автослияние после зелёного CI.
 - [ ] **Step 4:** после слияния — пересборка приложения из `main` и **живой прогон с разрешения владельца**: сбор Т-Банка и Альфы; завести счета-кредиты из «Есть в банке, но не ведётся»; сверить:

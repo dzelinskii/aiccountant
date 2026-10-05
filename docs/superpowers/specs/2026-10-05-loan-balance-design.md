@@ -147,8 +147,16 @@
   «Задолженность по основному долгу» (`detailDebts`, `type: MAIN`) в карточке
   кредита `/api/v1/credit/account/<номер>`. Проценты лежат отдельно и в него не
   входят — как и у Т-Банка, главным банк показывает тело долга. Остальные
-  суммы договора (`payment.debt`, `payment.repay`, `debt.total`,
-  `fullPartRepay`) больше и остатком не берутся.
+  суммы (`payment.debt`, `payment.repay` у договора; `debt.total` и
+  `credit.fullPartRepay` у карточки) больше и остатком не берутся.
+- **Что ещё лежит в ответах** (не собирается — пункт бэклога «Анализ кредитов
+  и будущих платежей»):
+  - договор `credit/info`: `nextPaymentDate`, `nextContractualPaymentDate`,
+    `payment` (`next`, `debt`, `repay`, `overdue`, `status`);
+  - карточка `GET /api/v1/credit/account/<номер>`: `nextPayment` (сумма, дата,
+    `contractualDate`, `status`), `credit.monthlyPayment`, `credit.endDate`,
+    `credit.fullPartRepay`, `debt.total`, `debt.detailDebts` (типы `MAIN`,
+    `PERCENT`, `FULL_PERCENT`).
 - Деньги — объект `{value, minorUnits, currency}`, `minorUnits: 100`: сумма в
   копейках.
 - У договора есть свой номер `agreementNumber` и имя `clientCreditName`.
