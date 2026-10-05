@@ -18,6 +18,17 @@ export function subtractDecimal(a: string, b: string): string {
   return fromScaled(toScaled(a, scale) - toScaled(b, scale), scale)
 }
 
+/**
+ * Остаток счёта-кредита: модуль суммы со знаком минус. Знак из ответа банка не
+ * берётся — у кредита собственных денег не бывает, а знак долга у банков
+ * разный (у кредита наличными Т-Банка отрицательный, у кредитной карты
+ * положительный), и угаданный неверно превратил бы долг в деньги на счёте.
+ */
+export function debtFrom(value: string): string {
+  if (!DECIMAL.test(value)) throw new Error('Долг: значение не десятичное число')
+  return subtractDecimal('0', value.startsWith('-') ? value.slice(1) : value)
+}
+
 function fractionLength(value: string): number {
   const dot = value.indexOf('.')
   return dot === -1 ? 0 : value.length - dot - 1

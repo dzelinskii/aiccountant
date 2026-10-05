@@ -8,6 +8,7 @@
  */
 export const ACCOUNT_NOTES = {
   creditBalanceMissing: 'Остаток кредитной карты не получен — в приложении он не обновится',
+  loanBalanceMissing: 'Остаток кредита не получен — в приложении он не обновится',
 } as const
 
 export type AccountNote = (typeof ACCOUNT_NOTES)[keyof typeof ACCOUNT_NOTES]
