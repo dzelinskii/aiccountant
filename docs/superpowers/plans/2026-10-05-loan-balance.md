@@ -4,9 +4,9 @@
 
 **Goal:** долг по кредитам наличными Т-Банка и Альфа-Банка приезжает отрицательным остатком счёта и показывается «долг N ₽».
 
-**Architecture:** общий помощник «долг из суммы» и пояснение в ядре коллектора; плагин Т-Банка берёт `debtAmount` у `CashLoan`; плагин Альфы спрашивает договоры `GET /api/v1/credit/info` и делает из действующих некарточных договоров счета; оболочка пускает новый адрес; экран пишет «долг» при отрицательном остатке. Бэкенд не меняется.
+**Architecture:** общий помощник «долг из суммы» и пояснение в ядре коллектора; плагин Т-Банка берёт `debtAmount` у `CashLoan`; плагин Альфы спрашивает договоры `GET /api/v1/credit/info` и делает из действующих некарточных договоров счета; оболочка пускает новый адрес; экран пишет «долг» при отрицательном остатке. Бэкенд принимает импорт без операций, если в нём есть блок счёта, и закрывает его сам (задача 4a): иначе остаток счёта без операций до приложения не доезжает.
 
-**Tech Stack:** TypeScript (collector, frontend — vitest, oxlint), Rust (desktop/src-tauri — cargo test).
+**Tech Stack:** TypeScript (collector, frontend — vitest, oxlint), Rust (desktop/src-tauri — cargo test), Python (backend — pytest + testcontainers, ruff, mypy, import-linter).
 
 Спека: `docs/superpowers/specs/2026-10-05-loan-balance-design.md` (§3, §4, §5, §6a).
 
@@ -25,6 +25,7 @@
 | Где | Команда |
 |---|---|
 | `collector/` | `pnpm test && pnpm lint && pnpm build && pnpm reference` (после — `git status docs/reference/generated` пусто) |
+| `backend/` | `uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run lint-imports && uv run pytest`; затем `uv run python scripts/gen_reference.py` |
 | `frontend/` | `pnpm test && pnpm lint && pnpm build` |
 | `desktop/src-tauri/` | `export PATH="$HOME/.cargo/bin:$PATH"; cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` (нужен собранный фронт: `pnpm --dir ../../frontend build`) |
 

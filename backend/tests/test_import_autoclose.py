@@ -515,6 +515,8 @@ async def test_import_without_operations_and_account_rejected(client: AsyncClien
     bodies: list[dict[str, Any]] = [
         {"parser": "tbank_collector", "operations": []},
         {"parser": "tbank_collector", "operations": [], "account": None},
+        # блок без остатка — не блок: остаток в нём обязателен
+        {"parser": "tbank_collector", "operations": [], "account": {}},
     ]
     for body in bodies:
         resp = await client.post(
@@ -524,11 +526,38 @@ async def test_import_without_operations_and_account_rejected(client: AsyncClien
     assert await _pending_ids(client, ws) == []
 
 
+async def test_import_without_operations_to_foreign_account_not_found(
+    client: AsyncClient,
+) -> None:
+    """Проверка счёта не держится на операциях: без них остаток чужому счёту
+    не применится, а ответ неотличим от «счёта нет»."""
+    alice_ws, alice_acc = await _ws_and_account(client, ALICE)
+    client.cookies.clear()
+    bob_ws, _ = await _ws_and_account(client, BOB)
+    body = {"parser": "tbank_collector", "operations": [], "account": {"balance": "-1.00"}}
+
+    responses = [
+        await client.post(
+            "/api/imports/parsed", params={"workspace_id": bob_ws, "account_id": target}, json=body
+        )
+        for target in (alice_acc, str(uuid.uuid4()))
+    ]
+
+    assert [r.status_code for r in responses] == [404, 404]
+    assert responses[0].json()["detail"] == responses[1].json()["detail"]
+    assert await _pending_ids(client, bob_ws) == []
+    client.cookies.clear()
+    assert (await client.post("/api/auth/login", json=ALICE)).status_code == 200
+    assert Decimal((await _account(client, alice_ws))["balance"]) == 0
+
+
 async def test_import_without_operations_waits_and_commits_by_hand(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Проход автозакрытия сорвался — пустой импорт остаётся ждать, и всё, что
-    видит и делает с ним человек, работает: список, превью, подтверждение."""
+    """Проход автозакрытия сорвался — пустой импорт остаётся ждать следующего
+    прохода по счёту, и ручки на нём не ломаются: список и превью отвечают
+    нулями, подтверждение применяет остаток. На экране человек его не
+    подтвердит — кнопка гаснет при нуле новых, — только отклонит."""
     ws, acc = await _ws_and_account(client, ALICE)
     monkeypatch.setattr(service, "_close_duplicate_only_imports", _failing_sweep)
 
