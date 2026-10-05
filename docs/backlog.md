@@ -414,11 +414,16 @@ RUS» у Т-Банка — вообще не карточная отмена, а
   `nextPaymentDate`, `remainingPaymentsCount`, `overdue`, `overDueFee`,
   `maxRepaymentAmount` (сумма закрытия сегодня, с набежавшими процентами; растёт
   каждый день и остатком не берётся).
-- Альфа-Банк, договор из `GET /api/v1/credit/info`: `payment` (внутри — `debt` и
-  `repay`), `debt.total`, `fullPartRepay`; проценты лежат отдельно от
-  `principal`, который стал остатком. Деньги — `{value, minorUnits, currency}`,
-  сумма в копейках. Какое из полей — ближайший платёж и есть ли дата платежа,
-  замером не выяснено.
+- Альфа-Банк, договор из `GET /api/v1/credit/info`: `nextPaymentDate`,
+  `nextContractualPaymentDate`, `payment` (внутри — `next`, `debt`, `repay`,
+  `overdue`, `status`); проценты лежат отдельно от `principal`, который стал
+  остатком. Подробнее — карточка договора `GET /api/v1/credit/account/<номер>`
+  (оболочкой пока не пускается): `nextPayment` (сумма и дата ближайшего
+  платежа), `credit.monthlyPayment`, `credit.endDate`, `debt.detailDebts`
+  (основной долг и проценты раздельно), `credit.fullPartRepay` (сумма полного
+  погашения). Деньги — `{value, minorUnits, currency}`, сумма в копейках. Какое
+  из полей договора совпадает с ближайшим платежом на странице кредита — не
+  сверялось.
 
 **Что даёт:** «к 25-му нужно 18 000 на три платежа» — то, ради чего приложение
 и заводилось, и чего нет ни в одном банковском интерфейсе, когда кредитов
