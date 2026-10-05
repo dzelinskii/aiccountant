@@ -38,6 +38,10 @@ const SBER_CREDIT_CARDS = JSON.stringify({
   body: { sections: { technicalSection: { sectionProductData: { cardsInWallet: { data: [{ id: 42, type: 'credit' }] } } } } },
 })
 
+// Пустые списки под каждым ключом, который читает плагин Альфы: без них разбор
+// счетов падает раньше, чем плагин дойдёт до следующей ручки
+const ALFA_EMPTY = JSON.stringify({ accounts: [], cards: [], contracts: [], operations: [] })
+
 const CREDENTIALS: Record<string, Credentials> = {
   tbank: { kind: 'query', name: 'sessionid', value: 'token' },
   sber: { kind: 'header', name: 'Cookie', value: 'UFS-SESSION=a' },
@@ -49,7 +53,7 @@ async function pluginCalls(bank: string): Promise<Set<Pair>> {
   const transport: Transport = {
     async send(url, { method }) {
       calls.add(`${method} ${url.pathname}`)
-      const body = bank === 'sber' && url.pathname.includes('section/meta') ? SBER_CREDIT_CARDS : '{}'
+      const body = bank === 'sber' && url.pathname.includes('section/meta') ? SBER_CREDIT_CARDS : bank === 'alfa' ? ALFA_EMPTY : '{}'
       return { status: 200, ok: true, text: async () => body }
     },
   }

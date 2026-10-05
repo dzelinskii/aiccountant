@@ -1,4 +1,4 @@
-import { expect, test } from 'vitest'
+import { expect, test, vi } from 'vitest'
 import type { Transport } from '../../http/transport'
 import { createAlfaPlugin, toAlfaDate } from './index'
 
@@ -146,6 +146,25 @@ test('договоры не ответили — счета собираются
   })
   const accounts = await plugin.fetchAccounts(CRED)
   expect(accounts.map((a) => a.id)).toEqual(['40817810000000002905'])
+})
+
+test('договоры не ответили — в консоль уходит статус, но не путь, тело и суммы', async () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+  try {
+    const { plugin } = pluginWith({ credits: { status: 500, body: '{"principal":{"value":47268039}}' } })
+    await plugin.fetchAccounts(CRED)
+    const logged = JSON.stringify(warn.mock.calls)
+    expect(logged).toContain('500')
+    expect(logged).not.toContain('/api/v1/credit/info')
+    expect(logged).not.toContain('47268039')
+  } finally {
+    warn.mockRestore()
+  }
+})
+
+test('договоры ответили 302 — сессия истекла, сбор останавливается, а не теряет кредиты молча', async () => {
+  const { plugin } = pluginWith({ credits: { status: 302 } })
+  await expect(plugin.fetchAccounts(CRED)).rejects.toMatchObject({ status: 302 })
 })
 
 test('у кредита истории нет — в банк за ней не ходим', async () => {

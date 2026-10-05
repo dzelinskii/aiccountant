@@ -46,9 +46,8 @@ export function createAlfaPlugin(options: PluginOptions): BankPlugin {
       const client = clientFor(credentials)
       const accountsRaw = await client.getJson(ACCOUNTS_PATH)
       const cardsRaw = await client.getJson(CARDS_PATH)
-      const loanAccounts = await loans(client)
       const accounts = toAccounts(arrayAt(accountsRaw, 'accounts', 'счета'), arrayAt(cardsRaw, 'cards', 'карты'))
-      return [...accounts, ...loanAccounts]
+      return [...accounts, ...(await loans(client))]
     },
 
     async fetchOperations(credentials: Credentials, accountId: string, since: number, until: number): Promise<CollectedOperation[]> {
@@ -92,16 +91,25 @@ export function toAlfaDate(millis: number): string {
 }
 
 // Договоры — дополнение к списку счетов: их отказ не должен отнимать у
-// человека остальные счета и операции. Кредиты в этот сбор просто не приедут —
-// и об этом остаётся след в консоли окна, а не тишина. В консоль идёт только
-// имя ошибки: текст BankHttpError нёс бы путь, а суммы и адреса в логи не пишутся
+// человека остальные счета и операции, и кредиты в этот сбор просто не приедут.
+// След остаётся лишь в консоли окна, которую человек обычно не видит, — он для
+// разбора, а не для оповещения. Сессия при этом истекать не должна: 302 —
+// единственный признак этого (см. isAlive), и его пробрасываем, как там.
+// В консоль идёт статус или имя ошибки: текст ошибки и адрес нёс бы путь, а
+// суммы и адреса в логи не пишутся
 async function loans(client: BankClient): Promise<CollectedAccount[]> {
   try {
     return toLoanAccounts(arrayAt(await client.getJson(CREDITS_PATH), 'contracts', 'кредитные договоры'))
   } catch (error) {
-    console.warn('Альфа: кредитные договоры не получены', error instanceof Error ? error.name : typeof error)
+    if (error instanceof BankHttpError && error.status === 302) throw error
+    console.warn('Альфа: кредитные договоры не получены', failureTag(error))
     return []
   }
+}
+
+function failureTag(error: unknown): number | string {
+  if (error instanceof BankHttpError) return error.status
+  return error instanceof Error ? error.name : typeof error
 }
 
 function arrayAt(raw: unknown, key: string, what: string): unknown[] {

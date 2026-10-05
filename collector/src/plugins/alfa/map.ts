@@ -254,12 +254,15 @@ const ACTIVE_CONTRACT = 'A'
 
 export function toLoanAccounts(contracts: readonly unknown[]): CollectedAccount[] {
   const loans: CollectedAccount[] = []
+  // повтор номера уронил бы весь сбор: бэкенд отвергает повторный отпечаток счёта
+  const seen = new Set<string>()
   for (const item of contracts) {
     if (!isRecord(item)) continue
     if (getStr(item, 'productGroup') === CARD_PRODUCT_GROUP) continue
     if (getStr(item, 'contractStatus') !== ACTIVE_CONTRACT) continue
     const agreement = getStr(item, 'agreementNumber')
-    if (!agreement) continue
+    if (!agreement || seen.has(agreement)) continue
+    seen.add(agreement)
     const principal = getRecord(item, 'principal')
     const balance = loanBalance(principal)
     loans.push({

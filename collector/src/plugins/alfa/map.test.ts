@@ -291,3 +291,12 @@ test('principal не разобрать — остаток пуст и пояс�
 test('договор без номера пропускается — без него у счёта нет устойчивого идентификатора', () => {
   expect(toLoanAccounts([contract({ agreementNumber: undefined })])).toEqual([])
 })
+
+test('два договора с одним номером — счёт один, первый: повтор отпечатка бэкенд отвергает целиком', () => {
+  const loans = toLoanAccounts([contract({ clientCreditName: 'Первый' }), contract({ clientCreditName: 'Второй' })])
+  expect(loans.map((l) => l.name)).toEqual(['Первый'])
+})
+
+test('договор не объектом пропускается, а не роняет сбор', () => {
+  expect(toLoanAccounts([null, 'строка', 42, contract()]).map((l) => l.id)).toEqual([`${LOAN_ID_PREFIX}PIL123456`])
+})
