@@ -212,12 +212,14 @@ def _known_kind(raw: str, import_id: uuid.UUID) -> OperationKind:
 
 
 def _payload_to_statement(payload: dict[str, object]) -> ParsedStatement:
-    # это наш собственный payload (не ввод пользователя): пустой/нетипизированный
-    # "operations" или битый элемент внутри — порча данных, а не законный случай
-    # (и парсер, и LLM-разбор гарантируют хотя бы одну операцию), поэтому падаем
-    # явно одним типом ошибки, а не молча теряем операции
+    # это наш собственный payload (не ввод пользователя): нетипизированный
+    # "operations" или битый элемент внутри — порча данных, а не законный случай,
+    # поэтому падаем явно одним типом ошибки, а не молча теряем операции.
+    # Пустой список законен только рядом с блоком счёта — так коллектор везёт
+    # остаток без операций, и приём без блока его не пропускает; парсер и
+    # LLM-разбор выписки гарантируют хотя бы одну операцию
     raw_ops = payload.get("operations")
-    if not isinstance(raw_ops, list) or not raw_ops:
+    if not isinstance(raw_ops, list) or (not raw_ops and payload.get("account") is None):
         raise StatementParseError("повреждён сохранённый разбор выписки")
     try:
         operations = [
