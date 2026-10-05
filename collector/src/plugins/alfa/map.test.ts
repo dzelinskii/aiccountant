@@ -1,7 +1,8 @@
 import { expect, test } from 'vitest'
 import type { CollectedOperation } from '../../core/contract'
 import { parseLossless } from '../../http/lossless-json'
-import { toAccounts, toOperations } from './map'
+import { ACCOUNT_NOTES } from '../../core/account-notes'
+import { LOAN_ID_PREFIX, toAccounts, toLoanAccounts, toOperations } from './map'
 
 // Входы строим текстом и разбираем через parseLossless — ровно как в бою: числа
 // остаются строками, и тест на точность денег ловит любую реализацию через float
@@ -238,4 +239,64 @@ test('нераспознанная валюта и отсутствующий о
   )
   expect(accounts.find((a) => a.id === '5')?.currency).toBeNull()
   expect(accounts.find((a) => a.id === '6')?.balance).toBeNull()
+})
+
+const contract = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+  accountNumber: '40817810000000002905',
+  agreementNumber: 'PIL123456',
+  clientCreditName: 'Кредит наличными',
+  productGroup: 'PIL',
+  contractStatus: 'A',
+  principal: { value: '47268039', minorUnits: '100', currency: 'RUR' },
+  ...overrides,
+})
+
+test('действующий кредит — счёт с долгом из principal, по номеру договора', () => {
+  const [loan] = toLoanAccounts([contract()])
+  expect(loan).toEqual({
+    id: `${LOAN_ID_PREFIX}PIL123456`,
+    name: 'Кредит наличными',
+    type: 'PIL',
+    currency: 'RUB',
+    balance: '-472680.39',
+    creditLimit: null,
+    cardMasks: [],
+    notes: [],
+  })
+})
+
+test('идентификатор кредита не совпадает с номером текущего счёта платежей', () => {
+  const [loan] = toLoanAccounts([contract()])
+  expect(loan?.id).not.toBe('40817810000000002905')
+})
+
+test('кредитные карты из договоров не берутся — они уже есть в списке счетов', () => {
+  expect(toLoanAccounts([contract({ productGroup: 'CCD' })])).toEqual([])
+})
+
+test('недействующий договор не берётся', () => {
+  expect(toLoanAccounts([contract({ contractStatus: 'N' })])).toEqual([])
+})
+
+test('незнакомая группа кредита проходит тем же правилом', () => {
+  expect(toLoanAccounts([contract({ productGroup: 'MORTGAGE', agreementNumber: 'M1' })])).toHaveLength(1)
+})
+
+test('principal не разобрать — остаток пуст и пояснение', () => {
+  const [loan] = toLoanAccounts([contract({ principal: { value: 'много', minorUnits: '100', currency: 'RUR' } })])
+  expect(loan?.balance).toBeNull()
+  expect(loan?.notes).toEqual([ACCOUNT_NOTES.loanBalanceMissing])
+})
+
+test('договор без номера пропускается — без него у счёта нет устойчивого идентификатора', () => {
+  expect(toLoanAccounts([contract({ agreementNumber: undefined })])).toEqual([])
+})
+
+test('два договора с одним номером — счёт один, первый: повтор отпечатка бэкенд отвергает целиком', () => {
+  const loans = toLoanAccounts([contract({ clientCreditName: 'Первый' }), contract({ clientCreditName: 'Второй' })])
+  expect(loans.map((l) => l.name)).toEqual(['Первый'])
+})
+
+test('договор не объектом пропускается, а не роняет сбор', () => {
+  expect(toLoanAccounts([null, 'строка', 42, contract()]).map((l) => l.id)).toEqual([`${LOAN_ID_PREFIX}PIL123456`])
 })

@@ -25,6 +25,9 @@ const SESSION_TEXT = {
 // импорт ждёт решения на экране «Импорт»; закрытый приложением сразу там уже не виден
 const isWaiting = (result: AccountResult) => result.importId !== null && !result.importClosed
 
+// импорт без операций ушёл ради остатка счёта: «собрано 0» про него соврало бы
+const isBalanceOnly = (result: AccountResult) => result.collected === 0
+
 function AccountLine({ result, name }: { result: AccountResult; name: string }) {
   const { counters } = result
   return (
@@ -35,8 +38,10 @@ function AccountLine({ result, name }: { result: AccountResult; name: string }) 
           ? result.error
           : result.importId === null
             ? 'операций за период нет'
-            : `собрано ${result.collected}`}
-        {result.importClosed && ' — новых операций нет'}
+            : isBalanceOnly(result)
+              ? `операций за период нет, остаток ${result.importClosed ? 'обновлён' : 'ждёт подтверждения'}`
+              : `собрано ${result.collected}`}
+        {result.importClosed && !isBalanceOnly(result) && ' — новых операций нет'}
         {isWaiting(result) && (
           <>
             {' — '}

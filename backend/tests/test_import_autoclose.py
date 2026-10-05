@@ -486,3 +486,88 @@ async def test_sweep_failure_does_not_fail_parse(
     await service.run_parse(db_session, imp.id, parse=fixed_parse(SAMPLE, "tbank_statement"))
 
     assert (await _status(client, ws, str(imp.id)))["status"] == "ready"
+
+
+# --- без операций ---
+
+
+async def test_import_without_operations_delivers_balance(
+    client: AsyncClient, database_url: str
+) -> None:
+    """Счёт без движения за период — и кредит, у которого истории нет вовсе, —
+    получает остаток таким импортом: подтверждать в нём нечего, он закрывается сам."""
+    ws, acc = await _ws_and_account(client, ALICE)
+
+    imp = await _send(client, ws, acc, [], {"balance": "-472680.39"})
+
+    assert imp["status"] == "completed"
+    assert (await _stored(database_url, imp["import_id"]))[0] == "completed"
+    assert await _pending_ids(client, ws) == []
+    assert Decimal((await _account(client, ws))["balance"]) == Decimal("-472680.39")
+    assert await _transactions_total(client, ws) == 0
+    result = (await _commit(client, ws, imp["import_id"])).json()
+    assert (result["imported"], result["duplicates"]) == (0, 0)
+
+
+async def test_import_without_operations_and_account_rejected(client: AsyncClient) -> None:
+    """Без блока счёта в пустом импорте нечего ни подтверждать, ни применять."""
+    ws, acc = await _ws_and_account(client, ALICE)
+    bodies: list[dict[str, Any]] = [
+        {"parser": "tbank_collector", "operations": []},
+        {"parser": "tbank_collector", "operations": [], "account": None},
+        # блок без остатка — не блок: остаток в нём обязателен
+        {"parser": "tbank_collector", "operations": [], "account": {}},
+    ]
+    for body in bodies:
+        resp = await client.post(
+            "/api/imports/parsed", params={"workspace_id": ws, "account_id": acc}, json=body
+        )
+        assert resp.status_code == 422, body
+    assert await _pending_ids(client, ws) == []
+
+
+async def test_import_without_operations_to_foreign_account_not_found(
+    client: AsyncClient,
+) -> None:
+    """Проверка счёта не держится на операциях: без них остаток чужому счёту
+    не применится, а ответ неотличим от «счёта нет»."""
+    alice_ws, alice_acc = await _ws_and_account(client, ALICE)
+    client.cookies.clear()
+    bob_ws, _ = await _ws_and_account(client, BOB)
+    body = {"parser": "tbank_collector", "operations": [], "account": {"balance": "-1.00"}}
+
+    responses = [
+        await client.post(
+            "/api/imports/parsed", params={"workspace_id": bob_ws, "account_id": target}, json=body
+        )
+        for target in (alice_acc, str(uuid.uuid4()))
+    ]
+
+    assert [r.status_code for r in responses] == [404, 404]
+    assert responses[0].json()["detail"] == responses[1].json()["detail"]
+    assert await _pending_ids(client, bob_ws) == []
+    client.cookies.clear()
+    assert (await client.post("/api/auth/login", json=ALICE)).status_code == 200
+    assert Decimal((await _account(client, alice_ws))["balance"]) == 0
+
+
+async def test_import_without_operations_waits_and_commits_by_hand(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Проход автозакрытия сорвался — пустой импорт остаётся ждать следующего
+    прохода по счёту, и ручки на нём не ломаются: список и превью отвечают
+    нулями, подтверждение применяет остаток. На экране человек его не
+    подтвердит — кнопка гаснет при нуле новых, — только отклонит."""
+    ws, acc = await _ws_and_account(client, ALICE)
+    monkeypatch.setattr(service, "_close_duplicate_only_imports", _failing_sweep)
+
+    imp = await _send(client, ws, acc, [], {"balance": "-472680.39"})
+
+    assert imp["status"] == "ready"
+    pending = (await client.get("/api/imports", params={"workspace_id": ws})).json()
+    assert [item["operations_count"] for item in pending] == [0]
+    preview = (await _status(client, ws, imp["import_id"]))["preview"]
+    assert (preview["new_count"], preview["duplicate_count"]) == (0, 0)
+    resp = await _commit(client, ws, imp["import_id"])
+    assert resp.status_code == 200
+    assert Decimal((await _account(client, ws))["balance"]) == Decimal("-472680.39")

@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { expect, test } from 'vitest'
+import { ACCOUNT_NOTES } from '../../core/account-notes'
 import { parseLossless } from '../../http/lossless-json'
 import { BANK_SUBGROUP_TO_KIND, toAccounts, toOperations } from './map'
 
@@ -573,9 +574,50 @@ test('обычный счёт пересчёт не затрагивает — �
   expect(account?.balance).toBe('1000.50')
 })
 
-test('кредит наличными остаётся без остатка — moneyAmount у него нет', () => {
-  const [account] = toAccounts([{ id: 'acc-loan', name: 'Кредит наличными', accountType: 'CashLoan', currency: { strCode: '643' }, debtAmount: { value: '-50000.00' } }])
+const cashLoan = (debtAmount: unknown): Record<string, unknown> => ({
+  id: 'acc-loan',
+  name: 'Кредит наличными',
+  accountType: 'CashLoan',
+  currency: { strCode: '643' },
+  creditAmount: { value: '600000.00' },
+  maxRepaymentAmount: { value: '473500.00' },
+  ...(debtAmount === undefined ? {} : { debtAmount }),
+})
+
+test('остаток кредита наличными — долг из debtAmount, со знаком минус', () => {
+  const [account] = toAccounts([cashLoan({ value: '-471953.00' })])
+  expect(account?.balance).toBe('-471953.00')
+  expect(account?.creditLimit).toBeNull()
+  expect(account?.notes).toEqual([])
+})
+
+test('долг кредита пришёл положительным — остаток всё равно с минусом', () => {
+  const [account] = toAccounts([cashLoan({ value: '471953.00' })])
+  expect(account?.balance).toBe('-471953.00')
+})
+
+test('у кредита без debtAmount остаток пуст и есть пояснение', () => {
+  const [account] = toAccounts([cashLoan(undefined)])
   expect(account?.balance).toBeNull()
+  expect(account?.notes).toEqual([ACCOUNT_NOTES.loanBalanceMissing])
+})
+
+test('debtAmount не строкой — остаток пуст и есть пояснение, а не остановка сбора', () => {
+  const [account] = toAccounts([cashLoan({ value: 471953 })])
+  expect(account?.balance).toBeNull()
+  expect(account?.notes).toEqual([ACCOUNT_NOTES.loanBalanceMissing])
+})
+
+test('debtAmount не числом — остаток пуст, сбор не падает', () => {
+  const [account] = toAccounts([cashLoan({ value: 'много' })])
+  expect(account?.balance).toBeNull()
+  expect(account?.notes).toEqual([ACCOUNT_NOTES.loanBalanceMissing])
+})
+
+test('«Долями» без покупок остаётся без остатка и без пояснения', () => {
+  const [account] = toAccounts([{ id: 'acc-bnpl', name: 'Долями', accountType: 'BNPL', approvedLimit: { value: '15000.00' }, availableLimit: { value: '15000.00' } }])
+  expect(account?.balance).toBeNull()
+  expect(account?.notes).toEqual([])
 })
 
 test('счёт без moneyAmount даёт остаток null, а не падение', () => {

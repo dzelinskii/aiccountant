@@ -1,6 +1,7 @@
 import { hintFromMcc, type CategoryHint } from '../../core/category-hints'
 import type { CollectedAccount, CollectedOperation } from '../../core/contract'
-import { subtractDecimal } from '../../core/money'
+import { ACCOUNT_NOTES, type AccountNote } from '../../core/account-notes'
+import { debtFrom, isDecimal, subtractDecimal } from '../../core/money'
 
 /**
  * Отображение ответа Т-Банка в нашу модель. Вход — результат parseLossless,
@@ -80,23 +81,46 @@ function toAccount(item: unknown): CollectedAccount {
   const id = getStr(item, 'id')
   if (!id) throw new Error('У счёта банка нет id')
 
+  const balance = resolveBalance(item)
   return {
     id,
     name: getStr(item, 'name') ?? '',
     type: getStr(item, 'accountType') ?? '',
     currency: resolveCurrency(getRecord(item, 'currency')),
-    balance: resolveBalance(item),
+    balance,
     creditLimit: resolveCreditLimit(item),
     cardMasks: resolveCardMasks(item),
-    notes: [],
+    notes: accountNotes(item, balance),
   }
 }
 
+// Кредит без долга в ответе: остаток не обновится, и человек должен узнать
+// почему, а не гадать по старому числу
+function accountNotes(item: Record<string, unknown>, balance: string | null): AccountNote[] {
+  return isCashLoan(item) && balance === null ? [ACCOUNT_NOTES.loanBalanceMissing] : []
+}
+
 // Тип счёта, у которого «остаток» означает не то же, что у обычного: там это
-// доступное к трате, а не деньги владельца. Прочие кредитные виды (CashLoan,
-// BNPL) сюда не попадают намеренно — у них поля moneyAmount нет вовсе, и
-// пересчитывать нечего
+// доступное к трате, а не деньги владельца. CashLoan считается отдельно
+// (CASH_LOAN_ACCOUNT_TYPE), у BNPL поля moneyAmount нет
 const CREDIT_CARD_ACCOUNT_TYPE = 'credit'
+
+// Кредит наличными. Остаток — долг из debtAmount: тело долга без набежавших
+// процентов, ровно то число, что кабинет банка показывает главным на странице
+// кредита (замер 2026-10-05, спека 2026-10-05-loan-balance-design.md §5)
+const CASH_LOAN_ACCOUNT_TYPE = 'cashloan'
+
+function isCashLoan(item: Record<string, unknown>): boolean {
+  return (getStr(item, 'accountType') ?? '').toLowerCase() === CASH_LOAN_ACCOUNT_TYPE
+}
+
+function loanBalance(item: Record<string, unknown>): string | null {
+  const debt = getRecord(item, 'debtAmount')
+  const value = debt ? toAmountString(debt['value']) : undefined
+  // недесятичная строка из банка не должна ронять сбор: остаток его дополняет
+  if (value === undefined || !isDecimal(value)) return null
+  return debtFrom(value)
+}
 
 /**
  * Остаток — та же строка, что и суммы операций: через число деньги не проходят.
@@ -117,6 +141,7 @@ const CREDIT_CARD_ACCOUNT_TYPE = 'credit'
  * касается.
  */
 function resolveBalance(item: Record<string, unknown>): string | null {
+  if (isCashLoan(item)) return loanBalance(item)
   const moneyAmount = getRecord(item, 'moneyAmount')
   if (!moneyAmount) return null
   const available = toAmountString(moneyAmount['value'])
@@ -145,9 +170,8 @@ function creditLimitValue(item: Record<string, unknown>): string | undefined {
  * только здесь оно едет в приложение как есть: вместе с остатком оно даёт
  * «сколько могу потратить».
  *
- * Берём только у кредитной карты. У CashLoan и BNPL слово «лимит» означает
- * другое (у BNPL приходят approvedLimit/availableLimit, а долга нет вовсе), и
- * они остаются отдельным вопросом беклога.
+ * Берём только у кредитной карты. У кредита наличными лимита нет (creditAmount —
+ * сумма выдачи), BNPL — лимиты без долга.
  */
 function resolveCreditLimit(item: Record<string, unknown>): string | null {
   if (!isCreditCard(item)) return null

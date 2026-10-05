@@ -151,13 +151,32 @@ test('без остатка блок про счёт не отправляетс
   expect(body['operations']).toHaveLength(1)
 })
 
-test('пустой список не отправляется', async () => {
-  const fetchImpl = vi.fn<FetchImpl>()
+test('без операций, но с остатком импорт уходит ради остатка', async () => {
+  // счёт без движения за период и кредит, у которого истории нет вовсе:
+  // иначе их остаток не обновился бы никогда
+  const fetchImpl = vi.fn<FetchImpl>(async () => jsonResponse({ import_id: 'imp-1', status: 'completed' }, 201))
 
-  const result = await pushOperations(CONFIG, 'tbank', 'acc-app', [], undefined, fetchImpl)
+  const loan: CollectedAccount = { ...ACCOUNT, balance: '-472680.39', cardMasks: [] }
+  const result = await pushOperations(CONFIG, 'alfa', 'acc-app', [], loan, fetchImpl)
 
-  expect(result).toBeNull()
-  expect(fetchImpl).not.toHaveBeenCalled()
+  expect(result).toEqual({ import_id: 'imp-1', status: 'completed' })
+  expect(sentBody(fetchImpl)).toEqual({
+    parser: 'alfa_collector',
+    operations: [],
+    account: { balance: '-472680.39', card_masks: [] },
+  })
+})
+
+test('без операций и без остатка не отправляется ничего', async () => {
+  // такой импорт приложение отвергает: подтверждать и применять в нём нечего
+  for (const account of [undefined, { ...ACCOUNT, balance: null }]) {
+    const fetchImpl = vi.fn<FetchImpl>()
+
+    const result = await pushOperations(CONFIG, 'tbank', 'acc-app', [], account, fetchImpl)
+
+    expect(result).toBeNull()
+    expect(fetchImpl).not.toHaveBeenCalled()
+  }
 })
 
 test('ошибка приложения не проглатывается', async () => {

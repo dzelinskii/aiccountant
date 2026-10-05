@@ -11,7 +11,8 @@ export interface PushResult {
 /**
  * Отправка собранных операций в наше приложение.
  *
- * Возвращает null, если отправлять нечего: бэкенд пустой список не принимает.
+ * Возвращает null, если отправлять нечего: нет ни операций, ни остатка.
+ * Импорт без операций бэкенд принимает только с блоком счёта.
  */
 export async function pushOperations(
   connection: AppConnection,
@@ -23,7 +24,9 @@ export async function pushOperations(
   // а appRequest сам подставляет его, если сюда ничего не передали
   fetchImpl?: FetchImpl,
 ): Promise<PushResult | null> {
-  if (operations.length === 0) return null
+  // без операций импорт нужен только ради остатка: счёт без движения за период
+  // (и кредит, у которого истории нет вовсе) иначе не обновил бы его никогда
+  if (operations.length === 0 && (account === undefined || account.balance === null)) return null
 
   const data = await appRequest(
     connection,

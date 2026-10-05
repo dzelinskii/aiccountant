@@ -10,6 +10,9 @@ export const ALFA_BASE = 'https://web.alfabank.ru'
 export const OPERATIONS_PATH = '/api/v1/operations-history/operations'
 export const ACCOUNTS_PATH = '/api/v1/account/'
 export const CARDS_PATH = '/api/v1/cards/masked-cards'
+// Кредитные договоры клиента: кредиты в список счетов не входят (спека
+// 2026-10-05-loan-balance-design.md §6a)
+export const CREDITS_PATH = '/api/v1/credit/info'
 
 interface CreateOptions {
   transport: Transport

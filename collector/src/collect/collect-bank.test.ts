@@ -104,6 +104,19 @@ test('импорт, который приложение закрыло само,
   ])
 })
 
+test('счёт без операций, но с остатком получает импорт; без остатка — нет', async () => {
+  // остаток доезжает до счёта только импортом, а у кредита истории нет вовсе
+  const p = plugin({
+    fetchAccounts: vi.fn(async () => [account('a'), { ...account('b'), balance: null }]),
+    fetchOperations: vi.fn(async () => []),
+  })
+  const summary = await collectBank(host({ plugin: p, fetchImpl: await appFetch(['a', 'b'], null, 422, 'app-a') }))
+  expect(summary.accounts).toEqual([
+    expect.objectContaining({ appAccountId: 'app-a', collected: 0, importId: 'imp-1', importClosed: true, error: null }),
+    expect.objectContaining({ appAccountId: 'app-b', collected: 0, importId: null, importClosed: false, error: null }),
+  ])
+})
+
 test('мёртвая сессия — вход, свежий секрет сохранён, итог говорит о свежем входе', async () => {
   const store = sessions({ kind: 'header', name: 'Cookie', value: 'dead' })
   const summary = await collectBank(host({ sessions: store, fetchImpl: await appFetch(['a']) }))

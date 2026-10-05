@@ -107,6 +107,49 @@ test('импорт, закрытый приложением сразу, не з�
   expect(row('sber').queryByRole('link', { name: /импорт/i })).toBeNull()
 })
 
+test('счёт без операций, но с доставленным остатком — «остаток обновлён», без ссылки и без «собрано 0»', async () => {
+  // такой импорт приложение закрывает само: операций в нём нет, ради остатка он и ушёл
+  vi.mocked(collectFromApp).mockResolvedValue(
+    summary({ accounts: [result({ collected: 0, importId: 'imp-2', importClosed: true })] }),
+  )
+  await renderPage()
+
+  await userEvent.click(row('sber').getByRole('button', { name: 'Собрать' }))
+
+  expect(await row('sber').findByText(/операций за период нет, остаток обновлён/)).toBeDefined()
+  expect(row('sber').queryByText(/собрано/)).toBeNull()
+  expect(row('sber').queryByText(/новых операций нет/)).toBeNull()
+  expect(row('sber').queryByRole('link', { name: /импорт/i })).toBeNull()
+})
+
+test('ноль операций, импорт есть, но не закрылся — ссылка на импорт и «остаток ждёт подтверждения»', async () => {
+  // автозакрытие сорвалось: остаток ещё не применён, и обещать «обновлён» нельзя
+  vi.mocked(collectFromApp).mockResolvedValue(
+    summary({ accounts: [result({ collected: 0, importId: 'imp-3', importClosed: false })] }),
+  )
+  await renderPage()
+
+  await userEvent.click(row('sber').getByRole('button', { name: 'Собрать' }))
+
+  expect(await row('sber').findByText(/операций за период нет, остаток ждёт подтверждения/)).toBeDefined()
+  expect(row('sber').getByRole('link', { name: /импорт/i }).getAttribute('href')).toBe('/import')
+  expect(row('sber').queryByText(/остаток обновлён/)).toBeNull()
+  expect(row('sber').queryByText(/собрано/)).toBeNull()
+})
+
+test('ни операций, ни остатка — «операций за период нет», без слов про остаток', async () => {
+  vi.mocked(collectFromApp).mockResolvedValue(
+    summary({ accounts: [result({ collected: 0, importId: null })] }),
+  )
+  await renderPage()
+
+  await userEvent.click(row('sber').getByRole('button', { name: 'Собрать' }))
+
+  expect(await row('sber').findByText(/операций за период нет/)).toBeDefined()
+  expect(row('sber').queryByText(/остаток обновлён/)).toBeNull()
+  expect(row('sber').queryByRole('link', { name: /импорт/i })).toBeNull()
+})
+
 test('пока сбор банка идёт, его «Собрать» и «Собрать всё» неактивны, а чужой «Собрать» — нет', async () => {
   let finish: (value: CollectSummary) => void = () => {}
   vi.mocked(collectFromApp).mockReturnValue(new Promise((resolve) => { finish = resolve }))

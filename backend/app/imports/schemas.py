@@ -142,9 +142,20 @@ class ParsedAccountIn(BaseModel):
 
 class ParsedImportIn(BaseModel):
     parser: str = Field(min_length=1, max_length=30, pattern=r"^[a-z0-9_]+$")
-    operations: list[ParsedOperationIn] = Field(min_length=1, max_length=MAX_PARSED_OPERATIONS)
+    # пустой список допустим только вместе с блоком счёта — см. _empty_needs_account
+    operations: list[ParsedOperationIn] = Field(max_length=MAX_PARSED_OPERATIONS)
     # необязательный: разбор PDF-выписки про счёт ничего не знает
     account: ParsedAccountIn | None = None
+
+    @model_validator(mode="after")
+    def _empty_needs_account(self) -> "ParsedImportIn":
+        # без операций импорт нужен лишь ради остатка: у счёта без движения за
+        # период и у кредита, истории которого банк не даёт, иначе остаток не
+        # обновился бы никогда. Без блока счёта в нём нечего ни подтверждать,
+        # ни применять
+        if not self.operations and self.account is None:
+            raise ValueError("импорт без операций должен нести блок счёта")
+        return self
 
     @model_validator(mode="after")
     def _unique_external_ids(self) -> "ParsedImportIn":

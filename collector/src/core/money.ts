@@ -10,12 +10,28 @@
 
 const DECIMAL = /^-?\d+(\.\d+)?$/
 
+/** Строка — десятичное число с необязательным минусом: без экспоненты, пробелов и второго знака. */
+export function isDecimal(value: string): boolean {
+  return DECIMAL.test(value)
+}
+
 /** Разность двух десятичных строк. Масштаб результата — наибольший из входных. */
 export function subtractDecimal(a: string, b: string): string {
   // значения в текст ошибки не кладём: это суммы
-  if (!DECIMAL.test(a) || !DECIMAL.test(b)) throw new Error('Вычитание сумм: значение не десятичное число')
+  if (!isDecimal(a) || !isDecimal(b)) throw new Error('Вычитание сумм: значение не десятичное число')
   const scale = Math.max(fractionLength(a), fractionLength(b))
   return fromScaled(toScaled(a, scale) - toScaled(b, scale), scale)
+}
+
+/**
+ * Остаток счёта-кредита: модуль суммы со знаком минус. Знак из ответа банка не
+ * берётся — у кредита собственных денег не бывает, а знак долга у банков
+ * разный (у кредита наличными Т-Банка отрицательный, у кредитной карты
+ * положительный), и угаданный неверно превратил бы долг в деньги на счёте.
+ */
+export function debtFrom(value: string): string {
+  if (!isDecimal(value)) throw new Error('Долг: значение не десятичное число')
+  return subtractDecimal('0', value.startsWith('-') ? value.slice(1) : value)
 }
 
 function fractionLength(value: string): number {

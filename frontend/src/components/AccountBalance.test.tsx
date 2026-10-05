@@ -110,6 +110,20 @@ test('счёт без лимита выглядит как раньше', () => 
   expect(screen.queryByText('доступно к трате')).toBeNull()
 })
 
+test('счёт без лимита с отрицательным остатком — главное число «долг» без знака', () => {
+  // кредит наличными лимита не имеет, но долг по нему — тот же долг, что у кредитки
+  renderBalance({ ...debit, balance: '-471953.0000' })
+
+  expect(shown()).toContain('долг 471 953,00')
+  expect(shown()).not.toContain('-471')
+})
+
+test('счёт без лимита с нулевым остатком — сумма, а не долг', () => {
+  renderBalance({ ...debit, balance: '0.0000' })
+
+  expect(shown()).not.toMatch(/долг/u)
+})
+
 test('счёт без источника момента не показывает', () => {
   renderBalance({ ...debit, reported_at: null })
 

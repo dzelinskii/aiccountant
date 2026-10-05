@@ -1,6 +1,7 @@
+import { ACCOUNT_NOTES } from '../../core/account-notes'
 import { hintFromMcc } from '../../core/category-hints'
 import type { CollectedAccount, CollectedOperation } from '../../core/contract'
-import { subtractDecimal } from '../../core/money'
+import { debtFrom, subtractDecimal } from '../../core/money'
 
 /**
  * Отображение ответа Альфа-Банка в нашу модель. Вход — результат parseLossless,
@@ -235,6 +236,59 @@ function isExcludedAccount(item: Record<string, unknown>): boolean {
   const type = getStr(item, 'type') ?? ''
   if (EXCLUDED_ACCOUNT_TYPES.has(type)) return true
   return METAL_DESCRIPTION.test(getStr(item, 'description') ?? '')
+}
+
+/**
+ * Кредиты Альфы живут не в списке счетов, а в договорах (`/api/v1/credit/info`,
+ * спека 2026-10-05-loan-balance-design.md §6a). Счётом становится действующий
+ * договор, кроме кредитной карты: карты уже приходят списком счетов.
+ *
+ * Идентификатор — номер договора с приставкой: accountNumber договора — это
+ * текущий счёт, с которого списываются платежи, и с ним отпечаток кредита
+ * совпал бы с отпечатком этого счёта. Приставка же говорит fetchOperations, что
+ * истории у такого счёта нет.
+ */
+export const LOAN_ID_PREFIX = 'loan:'
+const CARD_PRODUCT_GROUP = 'CCD'
+const ACTIVE_CONTRACT = 'A'
+
+export function toLoanAccounts(contracts: readonly unknown[]): CollectedAccount[] {
+  const loans: CollectedAccount[] = []
+  // повтор номера уронил бы весь сбор: бэкенд отвергает повторный отпечаток счёта
+  const seen = new Set<string>()
+  for (const item of contracts) {
+    if (!isRecord(item)) continue
+    if (getStr(item, 'productGroup') === CARD_PRODUCT_GROUP) continue
+    if (getStr(item, 'contractStatus') !== ACTIVE_CONTRACT) continue
+    const agreement = getStr(item, 'agreementNumber')
+    if (!agreement || seen.has(agreement)) continue
+    seen.add(agreement)
+    const principal = getRecord(item, 'principal')
+    const balance = loanBalance(principal)
+    loans.push({
+      id: `${LOAN_ID_PREFIX}${agreement}`,
+      name: getStr(item, 'clientCreditName') ?? '',
+      type: getStr(item, 'productGroup') ?? '',
+      currency: blockCurrency(principal),
+      balance,
+      creditLimit: null,
+      cardMasks: [],
+      notes: balance === null ? [ACCOUNT_NOTES.loanBalanceMissing] : [],
+    })
+  }
+  return loans
+}
+
+// Остаток кредита — тело долга (principal): кабинет показывает его «Остатком
+// задолженности»; проценты лежат отдельно. Негодная сумма — пустой остаток, а
+// не остановка сбора: список счетов справочный
+function loanBalance(principal: Record<string, unknown> | undefined): string | null {
+  try {
+    const value = blockValue(principal)
+    return value === null ? null : debtFrom(value)
+  } catch {
+    return null
+  }
 }
 
 // Остаток кредитки — total (чистая собственная позиция, уходит в минус при

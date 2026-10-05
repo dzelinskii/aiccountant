@@ -1,4 +1,4 @@
-import { expect, test } from 'vitest'
+import { expect, test, vi } from 'vitest'
 import type { Transport } from '../../http/transport'
 import { createAlfaPlugin, toAlfaDate } from './index'
 
@@ -7,6 +7,7 @@ const CRED = { kind: 'header' as const, name: 'Cookie', value: 'GW_SESSION_AO=s;
 interface Routes {
   account?: { status: number; body?: string }
   cards?: string
+  credits?: { status: number; body?: string }
   // операции по номеру страницы из тела запроса
   operationsByPage?: (page: number) => string
 }
@@ -22,6 +23,10 @@ function routingTransport(routes: Routes): { transport: Transport; posts: unknow
       }
       if (path === '/api/v1/cards/masked-cards') {
         return { status: 200, ok: true, text: async () => routes.cards ?? '{"cards":[]}' }
+      }
+      if (path === '/api/v1/credit/info') {
+        const r = routes.credits ?? { status: 200, body: '{"contracts":[]}' }
+        return { status: r.status, ok: r.status < 300, text: async () => r.body ?? '{}' }
       }
       if (path === '/api/v1/operations-history/operations') {
         const body = JSON.parse(options.body ?? '{}')
@@ -122,4 +127,50 @@ test('toAlfaDate даёт московский календарный день, 
   // UTC дал бы «2026-08-31» и увёл бы операцию на прошлые сутки
   expect(toAlfaDate(Date.parse('2026-08-31T22:30:00Z'))).toBe('2026-09-01')
   expect(toAlfaDate(Date.parse('2026-08-31T23:30:00+03:00'))).toBe('2026-08-31')
+})
+
+const LOAN_CONTRACTS =
+  '{"contracts":[{"accountNumber":"40817810000000002905","agreementNumber":"PIL1","clientCreditName":"Кредит наличными","productGroup":"PIL","contractStatus":"A","principal":{"value":47268039,"minorUnits":100,"currency":"RUR"}},' +
+  '{"accountNumber":"40817810000000009999","agreementNumber":"CC1","productGroup":"CCD","contractStatus":"A","principal":{"value":0,"minorUnits":100,"currency":"RUR"}}]}'
+
+test('fetchAccounts добавляет кредиты из договоров к счетам', async () => {
+  const { plugin } = pluginWith({ credits: { status: 200, body: LOAN_CONTRACTS } })
+  const accounts = await plugin.fetchAccounts(CRED)
+  expect(accounts.map((a) => [a.id, a.balance])).toEqual([['loan:PIL1', '-472680.39']])
+})
+
+test('договоры не ответили — счета собираются без кредитов, сбор не падает', async () => {
+  const { plugin } = pluginWith({
+    account: { status: 200, body: '{"accounts":[{"number":"40817810000000002905","description":"Текущий счёт","type":"EE","total":{"value":100,"currency":"RUR","minorUnits":100}}]}' },
+    credits: { status: 500 },
+  })
+  const accounts = await plugin.fetchAccounts(CRED)
+  expect(accounts.map((a) => a.id)).toEqual(['40817810000000002905'])
+})
+
+test('договоры не ответили — в консоль уходит статус, но не путь, тело и суммы', async () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+  try {
+    const { plugin } = pluginWith({ credits: { status: 500, body: '{"principal":{"value":47268039}}' } })
+    await plugin.fetchAccounts(CRED)
+    // аргументы — только примитивы: объект ошибки унёс бы в консоль всё, что к нему приложено
+    expect(warn.mock.calls[0]?.slice(1)).toEqual([500])
+    const logged = JSON.stringify(warn.mock.calls)
+    expect(logged).toContain('500')
+    expect(logged).not.toContain('/api/v1/credit/info')
+    expect(logged).not.toContain('47268039')
+  } finally {
+    warn.mockRestore()
+  }
+})
+
+test('договоры ответили 302 — сессия истекла, сбор останавливается, а не теряет кредиты молча', async () => {
+  const { plugin } = pluginWith({ credits: { status: 302 } })
+  await expect(plugin.fetchAccounts(CRED)).rejects.toMatchObject({ status: 302 })
+})
+
+test('у кредита истории нет — в банк за ней не ходим', async () => {
+  const { plugin, posts } = pluginWith({})
+  expect(await plugin.fetchOperations(CRED, 'loan:PIL1', 0, 86_400_000)).toEqual([])
+  expect(posts).toEqual([])
 })
