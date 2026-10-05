@@ -2,9 +2,9 @@ import type { BankClient } from '../../http/bank-client'
 import { BankHttpError } from '../../http/bank-client'
 import type { Transport } from '../../http/transport'
 import type { BankPlugin, CollectedAccount, CollectedOperation, Credentials, LoginPrompt } from '../../core/contract'
-import { ACCOUNTS_PATH, CARDS_PATH, OPERATIONS_PATH, createAlfaClient } from './client'
+import { ACCOUNTS_PATH, CARDS_PATH, CREDITS_PATH, OPERATIONS_PATH, createAlfaClient } from './client'
 import { obtainAlfaCookies } from './login'
-import { toAccounts, toOperations } from './map'
+import { LOAN_ID_PREFIX, toAccounts, toLoanAccounts, toOperations } from './map'
 
 // Разведка: size=100 проходит, 150 даёт 400. Берём подтверждённый предел
 const PAGE_SIZE = 100
@@ -46,10 +46,15 @@ export function createAlfaPlugin(options: PluginOptions): BankPlugin {
       const client = clientFor(credentials)
       const accountsRaw = await client.getJson(ACCOUNTS_PATH)
       const cardsRaw = await client.getJson(CARDS_PATH)
-      return toAccounts(arrayAt(accountsRaw, 'accounts', 'счета'), arrayAt(cardsRaw, 'cards', 'карты'))
+      const loanAccounts = await loans(client)
+      const accounts = toAccounts(arrayAt(accountsRaw, 'accounts', 'счета'), arrayAt(cardsRaw, 'cards', 'карты'))
+      return [...accounts, ...loanAccounts]
     },
 
     async fetchOperations(credentials: Credentials, accountId: string, since: number, until: number): Promise<CollectedOperation[]> {
+      // у счёта-кредита истории нет: платежи видны на текущем счёте, откуда
+      // списываются, а ручка истории спрашивается по номеру счёта
+      if (accountId.startsWith(LOAN_ID_PREFIX)) return []
       const client = clientFor(credentials)
       const collected: CollectedOperation[] = []
 
@@ -84,6 +89,19 @@ const MOSCOW = new Intl.DateTimeFormat('en-CA', {
 
 export function toAlfaDate(millis: number): string {
   return MOSCOW.format(new Date(millis))
+}
+
+// Договоры — дополнение к списку счетов: их отказ не должен отнимать у
+// человека остальные счета и операции. Кредиты в этот сбор просто не приедут —
+// и об этом остаётся след в консоли окна, а не тишина. В консоль идёт только
+// имя ошибки: текст BankHttpError нёс бы путь, а суммы и адреса в логи не пишутся
+async function loans(client: BankClient): Promise<CollectedAccount[]> {
+  try {
+    return toLoanAccounts(arrayAt(await client.getJson(CREDITS_PATH), 'contracts', 'кредитные договоры'))
+  } catch (error) {
+    console.warn('Альфа: кредитные договоры не получены', error instanceof Error ? error.name : typeof error)
+    return []
+  }
 }
 
 function arrayAt(raw: unknown, key: string, what: string): unknown[] {
