@@ -122,6 +122,21 @@ test('счёт без операций, но с доставленным ост�
   expect(row('sber').queryByRole('link', { name: /импорт/i })).toBeNull()
 })
 
+test('ноль операций, импорт есть, но не закрылся — ссылка на импорт и «остаток ждёт подтверждения»', async () => {
+  // автозакрытие сорвалось: остаток ещё не применён, и обещать «обновлён» нельзя
+  vi.mocked(collectFromApp).mockResolvedValue(
+    summary({ accounts: [result({ collected: 0, importId: 'imp-3', importClosed: false })] }),
+  )
+  await renderPage()
+
+  await userEvent.click(row('sber').getByRole('button', { name: 'Собрать' }))
+
+  expect(await row('sber').findByText(/операций за период нет, остаток ждёт подтверждения/)).toBeDefined()
+  expect(row('sber').getByRole('link', { name: /импорт/i }).getAttribute('href')).toBe('/import')
+  expect(row('sber').queryByText(/остаток обновлён/)).toBeNull()
+  expect(row('sber').queryByText(/собрано/)).toBeNull()
+})
+
 test('ни операций, ни остатка — «операций за период нет», без слов про остаток', async () => {
   vi.mocked(collectFromApp).mockResolvedValue(
     summary({ accounts: [result({ collected: 0, importId: null })] }),
