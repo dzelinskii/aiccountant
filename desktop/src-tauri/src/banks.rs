@@ -68,6 +68,7 @@ pub const BANKS: &[Bank] = &[
             ("POST", "/api/v1/operations-history/operations"),
             ("GET", "/api/v1/account/"),
             ("GET", "/api/v1/cards/masked-cards"),
+            ("GET", "/api/v1/credit/info"),
         ],
         trust: Trust::RootOnly,
     },
@@ -260,6 +261,7 @@ mod tests {
                     ("POST", "/api/v1/operations-history/operations"),
                     ("GET", "/api/v1/account/"),
                     ("GET", "/api/v1/cards/masked-cards"),
+                    ("GET", "/api/v1/credit/info"),
                 ],
             ),
         ];
