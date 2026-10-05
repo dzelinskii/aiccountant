@@ -153,6 +153,8 @@ test('договоры не ответили — в консоль уходит 
   try {
     const { plugin } = pluginWith({ credits: { status: 500, body: '{"principal":{"value":47268039}}' } })
     await plugin.fetchAccounts(CRED)
+    // аргументы — только примитивы: объект ошибки унёс бы в консоль всё, что к нему приложено
+    expect(warn.mock.calls[0]?.slice(1)).toEqual([500])
     const logged = JSON.stringify(warn.mock.calls)
     expect(logged).toContain('500')
     expect(logged).not.toContain('/api/v1/credit/info')
