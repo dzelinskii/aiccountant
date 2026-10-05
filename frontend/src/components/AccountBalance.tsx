@@ -23,6 +23,9 @@ export interface AccountBalanceProps {
  * долгом и без знака: «остаток −2 000 ₽» читается как ошибка, а не как долг.
  * Сумму по счетам это не меняет: она считается по остаткам.
  *
+ * У любого счёта отрицательный остаток пишется долгом: кредит, кредитка, карта
+ * в минусе. В сумме по счетам знак остаётся.
+ *
  * Если «доступно» посчитать нельзя (лимит известен на другой момент, чем
  * остаток), число не показывается вовсе — см. credit_available. Лимит при этом
  * остаётся видимым с пометкой «замечен такого-то»: банк называет лимит только в
@@ -56,7 +59,7 @@ export function AccountBalance({ account, align = 'left', size = 'lg' }: Account
   return (
     <div>
       <Text fw={700} size={size} ta={ta}>
-        {formatMoney(balance, currency)}
+        {debt !== null ? `долг ${formatMoney(debt, currency)}` : formatMoney(balance, currency)}
       </Text>
       {reported_at && (
         <Text c="dimmed" size="xs" ta={ta}>
